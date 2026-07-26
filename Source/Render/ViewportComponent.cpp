@@ -184,13 +184,28 @@ void ViewportComponent::newOpenGLContextCreated() {
     }
     LogGLErrors("model load + upload");
 
-    glEnable(GL_DEPTH_TEST);
-
     startTimeSeconds_ = juce::Time::getMillisecondCounterHiRes() / 1000.0;
     std::cout << "[render] newOpenGLContextCreated: done (" << meshes_.size() << " mesh(es))" << std::endl;
 }
 
 void ViewportComponent::renderOpenGL() {
+    // Must be set every frame, not once at context creation: JUCE's own
+    // OpenGLGraphicsContext composites this component's 2D paint() on the
+    // same context immediately after this callback returns each frame,
+    // and it unconditionally calls glDisable(GL_DEPTH_TEST) as part of
+    // its own setup (juce_OpenGLGraphicsContext.cpp). Enabling depth
+    // testing once at startup meant frame 1 was correct and every frame
+    // after it silently rendered with no depth test at all — triangles
+    // compositing in raw index-buffer order instead of front-to-back, so
+    // back faces of a rotating mesh would intermittently paint over
+    // front ones. Culling is enabled alongside it for the same reason:
+    // both are baseline state for opaque closed meshes, and leaving
+    // either unset invites this class of bug back.
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    glFrontFace(GL_CCW);
+
     const auto scale = static_cast<float>(openGLContext_.getRenderingScale());
     glViewport(0, 0, juce::roundToInt(scale * static_cast<float>(getWidth())),
                juce::roundToInt(scale * static_cast<float>(getHeight())));
