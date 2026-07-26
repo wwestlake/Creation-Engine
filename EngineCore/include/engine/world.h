@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 
 #include <entt/entt.hpp>
@@ -23,12 +24,18 @@ public:
     entt::entity CreateEntity() { return registry_.create(); }
     void DestroyEntity(entt::entity e) { registry_.destroy(e); }
 
-    Tick CurrentTick() const { return tick_; }
-    Tick AdvanceTick() { return ++tick_; }
+    // tick_ is read from the render thread (driving tick-based scene
+    // animation) and written from the message thread (the editor's
+    // play/pause timer) — atomic so that's well-defined without needing
+    // a full lock just for a monotonic counter. Relaxed ordering is
+    // enough: nothing else is synchronized through this value.
+    Tick CurrentTick() const { return tick_.load(std::memory_order_relaxed); }
+    Tick AdvanceTick() { return tick_.fetch_add(1, std::memory_order_relaxed) + 1; }
+    void ResetTick() { tick_.store(0, std::memory_order_relaxed); }
 
 private:
     entt::registry registry_;
-    Tick tick_ = 0;
+    std::atomic<Tick> tick_{ 0 };
 };
 
 } // namespace ce::engine

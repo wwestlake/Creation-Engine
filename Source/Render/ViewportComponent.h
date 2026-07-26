@@ -63,6 +63,11 @@ public:
     void AddPointLight();
     void RemovePointLight(int index);
 
+    // Called on Stop (see MainComponent's transport wiring) — resets the
+    // seeded demo entity's transform, giving Stop a real, visible effect
+    // instead of just freezing the tick counter.
+    void ResetDemoEntityTransform();
+
 private:
     void newOpenGLContextCreated() override;
     void renderOpenGL() override;
@@ -77,13 +82,13 @@ private:
     assets::VirtualFileSystem vfs_;
     scene::AssetCatalog assetCatalog_;
     bool hasSeededDemoScene_ = false;
+    entt::entity demoEntity_ = entt::null;
 
     mutable juce::CriticalSection stateLock_;
     DirectionalLight sunLight_;
     std::vector<PointLight> pointLights_{ PointLight{} };
 
     Camera camera_;
-    double startTimeSeconds_ = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ViewportComponent)
 };

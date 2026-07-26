@@ -41,6 +41,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Main.cpp
     Source/MainComponent.h
     Source/MainComponent.cpp
+    Source/Branding.h
+    Source/Branding.cpp
     Source/Render/ViewportComponent.h
     Source/Render/ViewportComponent.cpp
     Source/Render/GL/Buffer.h
@@ -65,6 +67,14 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Render/Scene/Light.h
     Source/Views/LightPanel.h
     Source/Views/LightPanel.cpp
+    Source/Views/TransportLookAndFeel.h
+    Source/Views/TransportLookAndFeel.cpp
+    Source/Views/TransportBar.h
+    Source/Views/TransportBar.cpp
+    Source/Views/ViewModeBar.h
+    Source/Views/ViewModeBar.cpp
+    Source/Views/PlaceholderPanel.h
+    Source/Views/PlaceholderPanel.cpp
     Source/Scene/Components.h
     Source/Scene/AssetCatalog.h
     Source/Scene/AssetCatalog.cpp

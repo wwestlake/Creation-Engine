@@ -146,8 +146,17 @@ void ViewportComponent::SeedDemoScene() {
     world_.Registry().emplace<scene::Name>(entity, scene::Name{ "Box" });
     world_.Registry().emplace<scene::Transform>(entity, scene::Transform{});
     world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ asset->mesh, asset->material });
+    demoEntity_ = entity;
 
     std::cout << "[scene] seeded demo entity 'Box'" << std::endl;
+}
+
+void ViewportComponent::ResetDemoEntityTransform() {
+    const juce::ScopedLock lock(stateLock_);
+    if (demoEntity_ == entt::null || !world_.Registry().valid(demoEntity_)) {
+        return;
+    }
+    world_.Registry().get<scene::Transform>(demoEntity_) = scene::Transform{};
 }
 
 void ViewportComponent::newOpenGLContextCreated() {
@@ -178,7 +187,6 @@ void ViewportComponent::newOpenGLContextCreated() {
 
     LogGLErrors("catalog load + scene seed");
 
-    startTimeSeconds_ = juce::Time::getMillisecondCounterHiRes() / 1000.0;
     std::cout << "[render] newOpenGLContextCreated: done" << std::endl;
 }
 
@@ -216,8 +224,6 @@ void ViewportComponent::renderOpenGL() {
     const juce::Vector3D<float> cameraPos{ 0.0f, 0.8f, 2.5f };
     camera_.SetLookAt(cameraPos, { 0.0f, 0.0f, 0.0f });
 
-    const double elapsedSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0 - startTimeSeconds_;
-
     // Snapshot the UI-editable light state once per frame under the lock,
     // then do all the (fast, non-blocking) GL uniform work below without
     // holding it — keeps message-thread edits from ever blocking on a
@@ -230,16 +236,19 @@ void ViewportComponent::renderOpenGL() {
         pointLightsSnapshot = pointLights_;
     }
 
-    // Demo-only: spins every placed entity's Transform in place so the
-    // scene isn't static before SC2's free camera exists. Safe for now
-    // because nothing else touches these Transforms yet — SC3/SC4 adding
-    // UI reads/writes to entt::registry from the message thread will need
-    // the same lock-and-snapshot treatment the light state above already
-    // gets, not an assumption that it's still fine.
+    // Demo-only: spins every placed entity's Transform based on the
+    // World's tick count rather than wall-clock time, so the spin
+    // actually stops when the transport is paused/stopped (World::
+    // AdvanceTick() is gated on play state in MainComponent's timer) —
+    // an editor "playing" a paused simulation should look paused.
+    // Locked because ResetDemoEntityTransform() (message thread, on Stop)
+    // writes the same Transform this loop writes from the render thread.
     {
+        const juce::ScopedLock lock(stateLock_);
+        const float spinRadians = 0.5f * (static_cast<float>(world_.CurrentTick()) / 30.0f);
         auto view = world_.Registry().view<scene::Transform>();
         for (auto entity : view) {
-            view.get<scene::Transform>(entity).eulerRotationRadians.y = 0.5f * static_cast<float>(elapsedSeconds);
+            view.get<scene::Transform>(entity).eulerRotationRadians.y = spinRadians;
         }
     }
 

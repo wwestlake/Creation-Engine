@@ -1,6 +1,19 @@
 #include "MainComponent.h"
 
 MainComponent::MainComponent() : viewport_(world_), lightPanel_(viewport_) {
+    addAndMakeVisible(transportBar_);
+    transportBar_.onPlay = [this] { SetPlaying(true); };
+    transportBar_.onPause = [this] { SetPlaying(false); };
+    transportBar_.onStop = [this] {
+        SetPlaying(false);
+        world_.ResetTick();
+        viewport_.ResetDemoEntityTransform();
+        transportBar_.SetStatusText("Stopped");
+    };
+
+    addAndMakeVisible(viewModeBar_);
+    viewModeBar_.onModeSelected = [this](ce::WorkspaceMode mode) { SetActiveMode(mode); };
+
     addAndMakeVisible(viewport_);
 
     inspectorTitle_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
@@ -26,6 +39,14 @@ MainComponent::MainComponent() : viewport_(world_), lightPanel_(viewport_) {
 
     addAndMakeVisible(lightPanel_);
 
+    addAndMakeVisible(materialsPanel_);
+    addAndMakeVisible(assetsPanel_);
+    addAndMakeVisible(serverPanel_);
+    addAndMakeVisible(settingsPanel_);
+
+    SetActiveMode(ce::WorkspaceMode::Scene);
+    SetPlaying(false);
+
     setSize(1400, 900);
     startTimerHz(30);
 }
@@ -41,11 +62,15 @@ void MainComponent::paint(juce::Graphics& g) {
 void MainComponent::resized() {
     auto bounds = getLocalBounds();
 
-    // Inspector docked to the right, viewport fills the rest — both
-    // composited in this one window, per section 3.4. (A translucent
-    // overlay-on-top-of-viewport layout is a UI polish choice for later,
-    // not a technical constraint of this arrangement.)
-    auto inspectorBounds = bounds.removeFromRight(300).reduced(12);
+    transportBar_.setBounds(bounds.removeFromTop(92));
+    viewModeBar_.setBounds(bounds.removeFromTop(56));
+
+    const auto contentArea = bounds;
+
+    // Scene mode content — laid out even while hidden, so switching back
+    // to Scene doesn't need a relayout.
+    auto sceneArea = contentArea;
+    auto inspectorBounds = sceneArea.removeFromRight(300).reduced(12);
     inspectorTitle_.setBounds(inspectorBounds.removeFromTop(28));
     tickLabel_.setBounds(inspectorBounds.removeFromTop(24));
 
@@ -59,10 +84,42 @@ void MainComponent::resized() {
     inspectorBounds.removeFromTop(16);
     lightPanel_.setBounds(inspectorBounds.removeFromTop(lightPanel_.PreferredHeight()));
 
-    viewport_.setBounds(bounds);
+    viewport_.setBounds(sceneArea);
+
+    materialsPanel_.setBounds(contentArea);
+    assetsPanel_.setBounds(contentArea);
+    serverPanel_.setBounds(contentArea);
+    settingsPanel_.setBounds(contentArea);
+}
+
+void MainComponent::SetActiveMode(ce::WorkspaceMode mode) {
+    activeMode_ = mode;
+
+    const bool showScene = mode == ce::WorkspaceMode::Scene;
+    viewport_.setVisible(showScene);
+    inspectorTitle_.setVisible(showScene);
+    tickLabel_.setVisible(showScene);
+    roughnessLabel_.setVisible(showScene);
+    roughnessSlider_.setVisible(showScene);
+    metallicLabel_.setVisible(showScene);
+    metallicSlider_.setVisible(showScene);
+    lightPanel_.setVisible(showScene);
+
+    materialsPanel_.setVisible(mode == ce::WorkspaceMode::Materials);
+    assetsPanel_.setVisible(mode == ce::WorkspaceMode::Assets);
+    serverPanel_.setVisible(mode == ce::WorkspaceMode::Server);
+    settingsPanel_.setVisible(mode == ce::WorkspaceMode::Settings);
+}
+
+void MainComponent::SetPlaying(bool playing) {
+    isPlaying_ = playing;
+    transportBar_.SetPlaying(isPlaying_);
+    transportBar_.SetStatusText(isPlaying_ ? "Playing" : "Editing");
 }
 
 void MainComponent::timerCallback() {
-    world_.AdvanceTick();
+    if (isPlaying_) {
+        world_.AdvanceTick();
+    }
     tickLabel_.setText("tick " + juce::String(world_.CurrentTick()), juce::dontSendNotification);
 }
