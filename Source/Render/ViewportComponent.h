@@ -1,17 +1,17 @@
 #pragma once
 
 #include <memory>
-#include <vector>
 
 #include <JuceHeader.h>
 
 #include "assets/VirtualFileSystem.h"
-#include "Render/GL/Texture2D.h"
+#include "engine/world.h"
 #include "Render/Scene/Camera.h"
 #include "Render/Scene/Light.h"
 #include "Render/Scene/Material.h"
 #include "Render/Scene/Mesh.h"
 #include "Render/Shaders/ShaderComposer.h"
+#include "Scene/AssetCatalog.h"
 
 namespace ce {
 
@@ -24,24 +24,26 @@ namespace ce {
 // components composited in the same window/process as this viewport
 // (section 3.4) — see MainComponent for how they're arranged around it.
 //
-// Current state (VFS follow-on to M5): the demo glTF asset and its base
-// color texture load through a mounted .zip archive (assets/packages/
-// base.zip) via VirtualFileSystem (AssetSystem/) instead of loose disk
-// files — LoadGltfFromVfs + Texture2D::LoadFromMemory, fully in-memory.
-// Lit by an editable light list — one directional light plus up to
-// kMaxPointLights point lights — surfaced through LightPanel
-// (Source/Views/LightPanel.h) in MainComponent's inspector dock.
+// Current state (SC1 of the scene-composition plan): draws every entity
+// in the shared ce::engine::World that has both a scene::Transform and a
+// scene::MeshRenderer component, instead of a fixed hardcoded model —
+// per spec section 1, placed objects are real entities in the same World
+// the game will simulate against, not a separate editor-only scene list.
+// AssetCatalog (Source/Scene/AssetCatalog.h) owns the GPU-resident
+// Mesh/Material/Texture2D assets those components reference.
 //
 // juce::OpenGLContext runs renderOpenGL() on its own background thread,
 // separate from the message thread these editing methods are called
 // from. Every method below that touches light or material-tweakable
 // state takes stateLock_ for exactly that reason — copy in, copy out,
 // never hand back a live reference the UI thread could hold onto while
-// the render thread is mid-frame.
+// the render thread is mid-frame. (Scene entity edits — SC4 onward —
+// need the same scrutiny; don't assume entt::registry access from two
+// threads is fine just because it wasn't flagged here.)
 class ViewportComponent final : public juce::Component,
                                  private juce::OpenGLRenderer {
 public:
-    ViewportComponent();
+    explicit ViewportComponent(engine::World& world);
     ~ViewportComponent() override;
 
     void paint(juce::Graphics&) override {}
@@ -66,14 +68,15 @@ private:
     void renderOpenGL() override;
     void openGLContextClosing() override;
 
+    void SeedDemoScene();
+
+    engine::World& world_;
+
     juce::OpenGLContext openGLContext_;
     std::unique_ptr<ShaderComposer> shaderComposer_;
     assets::VirtualFileSystem vfs_;
-
-    std::vector<Mesh> meshes_;
-    std::vector<Material> materials_;
-    std::vector<int> primitiveMaterialIndex_; // parallel to meshes_
-    std::vector<std::unique_ptr<gl::Texture2D>> loadedTextures_;
+    scene::AssetCatalog assetCatalog_;
+    bool hasSeededDemoScene_ = false;
 
     mutable juce::CriticalSection stateLock_;
     DirectionalLight sunLight_;

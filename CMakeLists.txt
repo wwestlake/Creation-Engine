@@ -65,6 +65,9 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Render/Scene/Light.h
     Source/Views/LightPanel.h
     Source/Views/LightPanel.cpp
+    Source/Scene/Components.h
+    Source/Scene/AssetCatalog.h
+    Source/Scene/AssetCatalog.cpp
 )
 
 target_include_directories(CreationEngineEditor PRIVATE Source third_party)

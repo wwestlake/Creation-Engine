@@ -1,6 +1,6 @@
 #include "MainComponent.h"
 
-MainComponent::MainComponent() : lightPanel_(viewport_) {
+MainComponent::MainComponent() : viewport_(world_), lightPanel_(viewport_) {
     addAndMakeVisible(viewport_);
 
     inspectorTitle_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());

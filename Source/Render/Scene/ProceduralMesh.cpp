@@ -51,4 +51,68 @@ void GenerateUVSphere(int rings, int segments, std::vector<Vertex>& outVertices,
     }
 }
 
+namespace {
+struct Vec3 {
+    float x, y, z;
+};
+
+Vec3 Add(Vec3 a, Vec3 b, float bScale) {
+    return { a.x + b.x * bScale, a.y + b.y * bScale, a.z + b.z * bScale };
+}
+} // namespace
+
+void GenerateCube(std::vector<Vertex>& outVertices, std::vector<GLuint>& outIndices) {
+    outVertices.clear();
+    outIndices.clear();
+
+    // Per face: outward normal N, and in-face tangent axes U/V chosen so
+    // U x V == N — that guarantees consistent CCW winding (viewed from
+    // outside) across all six faces from one shared index pattern below,
+    // rather than having to special-case winding per face.
+    struct Face {
+        Vec3 n, u, v;
+    };
+    const Face faces[6] = {
+        { { 0, 0, 1 }, { 1, 0, 0 }, { 0, 1, 0 } },   // +Z
+        { { 0, 0, -1 }, { -1, 0, 0 }, { 0, 1, 0 } }, // -Z
+        { { 1, 0, 0 }, { 0, 0, -1 }, { 0, 1, 0 } },  // +X
+        { { -1, 0, 0 }, { 0, 0, 1 }, { 0, 1, 0 } },  // -X
+        { { 0, 1, 0 }, { 1, 0, 0 }, { 0, 0, -1 } },  // +Y
+        { { 0, -1, 0 }, { 1, 0, 0 }, { 0, 0, 1 } },  // -Y
+    };
+
+    for (const auto& face : faces) {
+        const Vec3 center = { face.n.x * 0.5f, face.n.y * 0.5f, face.n.z * 0.5f };
+        const Vec3 corners[4] = {
+            Add(Add(center, face.u, -0.5f), face.v, -0.5f), // bottom-left
+            Add(Add(center, face.u, 0.5f), face.v, -0.5f),  // bottom-right
+            Add(Add(center, face.u, -0.5f), face.v, 0.5f),  // top-left
+            Add(Add(center, face.u, 0.5f), face.v, 0.5f),   // top-right
+        };
+        const float uvs[4][2] = { { 0.0f, 0.0f }, { 1.0f, 0.0f }, { 0.0f, 1.0f }, { 1.0f, 1.0f } };
+
+        const auto baseIndex = static_cast<GLuint>(outVertices.size());
+        for (int i = 0; i < 4; ++i) {
+            Vertex vertex{};
+            vertex.position[0] = corners[i].x;
+            vertex.position[1] = corners[i].y;
+            vertex.position[2] = corners[i].z;
+            vertex.normal[0] = face.n.x;
+            vertex.normal[1] = face.n.y;
+            vertex.normal[2] = face.n.z;
+            vertex.uv[0] = uvs[i][0];
+            vertex.uv[1] = uvs[i][1];
+            outVertices.push_back(vertex);
+        }
+
+        // BL, BR, TL / TR, TL, BR — CCW given U x V == N (see Face table above).
+        outIndices.push_back(baseIndex + 0);
+        outIndices.push_back(baseIndex + 1);
+        outIndices.push_back(baseIndex + 2);
+        outIndices.push_back(baseIndex + 3);
+        outIndices.push_back(baseIndex + 2);
+        outIndices.push_back(baseIndex + 1);
+    }
+}
+
 } // namespace ce

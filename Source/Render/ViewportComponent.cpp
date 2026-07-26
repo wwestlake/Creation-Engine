@@ -3,7 +3,7 @@
 #include <array>
 #include <iostream>
 
-#include "Render/Import/GltfLoader.h"
+#include "Scene/Components.h"
 
 using namespace juce::gl;
 
@@ -16,9 +16,12 @@ void LogGLErrors(const char* where) {
 }
 
 // Upper-left 3x3 of a 4x4 column-major matrix, as a 9-float column-major
-// array for setUniformMat3. Correct as a normal matrix here because the
-// model transform is rotation-only (orthonormal), so no inverse-transpose
-// is needed — that requirement returns once non-uniform scale is possible.
+// array for setUniformMat3. Correct as a normal matrix for rotation and
+// UNIFORM scale (any uniform scale factor cancels out under the shader's
+// normalize() anyway) — not for non-uniform scale, which would need a
+// proper inverse-transpose. Fine today since nothing sets a non-uniform
+// scale yet; revisit if/when Transform editing (SC4) lets a designer do
+// that.
 std::array<float, 9> ExtractUpperLeft3x3(const juce::Matrix3D<float>& m) {
     return { m.mat[0], m.mat[1], m.mat[2], m.mat[4], m.mat[5], m.mat[6], m.mat[8], m.mat[9], m.mat[10] };
 }
@@ -27,7 +30,7 @@ std::array<float, 9> ExtractUpperLeft3x3(const juce::Matrix3D<float>& m) {
 
 namespace ce {
 
-ViewportComponent::ViewportComponent() {
+ViewportComponent::ViewportComponent(engine::World& world) : world_(world) {
     openGLContext_.setOpenGLVersionRequired(juce::OpenGLContext::openGL4_1);
     openGLContext_.setRenderer(this);
     openGLContext_.attachTo(*this);
@@ -40,26 +43,44 @@ ViewportComponent::~ViewportComponent() {
 
 void ViewportComponent::SetRoughness(float value) {
     const juce::ScopedLock lock(stateLock_);
-    for (auto& material : materials_) {
-        material.roughness = value;
+    auto view = world_.Registry().view<scene::MeshRenderer>();
+    for (auto entity : view) {
+        if (auto& material = view.get<scene::MeshRenderer>(entity).material) {
+            material->roughness = value;
+        }
     }
 }
 
 void ViewportComponent::SetMetallic(float value) {
     const juce::ScopedLock lock(stateLock_);
-    for (auto& material : materials_) {
-        material.metallic = value;
+    auto view = world_.Registry().view<scene::MeshRenderer>();
+    for (auto entity : view) {
+        if (auto& material = view.get<scene::MeshRenderer>(entity).material) {
+            material->metallic = value;
+        }
     }
 }
 
 float ViewportComponent::Roughness() const {
     const juce::ScopedLock lock(stateLock_);
-    return materials_.empty() ? 0.4f : materials_.front().roughness;
+    auto view = world_.Registry().view<const scene::MeshRenderer>();
+    for (auto entity : view) {
+        if (const auto& material = view.get<const scene::MeshRenderer>(entity).material) {
+            return material->roughness;
+        }
+    }
+    return 0.4f;
 }
 
 float ViewportComponent::Metallic() const {
     const juce::ScopedLock lock(stateLock_);
-    return materials_.empty() ? 0.2f : materials_.front().metallic;
+    auto view = world_.Registry().view<const scene::MeshRenderer>();
+    for (auto entity : view) {
+        if (const auto& material = view.get<const scene::MeshRenderer>(entity).material) {
+            return material->metallic;
+        }
+    }
+    return 0.2f;
 }
 
 DirectionalLight ViewportComponent::GetSunLight() const {
@@ -109,6 +130,26 @@ void ViewportComponent::RemovePointLight(int index) {
     pointLights_.erase(pointLights_.begin() + index);
 }
 
+void ViewportComponent::SeedDemoScene() {
+    if (hasSeededDemoScene_) {
+        return;
+    }
+    hasSeededDemoScene_ = true;
+
+    const auto* asset = assetCatalog_.Find("BoxTextured");
+    if (asset == nullptr) {
+        std::cout << "[scene] BoxTextured not in catalog; demo scene will be empty." << std::endl;
+        return;
+    }
+
+    const auto entity = world_.CreateEntity();
+    world_.Registry().emplace<scene::Name>(entity, scene::Name{ "Box" });
+    world_.Registry().emplace<scene::Transform>(entity, scene::Transform{});
+    world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ asset->mesh, asset->material });
+
+    std::cout << "[scene] seeded demo entity 'Box'" << std::endl;
+}
+
 void ViewportComponent::newOpenGLContextCreated() {
     std::cout << "[render] newOpenGLContextCreated: GL_VERSION="
               << reinterpret_cast<const char*>(glGetString(GL_VERSION)) << std::endl;
@@ -126,66 +167,19 @@ void ViewportComponent::newOpenGLContextCreated() {
         return;
     }
     // Mount-priority demo: override.zip only contains a replacement
-    // CesiumLogoFlat.png, mounted at higher priority than base.zip. The
-    // VFS should resolve that path to override.zip's copy instead of
-    // base.zip's — verified by the differing byte size/dimensions
-    // VirtualFileSystem::ReadFile and Texture2D log for that read.
+    // CesiumLogoFlat.png, mounted at higher priority than base.zip.
     const juce::File overrideFile = packagesDir.getChildFile("override.zip");
     if (overrideFile.existsAsFile()) {
         vfs_.Mount(overrideFile, 10);
     }
 
-    LoadedModel model;
-    if (!LoadGltfFromVfs(vfs_, "BoxTextured.gltf", model)) {
-        std::cout << "[render] glTF load failed; nothing will render." << std::endl;
-        return;
-    }
+    assetCatalog_.LoadBuiltins(vfs_);
+    SeedDemoScene();
 
-    for (const auto& srcMaterial : model.materials) {
-        Material material;
-        material.albedo = srcMaterial.baseColorFactor;
-        material.metallic = srcMaterial.metallicFactor;
-        material.roughness = srcMaterial.roughnessFactor;
-
-        if (srcMaterial.baseColorTexturePath.existsAsFile()) {
-            auto texture = std::make_unique<gl::Texture2D>();
-            if (texture->LoadFromFile(srcMaterial.baseColorTexturePath)) {
-                material.albedoTexture = texture.get();
-            }
-            loadedTextures_.push_back(std::move(texture));
-        } else if (srcMaterial.baseColorTextureVirtualPath.isNotEmpty()) {
-            juce::MemoryBlock textureBytes;
-            if (vfs_.ReadFile(srcMaterial.baseColorTextureVirtualPath, textureBytes)) {
-                auto texture = std::make_unique<gl::Texture2D>();
-                if (texture->LoadFromMemory(textureBytes.getData(), textureBytes.getSize(),
-                                             srcMaterial.baseColorTextureVirtualPath)) {
-                    material.albedoTexture = texture.get();
-                }
-                loadedTextures_.push_back(std::move(texture));
-            }
-        }
-
-        materials_.push_back(std::move(material));
-    }
-    if (materials_.empty()) {
-        materials_.emplace_back(); // safety net: keep Roughness()/Metallic()/rendering well-defined.
-    }
-
-    meshes_.reserve(model.primitives.size());
-    primitiveMaterialIndex_.reserve(model.primitives.size());
-    for (const auto& primitive : model.primitives) {
-        Mesh mesh;
-        mesh.Upload(primitive.vertices, primitive.indices);
-        meshes_.push_back(std::move(mesh));
-
-        const bool validIndex = primitive.materialIndex >= 0 &&
-                                 primitive.materialIndex < static_cast<int>(model.materials.size());
-        primitiveMaterialIndex_.push_back(validIndex ? primitive.materialIndex : 0);
-    }
-    LogGLErrors("model load + upload");
+    LogGLErrors("catalog load + scene seed");
 
     startTimeSeconds_ = juce::Time::getMillisecondCounterHiRes() / 1000.0;
-    std::cout << "[render] newOpenGLContextCreated: done (" << meshes_.size() << " mesh(es))" << std::endl;
+    std::cout << "[render] newOpenGLContextCreated: done" << std::endl;
 }
 
 void ViewportComponent::renderOpenGL() {
@@ -213,7 +207,7 @@ void ViewportComponent::renderOpenGL() {
     glClearColor(0.05f, 0.05f, 0.07f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    if (meshes_.empty()) {
+    if (shaderComposer_ == nullptr) {
         return;
     }
 
@@ -223,11 +217,9 @@ void ViewportComponent::renderOpenGL() {
     camera_.SetLookAt(cameraPos, { 0.0f, 0.0f, 0.0f });
 
     const double elapsedSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0 - startTimeSeconds_;
-    const auto model = juce::Matrix3D<float>::rotation({ 0.0f, 0.5f * static_cast<float>(elapsedSeconds), 0.0f });
-    const auto normalMatrix = ExtractUpperLeft3x3(model);
 
-    // Snapshot the UI-editable state once per frame under the lock, then
-    // do all the (fast, non-blocking) GL uniform work below without
+    // Snapshot the UI-editable light state once per frame under the lock,
+    // then do all the (fast, non-blocking) GL uniform work below without
     // holding it — keeps message-thread edits from ever blocking on a
     // render that's mid-frame, and vice versa.
     DirectionalLight sunLightSnapshot;
@@ -238,12 +230,34 @@ void ViewportComponent::renderOpenGL() {
         pointLightsSnapshot = pointLights_;
     }
 
-    for (std::size_t i = 0; i < meshes_.size(); ++i) {
-        Material& material = materials_[static_cast<std::size_t>(primitiveMaterialIndex_[i])];
-        auto* program = material.Resolve(*shaderComposer_, openGLContext_);
+    // Demo-only: spins every placed entity's Transform in place so the
+    // scene isn't static before SC2's free camera exists. Safe for now
+    // because nothing else touches these Transforms yet — SC3/SC4 adding
+    // UI reads/writes to entt::registry from the message thread will need
+    // the same lock-and-snapshot treatment the light state above already
+    // gets, not an assumption that it's still fine.
+    {
+        auto view = world_.Registry().view<scene::Transform>();
+        for (auto entity : view) {
+            view.get<scene::Transform>(entity).eulerRotationRadians.y = 0.5f * static_cast<float>(elapsedSeconds);
+        }
+    }
+
+    auto drawView = world_.Registry().view<const scene::Transform, const scene::MeshRenderer>();
+    for (auto entity : drawView) {
+        const auto& transform = drawView.get<const scene::Transform>(entity);
+        const auto& renderer = drawView.get<const scene::MeshRenderer>(entity);
+        if (!renderer.mesh || !renderer.material) {
+            continue;
+        }
+
+        auto* program = renderer.material->Resolve(*shaderComposer_, openGLContext_);
         if (program == nullptr) {
             continue;
         }
+
+        const auto model = transform.ToModelMatrix();
+        const auto normalMatrix = ExtractUpperLeft3x3(model);
 
         program->use();
         program->setUniformMat4("uModel", model.mat, 1, GL_FALSE);
@@ -254,7 +268,7 @@ void ViewportComponent::renderOpenGL() {
 
         {
             const juce::ScopedLock lock(stateLock_);
-            material.ApplyUniforms(*program);
+            renderer.material->ApplyUniforms(*program);
         }
 
         program->setUniform("uSunLight.direction", sunLightSnapshot.direction.x, sunLightSnapshot.direction.y,
@@ -274,15 +288,18 @@ void ViewportComponent::renderOpenGL() {
         }
         program->setUniform("uPointLightCount", pointLightCount);
 
-        meshes_[i].Draw();
+        renderer.mesh->Draw();
     }
 
     LogGLErrors("draw");
 }
 
 void ViewportComponent::openGLContextClosing() {
-    for (auto& material : materials_) {
-        material.InvalidateCache();
+    auto view = world_.Registry().view<scene::MeshRenderer>();
+    for (auto entity : view) {
+        if (auto& material = view.get<scene::MeshRenderer>(entity).material) {
+            material->InvalidateCache();
+        }
     }
     shaderComposer_.reset();
 }
