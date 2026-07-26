@@ -7,6 +7,7 @@
 
 #include "Render/GL/Texture2D.h"
 #include "Render/Scene/Camera.h"
+#include "Render/Scene/Light.h"
 #include "Render/Scene/Material.h"
 #include "Render/Scene/Mesh.h"
 #include "Render/Shaders/ShaderComposer.h"
@@ -22,13 +23,17 @@ namespace ce {
 // components composited in the same window/process as this viewport
 // (section 3.4) — see MainComponent for how they're arranged around it.
 //
-// Current state (M4 of the render pipeline plan): renders a real glTF
-// 2.0 asset (Source/Render/Import/GltfLoader) — geometry, PBR material
-// factors, and base color texture all pulled from the file, drawn
-// through the same Mesh/Material/ShaderComposer pipeline M2/M3 built.
-// Node-hierarchy transforms aren't applied yet (each primitive is drawn
-// in its own local space under one shared spin animation) — full scene
-// graph import is future work.
+// Current state (M5 of the render pipeline plan): renders a real glTF
+// 2.0 asset lit by an editable light list — one directional light plus
+// up to kMaxPointLights point lights — surfaced through LightPanel
+// (Source/Views/LightPanel.h) in MainComponent's inspector dock.
+//
+// juce::OpenGLContext runs renderOpenGL() on its own background thread,
+// separate from the message thread these editing methods are called
+// from. Every method below that touches light or material-tweakable
+// state takes stateLock_ for exactly that reason — copy in, copy out,
+// never hand back a live reference the UI thread could hold onto while
+// the render thread is mid-frame.
 class ViewportComponent final : public juce::Component,
                                  private juce::OpenGLRenderer {
 public:
@@ -43,6 +48,15 @@ public:
     float Roughness() const;
     float Metallic() const;
 
+    DirectionalLight GetSunLight() const;
+    void SetSunLight(const DirectionalLight& light);
+
+    int GetPointLightCount() const;
+    PointLight GetPointLight(int index) const;
+    void SetPointLight(int index, const PointLight& light);
+    void AddPointLight();
+    void RemovePointLight(int index);
+
 private:
     void newOpenGLContextCreated() override;
     void renderOpenGL() override;
@@ -55,6 +69,10 @@ private:
     std::vector<Material> materials_;
     std::vector<int> primitiveMaterialIndex_; // parallel to meshes_
     std::vector<std::unique_ptr<gl::Texture2D>> loadedTextures_;
+
+    mutable juce::CriticalSection stateLock_;
+    DirectionalLight sunLight_;
+    std::vector<PointLight> pointLights_{ PointLight{} };
 
     Camera camera_;
     double startTimeSeconds_ = 0.0;

@@ -39,23 +39,74 @@ ViewportComponent::~ViewportComponent() {
 }
 
 void ViewportComponent::SetRoughness(float value) {
+    const juce::ScopedLock lock(stateLock_);
     for (auto& material : materials_) {
         material.roughness = value;
     }
 }
 
 void ViewportComponent::SetMetallic(float value) {
+    const juce::ScopedLock lock(stateLock_);
     for (auto& material : materials_) {
         material.metallic = value;
     }
 }
 
 float ViewportComponent::Roughness() const {
+    const juce::ScopedLock lock(stateLock_);
     return materials_.empty() ? 0.4f : materials_.front().roughness;
 }
 
 float ViewportComponent::Metallic() const {
+    const juce::ScopedLock lock(stateLock_);
     return materials_.empty() ? 0.2f : materials_.front().metallic;
+}
+
+DirectionalLight ViewportComponent::GetSunLight() const {
+    const juce::ScopedLock lock(stateLock_);
+    return sunLight_;
+}
+
+void ViewportComponent::SetSunLight(const DirectionalLight& light) {
+    const juce::ScopedLock lock(stateLock_);
+    sunLight_ = light;
+}
+
+int ViewportComponent::GetPointLightCount() const {
+    const juce::ScopedLock lock(stateLock_);
+    return static_cast<int>(pointLights_.size());
+}
+
+PointLight ViewportComponent::GetPointLight(int index) const {
+    const juce::ScopedLock lock(stateLock_);
+    if (index < 0 || index >= static_cast<int>(pointLights_.size())) {
+        return {};
+    }
+    return pointLights_[static_cast<std::size_t>(index)];
+}
+
+void ViewportComponent::SetPointLight(int index, const PointLight& light) {
+    const juce::ScopedLock lock(stateLock_);
+    if (index < 0 || index >= static_cast<int>(pointLights_.size())) {
+        return;
+    }
+    pointLights_[static_cast<std::size_t>(index)] = light;
+}
+
+void ViewportComponent::AddPointLight() {
+    const juce::ScopedLock lock(stateLock_);
+    if (static_cast<int>(pointLights_.size()) >= kMaxPointLights) {
+        return;
+    }
+    pointLights_.push_back(PointLight{});
+}
+
+void ViewportComponent::RemovePointLight(int index) {
+    const juce::ScopedLock lock(stateLock_);
+    if (index < 0 || index >= static_cast<int>(pointLights_.size())) {
+        return;
+    }
+    pointLights_.erase(pointLights_.begin() + index);
 }
 
 void ViewportComponent::newOpenGLContextCreated() {
@@ -138,6 +189,18 @@ void ViewportComponent::renderOpenGL() {
     const auto model = juce::Matrix3D<float>::rotation({ 0.0f, 0.5f * static_cast<float>(elapsedSeconds), 0.0f });
     const auto normalMatrix = ExtractUpperLeft3x3(model);
 
+    // Snapshot the UI-editable state once per frame under the lock, then
+    // do all the (fast, non-blocking) GL uniform work below without
+    // holding it — keeps message-thread edits from ever blocking on a
+    // render that's mid-frame, and vice versa.
+    DirectionalLight sunLightSnapshot;
+    std::vector<PointLight> pointLightsSnapshot;
+    {
+        const juce::ScopedLock lock(stateLock_);
+        sunLightSnapshot = sunLight_;
+        pointLightsSnapshot = pointLights_;
+    }
+
     for (std::size_t i = 0; i < meshes_.size(); ++i) {
         Material& material = materials_[static_cast<std::size_t>(primitiveMaterialIndex_[i])];
         auto* program = material.Resolve(*shaderComposer_, openGLContext_);
@@ -152,16 +215,27 @@ void ViewportComponent::renderOpenGL() {
         program->setUniformMat3("uNormalMatrix", normalMatrix.data(), 1, GL_FALSE);
         program->setUniform("uCameraPos", cameraPos.x, cameraPos.y, cameraPos.z);
 
-        material.ApplyUniforms(*program);
+        {
+            const juce::ScopedLock lock(stateLock_);
+            material.ApplyUniforms(*program);
+        }
 
-        // Hardcoded lights for this milestone — M5 adds an editable light list.
-        program->setUniform("uSunLight.direction", -0.4f, -1.0f, -0.3f);
-        program->setUniform("uSunLight.color", 1.0f, 0.97f, 0.9f);
-        program->setUniform("uSunLight.intensity", 3.0f);
+        program->setUniform("uSunLight.direction", sunLightSnapshot.direction.x, sunLightSnapshot.direction.y,
+                             sunLightSnapshot.direction.z);
+        program->setUniform("uSunLight.color", sunLightSnapshot.color.x, sunLightSnapshot.color.y,
+                             sunLightSnapshot.color.z);
+        program->setUniform("uSunLight.intensity", sunLightSnapshot.intensity);
 
-        program->setUniform("uPointLight.position", 2.0f, 1.5f, 2.0f);
-        program->setUniform("uPointLight.color", 0.3f, 0.5f, 1.0f);
-        program->setUniform("uPointLight.intensity", 8.0f);
+        const int pointLightCount = juce::jmin(static_cast<int>(pointLightsSnapshot.size()), kMaxPointLights);
+        for (int lightIndex = 0; lightIndex < pointLightCount; ++lightIndex) {
+            const auto& light = pointLightsSnapshot[static_cast<std::size_t>(lightIndex)];
+            const juce::String prefix = "uPointLights[" + juce::String(lightIndex) + "].";
+            program->setUniform((prefix + "position").toRawUTF8(), light.position.x, light.position.y,
+                                 light.position.z);
+            program->setUniform((prefix + "color").toRawUTF8(), light.color.x, light.color.y, light.color.z);
+            program->setUniform((prefix + "intensity").toRawUTF8(), light.intensity);
+        }
+        program->setUniform("uPointLightCount", pointLightCount);
 
         meshes_[i].Draw();
     }

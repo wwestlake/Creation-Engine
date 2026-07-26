@@ -1,6 +1,6 @@
 #include "MainComponent.h"
 
-MainComponent::MainComponent() {
+MainComponent::MainComponent() : lightPanel_(viewport_) {
     addAndMakeVisible(viewport_);
 
     inspectorTitle_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
@@ -24,6 +24,8 @@ MainComponent::MainComponent() {
     metallicSlider_.onValueChange = [this] { viewport_.SetMetallic(static_cast<float>(metallicSlider_.getValue())); };
     addAndMakeVisible(metallicSlider_);
 
+    addAndMakeVisible(lightPanel_);
+
     setSize(1400, 900);
     startTimerHz(30);
 }
@@ -43,7 +45,7 @@ void MainComponent::resized() {
     // composited in this one window, per section 3.4. (A translucent
     // overlay-on-top-of-viewport layout is a UI polish choice for later,
     // not a technical constraint of this arrangement.)
-    auto inspectorBounds = bounds.removeFromRight(280).reduced(12);
+    auto inspectorBounds = bounds.removeFromRight(300).reduced(12);
     inspectorTitle_.setBounds(inspectorBounds.removeFromTop(28));
     tickLabel_.setBounds(inspectorBounds.removeFromTop(24));
 
@@ -53,6 +55,9 @@ void MainComponent::resized() {
     inspectorBounds.removeFromTop(8);
     metallicLabel_.setBounds(inspectorBounds.removeFromTop(18));
     metallicSlider_.setBounds(inspectorBounds.removeFromTop(24));
+
+    inspectorBounds.removeFromTop(16);
+    lightPanel_.setBounds(inspectorBounds.removeFromTop(lightPanel_.PreferredHeight()));
 
     viewport_.setBounds(bounds);
 }

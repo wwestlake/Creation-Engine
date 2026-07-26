@@ -5,6 +5,7 @@
 #include "engine/world.h"
 #include "node_system/graph.h"
 #include "Render/ViewportComponent.h"
+#include "Views/LightPanel.h"
 
 // The editor and the runtime are the same executable in different modes
 // (capabilities spec, section 1) — this component is where that split
@@ -36,6 +37,8 @@ private:
     juce::Slider roughnessSlider_ { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::Label metallicLabel_ { {}, "Metallic" };
     juce::Slider metallicSlider_ { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+
+    ce::LightPanel lightPanel_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

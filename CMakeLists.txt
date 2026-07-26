@@ -55,6 +55,9 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Render/Shaders/ShaderComposer.cpp
     Source/Render/Import/GltfLoader.h
     Source/Render/Import/GltfLoader.cpp
+    Source/Render/Scene/Light.h
+    Source/Views/LightPanel.h
+    Source/Views/LightPanel.cpp
 )
 
 target_include_directories(CreationEngineEditor PRIVATE Source third_party)
