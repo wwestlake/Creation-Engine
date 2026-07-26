@@ -36,6 +36,51 @@ private:
     juce::TextButton playButton_;
 };
 
+// AI6: one timeline-slice request -- a name plus a start/end time (in
+// seconds) into whatever glTF animation is dropped next. Values are read
+// live off the text editors at drop time (BuildAnimationImportOptions),
+// not validated here -- an empty name means "skip this row" (see
+// BuildAnimationImportOptions), and an end <= start is silently dropped
+// by AnimationSlicer::SliceClip itself.
+class ImportPanel::SliceRow final : public juce::Component {
+public:
+    explicit SliceRow(ImportPanel& owner) : owner_(owner) {
+        nameEditor_.setTextToShowWhenEmpty("clip name", juce::Colours::grey);
+        addAndMakeVisible(nameEditor_);
+
+        startEditor_.setText("0.0", juce::dontSendNotification);
+        startEditor_.setInputRestrictions(8, "0123456789.");
+        addAndMakeVisible(startEditor_);
+
+        endEditor_.setText("1.0", juce::dontSendNotification);
+        endEditor_.setInputRestrictions(8, "0123456789.");
+        addAndMakeVisible(endEditor_);
+
+        removeButton_.onClick = [this] { owner_.RemoveSliceRow(this); };
+        addAndMakeVisible(removeButton_);
+    }
+
+    juce::String Name() const { return nameEditor_.getText().trim(); }
+    float Start() const { return startEditor_.getText().getFloatValue(); }
+    float End() const { return endEditor_.getText().getFloatValue(); }
+
+    void resized() override {
+        auto bounds = getLocalBounds();
+        removeButton_.setBounds(bounds.removeFromRight(22).reduced(1));
+        bounds.removeFromRight(2);
+        endEditor_.setBounds(bounds.removeFromRight(46).reduced(1));
+        startEditor_.setBounds(bounds.removeFromRight(46).reduced(1));
+        nameEditor_.setBounds(bounds.reduced(1));
+    }
+
+private:
+    ImportPanel& owner_;
+    juce::TextEditor nameEditor_;
+    juce::TextEditor startEditor_;
+    juce::TextEditor endEditor_;
+    juce::TextButton removeButton_{ "x" };
+};
+
 ImportPanel::~ImportPanel() = default;
 
 ImportPanel::ImportPanel(engine::World& world, ViewportComponent& viewport) {
@@ -69,6 +114,29 @@ ImportPanel::ImportPanel(engine::World& world, ViewportComponent& viewport) {
     audioClipsLabel_.setFont(juce::Font(juce::FontOptions(15.0f)).boldened());
     audioClipsLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
     addAndMakeVisible(audioClipsLabel_);
+
+    animationOptionsLabel_.setFont(juce::Font(juce::FontOptions(15.0f)).boldened());
+    animationOptionsLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
+    addAndMakeVisible(animationOptionsLabel_);
+
+    interpolationLabel_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+    addAndMakeVisible(interpolationLabel_);
+
+    interpolationCombo_.addItem("Keep authored", 1);
+    interpolationCombo_.addItem("Force Step", 2);
+    interpolationCombo_.addItem("Force Linear", 3);
+    interpolationCombo_.addItem("Force CubicSpline", 4);
+    interpolationCombo_.setSelectedId(1, juce::dontSendNotification);
+    addAndMakeVisible(interpolationCombo_);
+
+    rootMotionToggle_.setColour(juce::ToggleButton::textColourId, juce::Colours::lightgrey);
+    addAndMakeVisible(rootMotionToggle_);
+
+    slicesLabel_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+    addAndMakeVisible(slicesLabel_);
+
+    addSliceButton_.onClick = [this] { AddSliceRow(); };
+    addAndMakeVisible(addSliceButton_);
 }
 
 bool ImportPanel::isInterestedInFileDrag(const juce::StringArray& files) {
@@ -93,6 +161,12 @@ void ImportPanel::fileDragExit(const juce::StringArray&) {
 void ImportPanel::filesDropped(const juce::StringArray& files, int, int) {
     isDragHovering_ = false;
     repaint();
+
+    // AI6: read once per drop batch, not per file -- these are "how
+    // should the next animated glTF be imported" settings, not something
+    // that varies file to file within one drop. Non-animated files (and
+    // non-glTF importers entirely) ignore this field.
+    context_.animationOptions = BuildAnimationImportOptions();
 
     for (const auto& path : files) {
         const juce::File file(path);
@@ -140,6 +214,47 @@ void ImportPanel::RefreshPlayButtonLabels() {
     }
 }
 
+void ImportPanel::AddSliceRow() {
+    auto* row = sliceRows_.add(new SliceRow(*this));
+    addAndMakeVisible(row);
+    resized();
+}
+
+void ImportPanel::RemoveSliceRow(SliceRow* row) {
+    sliceRows_.removeObject(row);
+    resized();
+}
+
+import::AnimationImportOptions ImportPanel::BuildAnimationImportOptions() const {
+    import::AnimationImportOptions options;
+
+    switch (interpolationCombo_.getSelectedId()) {
+        case 2:
+            options.interpolationOverride = AnimationInterpolation::Step;
+            break;
+        case 3:
+            options.interpolationOverride = AnimationInterpolation::Linear;
+            break;
+        case 4:
+            options.interpolationOverride = AnimationInterpolation::CubicSpline;
+            break;
+        default:
+            break; // "Keep authored" (id 1), or nothing selected -- leave nullopt.
+    }
+
+    options.extractRootMotion = rootMotionToggle_.getToggleState();
+
+    for (const auto* row : sliceRows_) {
+        const auto name = row->Name();
+        if (name.isEmpty()) {
+            continue; // an unnamed row is a blank/in-progress row, not a real request.
+        }
+        options.slices.push_back(scene::ClipSlice{ name, row->Start(), row->End() });
+    }
+
+    return options;
+}
+
 void ImportPanel::AppendLogLine(const juce::String& line) {
     log_.moveCaretToEnd();
     log_.insertTextAtCaret(line + juce::newLine);
@@ -160,15 +275,30 @@ void ImportPanel::resized() {
     dropZoneLabel_.setBounds(area.removeFromTop(100));
     area.removeFromTop(12);
 
-    auto audioArea = area.removeFromRight(280);
+    auto sidebarArea = area.removeFromRight(300);
     area.removeFromRight(12);
     log_.setBounds(area);
 
-    audioClipsLabel_.setBounds(audioArea.removeFromTop(22));
-    audioArea.removeFromTop(4);
+    animationOptionsLabel_.setBounds(sidebarArea.removeFromTop(22));
+    sidebarArea.removeFromTop(4);
+    interpolationLabel_.setBounds(sidebarArea.removeFromTop(16));
+    interpolationCombo_.setBounds(sidebarArea.removeFromTop(24));
+    sidebarArea.removeFromTop(6);
+    rootMotionToggle_.setBounds(sidebarArea.removeFromTop(22));
+    sidebarArea.removeFromTop(6);
+    slicesLabel_.setBounds(sidebarArea.removeFromTop(16));
+    for (auto* row : sliceRows_) {
+        row->setBounds(sidebarArea.removeFromTop(24));
+        sidebarArea.removeFromTop(2);
+    }
+    addSliceButton_.setBounds(sidebarArea.removeFromTop(22));
+    sidebarArea.removeFromTop(14);
+
+    audioClipsLabel_.setBounds(sidebarArea.removeFromTop(22));
+    sidebarArea.removeFromTop(4);
     for (auto* row : audioClipRows_) {
-        row->setBounds(audioArea.removeFromTop(26));
-        audioArea.removeFromTop(2);
+        row->setBounds(sidebarArea.removeFromTop(26));
+        sidebarArea.removeFromTop(2);
     }
 }
 

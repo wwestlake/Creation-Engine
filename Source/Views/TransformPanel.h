@@ -46,6 +46,7 @@ private:
     // since an entity can have a Transform (editable) without a Skeleton/
     // Animator (nothing to play).
     void TogglePlayback();
+    void OnClipSelected();
     void SetAnimationControlsVisible(bool visible);
 
     engine::World& world_;
@@ -70,11 +71,14 @@ private:
     juce::Slider scaleYSlider_{ juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::Slider scaleZSlider_{ juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
 
-    // AI5: only visible when the selected entity has a scene::Animator
-    // with at least one clip.
+    // AI5/AI6: only visible when the selected entity has a scene::Animator
+    // with at least one clip. clipSelector_ lists every clip on the
+    // Animator (AI6's timeline slicing can produce more than one); picking
+    // a different one resets playback to that clip's start, paused.
     juce::Label animationLabel_{ {}, "Animation" };
-    juce::Label clipNameLabel_;
+    juce::ComboBox clipSelector_;
     juce::TextButton playPauseButton_{ "Play" };
+    juce::StringArray lastShownClipNames_; // avoids rebuilding clipSelector_'s items every 30Hz Refresh() tick.
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TransformPanel)
 };

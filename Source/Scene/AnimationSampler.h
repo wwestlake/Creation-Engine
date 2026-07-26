@@ -9,6 +9,16 @@
 
 namespace ce::scene {
 
+// Samples one channel's raw component values (3 for Translation/Scale, 4
+// for Rotation) at `time`, using the same STEP/LINEAR/CubicSpline rules
+// (and the same CubicSpline-tangent-skipping, NLERP-not-SLERP
+// simplifications) SampleLocalTransforms below applies per-joint --
+// factored out as its own function because AI6's clip slicing needs the
+// exact same "value at an arbitrary time" logic to compute correct
+// boundary values at a slice's start/end, not just SampleLocalTransforms'
+// internal use. Returns an empty vector if the channel has no keyframes.
+std::vector<float> SampleChannelValues(const AnimationChannel& channel, float time);
+
 // Samples `clip` at `time` (seconds) and returns one LOCAL transform per
 // joint in `skeleton`, in the same order as skeleton.joints. A joint/path
 // the clip doesn't animate keeps that joint's own bind-pose value (see

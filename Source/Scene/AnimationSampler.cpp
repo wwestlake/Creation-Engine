@@ -110,6 +110,44 @@ void FindKeyframe(const std::vector<float>& times, float time, int& outIndex, fl
 
 } // namespace
 
+std::vector<float> SampleChannelValues(const AnimationChannel& channel, float time) {
+    const int components = channel.path == AnimationChannel::Path::Rotation ? 4 : 3;
+    if (channel.times.empty()) {
+        return {};
+    }
+
+    int keyIndex = -1;
+    float t = 0.0f;
+    FindKeyframe(channel.times, time, keyIndex, t);
+    if (keyIndex < 0) {
+        return {};
+    }
+
+    const bool cubic = channel.interpolation == AnimationInterpolation::CubicSpline;
+    const int stride = components * (cubic ? 3 : 1);
+    const int valueOffset = cubic ? components : 0; // skip the in-tangent for cubic-spline keys.
+
+    const auto sampleAt = [&](int index) -> const float* {
+        return &channel.values[static_cast<std::size_t>(index) * static_cast<std::size_t>(stride) +
+                                static_cast<std::size_t>(valueOffset)];
+    };
+
+    const bool isLastKey = keyIndex == static_cast<int>(channel.times.size()) - 1;
+    const float* a = sampleAt(keyIndex);
+
+    if (channel.interpolation == AnimationInterpolation::Step || isLastKey || t <= 0.0f) {
+        return std::vector<float>(a, a + components);
+    }
+
+    const float* b = sampleAt(keyIndex + 1);
+    if (channel.path == AnimationChannel::Path::Rotation) {
+        const Quatf q = NlerpQuat(a, b, t);
+        return { q.x, q.y, q.z, q.w };
+    }
+    const Vec3f v = LerpVec3(a, b, t);
+    return { v.x, v.y, v.z };
+}
+
 std::vector<juce::Matrix3D<float>> SampleLocalTransforms(const AnimationClip& clip, float time,
                                                           const Skeleton& skeleton) {
     const std::size_t jointCount = skeleton.joints.size();
@@ -128,47 +166,12 @@ std::vector<juce::Matrix3D<float>> SampleLocalTransforms(const AnimationClip& cl
         if (channel.jointIndex < 0 || static_cast<std::size_t>(channel.jointIndex) >= jointCount) {
             continue;
         }
-
-        int keyIndex = -1;
-        float t = 0.0f;
-        FindKeyframe(channel.times, time, keyIndex, t);
-        if (keyIndex < 0) {
+        const auto values = SampleChannelValues(channel, time);
+        if (values.empty()) {
             continue;
         }
-
-        const int components = channel.path == AnimationChannel::Path::Rotation ? 4 : 3;
-        const bool cubic = channel.interpolation == AnimationInterpolation::CubicSpline;
-        const int stride = components * (cubic ? 3 : 1);
-        const int valueOffset = cubic ? components : 0; // skip the in-tangent for cubic-spline keys.
-
-        const auto sampleAt = [&](int index) -> const float* {
-            return &channel.values[static_cast<std::size_t>(index) * static_cast<std::size_t>(stride) +
-                                    static_cast<std::size_t>(valueOffset)];
-        };
-
-        const bool isLastKey = keyIndex == static_cast<int>(channel.times.size()) - 1;
-        const float* a = sampleAt(keyIndex);
-        auto& jointTranslation = translations[static_cast<std::size_t>(channel.jointIndex)];
-        auto& jointRotation = rotations[static_cast<std::size_t>(channel.jointIndex)];
-        auto& jointScale = scales[static_cast<std::size_t>(channel.jointIndex)];
-
-        if (channel.interpolation == AnimationInterpolation::Step || isLastKey || t <= 0.0f) {
-            ApplySample(channel.path, a, jointTranslation, jointRotation, jointScale);
-            continue;
-        }
-
-        const float* b = sampleAt(keyIndex + 1);
-        switch (channel.path) {
-            case AnimationChannel::Path::Translation:
-                jointTranslation = LerpVec3(a, b, t);
-                break;
-            case AnimationChannel::Path::Scale:
-                jointScale = LerpVec3(a, b, t);
-                break;
-            case AnimationChannel::Path::Rotation:
-                jointRotation = NlerpQuat(a, b, t);
-                break;
-        }
+        const auto jointIndex = static_cast<std::size_t>(channel.jointIndex);
+        ApplySample(channel.path, values.data(), translations[jointIndex], rotations[jointIndex], scales[jointIndex]);
     }
 
     std::vector<juce::Matrix3D<float>> result;

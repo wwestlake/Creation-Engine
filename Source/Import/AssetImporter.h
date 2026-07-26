@@ -1,10 +1,13 @@
 #pragma once
 
+#include <optional>
 #include <vector>
 
 #include <JuceHeader.h>
 
 #include "engine/world.h"
+#include "Render/Scene/Animation.h"
+#include "Scene/AnimationSlicer.h"
 
 namespace ce {
 class ViewportComponent;
@@ -24,6 +27,18 @@ class AudioCatalog;
 
 namespace ce::import {
 
+// AI6: animation import configuration -- read by GltfAssetImporter only
+// (other importers have no animation data and ignore this field
+// entirely). Set by ImportPanel from its "Animation Import Options"
+// section immediately before each filesDropped() call, not persisted
+// per source file -- these are import-TIME settings, like "which
+// codec," not properties of any one asset.
+struct AnimationImportOptions {
+    std::optional<AnimationInterpolation> interpolationOverride; // nullopt = keep each channel's authored interpolation.
+    bool extractRootMotion = false;                              // strip translation off the skeleton's root joint (see AnimationSlicer::ExtractRootMotion).
+    std::vector<scene::ClipSlice> slices;                        // empty = keep the single auto-extracted clip, unsliced.
+};
+
 // Everything a concrete AssetImporter might need to do its job. Not
 // every importer needs every field -- an audio importer has no use for
 // viewport, a glTF importer has no use for an audio device -- so these
@@ -38,6 +53,7 @@ struct ImportContext {
     ViewportComponent* viewport = nullptr; // for RunOnGLThread -- see ViewportComponent.h.
     audio::AudioCatalog* audioCatalog = nullptr;
     juce::AudioFormatManager* audioFormatManager = nullptr;
+    AnimationImportOptions animationOptions;
 };
 
 struct ImportResult {

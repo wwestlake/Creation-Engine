@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <vector>
 
 #include <JuceHeader.h>
@@ -34,6 +35,14 @@ struct AnimationClip {
     juce::String name;
     float duration = 0.0f; // latest keyframe time across all channels.
     std::vector<AnimationChannel> channels;
+
+    // AI6: present only when root motion extraction was enabled at import
+    // time -- the root joint's translation channel moves here out of
+    // `channels`, since it drives the entity's world position during
+    // playback instead of the joint's own local pose (which then stays at
+    // its bind-pose translation). See Scene/AnimationSlicer.h's
+    // ExtractRootMotion for how this gets populated.
+    std::optional<AnimationChannel> rootMotion;
 };
 
 } // namespace ce

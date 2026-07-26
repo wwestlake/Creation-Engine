@@ -45,8 +45,8 @@ TransformPanel::TransformPanel(engine::World& world) : world_(world) {
     animationLabel_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
     addAndMakeVisible(animationLabel_);
 
-    clipNameLabel_.setColour(juce::Label::textColourId, juce::Colours::grey);
-    addAndMakeVisible(clipNameLabel_);
+    clipSelector_.onChange = [this] { OnClipSelected(); };
+    addAndMakeVisible(clipSelector_);
 
     playPauseButton_.onClick = [this] { TogglePlayback(); };
     addAndMakeVisible(playPauseButton_);
@@ -128,23 +128,34 @@ void TransformPanel::Refresh() {
 
     bool hasAnimator = false;
     bool playing = false;
-    juce::String clipName;
+    int activeClip = -1;
+    juce::StringArray clipNames;
     {
         std::lock_guard<std::mutex> lock(world_.RegistryMutex());
         auto& registry = world_.Registry();
         if (const auto* animator = registry.try_get<scene::Animator>(selectedEntity_)) {
-            if (animator->clips != nullptr && animator->activeClip >= 0 &&
-                static_cast<std::size_t>(animator->activeClip) < animator->clips->size()) {
+            if (animator->clips != nullptr && !animator->clips->empty()) {
                 hasAnimator = true;
                 playing = animator->playing;
-                clipName = (*animator->clips)[static_cast<std::size_t>(animator->activeClip)].name;
+                activeClip = animator->activeClip;
+                for (const auto& clip : *animator->clips) {
+                    clipNames.add(clip.name);
+                }
             }
         }
     }
 
     SetAnimationControlsVisible(hasAnimator);
     if (hasAnimator) {
-        clipNameLabel_.setText(clipName, juce::dontSendNotification);
+        if (clipNames != lastShownClipNames_) {
+            clipSelector_.clear(juce::dontSendNotification);
+            for (int i = 0; i < clipNames.size(); ++i) {
+                clipSelector_.addItem(clipNames[i], i + 1);
+            }
+            lastShownClipNames_ = clipNames;
+        }
+        clipSelector_.setSelectedId(activeClip + 1, juce::dontSendNotification);
+        clipSelector_.setEnabled(!locked_);
         playPauseButton_.setButtonText(playing ? "Pause" : "Play");
         playPauseButton_.setEnabled(!locked_);
     }
@@ -200,9 +211,40 @@ void TransformPanel::TogglePlayback() {
     animator->playing = !animator->playing;
 }
 
+void TransformPanel::OnClipSelected() {
+    if (selectedEntity_ == entt::null || locked_) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+    auto& registry = world_.Registry();
+    if (!registry.valid(selectedEntity_)) {
+        return;
+    }
+
+    auto* animator = registry.try_get<scene::Animator>(selectedEntity_);
+    if (animator == nullptr || animator->clips == nullptr) {
+        return;
+    }
+
+    const int newClip = clipSelector_.getSelectedId() - 1;
+    if (newClip < 0 || static_cast<std::size_t>(newClip) >= animator->clips->size()) {
+        return;
+    }
+
+    // Switching clips restarts from the top, paused -- picking a
+    // different clip mid-playback and having it silently keep playing
+    // from whatever `time` the old clip happened to be at would be
+    // confusing (and could be entirely out of range for the new clip's
+    // duration).
+    animator->activeClip = newClip;
+    animator->time = 0.0f;
+    animator->playing = false;
+}
+
 void TransformPanel::SetAnimationControlsVisible(bool visible) {
     animationLabel_.setVisible(visible);
-    clipNameLabel_.setVisible(visible);
+    clipSelector_.setVisible(visible);
     playPauseButton_.setVisible(visible);
 }
 
@@ -249,7 +291,7 @@ void TransformPanel::resized() {
 
     animationLabel_.setBounds(bounds.removeFromTop(kLabelHeight));
     auto animationRow = bounds.removeFromTop(kSliderHeight + 4);
-    clipNameLabel_.setBounds(animationRow.removeFromLeft(animationRow.getWidth() * 2 / 3));
+    clipSelector_.setBounds(animationRow.removeFromLeft(animationRow.getWidth() * 2 / 3));
     playPauseButton_.setBounds(animationRow);
 }
 

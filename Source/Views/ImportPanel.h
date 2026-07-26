@@ -12,13 +12,22 @@ namespace ce {
 
 // AI1/AI2: the Import Hub shell. Accepts files dragged in from the OS
 // (juce::FileDragAndDropTarget), looks up the right ce::import::
-// AssetImporter for each by extension via registry_, and runs it. This
-// milestone deliberately stops at "drop a file, see whether it worked"
-// (plus, for audio, a Play/Stop preview) -- per-format configuration
-// (bone retargeting, timeline slicing, audio resampling, ...) is its own
-// later milestone once there's an actual data model (skeletons, clips)
-// worth configuring; building that UI now would just be decoration over
-// nothing.
+// AssetImporter for each by extension via registry_, and runs it, plus
+// (for audio) a Play/Stop preview.
+//
+// AI6 added an "Animation Import Options" section: interpolation
+// override, root motion extraction, and timeline slicing -- these are
+// configured here BEFORE dropping a file (not a post-drop dialog; this
+// codebase has no modal-dialog convention anywhere else, so "set the
+// options, then drop" matches how every other control in this app
+// already works) and read once per filesDropped() call into
+// context_.animationOptions. GltfAssetImporter is the only importer that
+// looks at that field; a plain audio/texture drop ignores it entirely.
+// Bone retargeting (source->target joint name mapping) is explicitly NOT
+// here -- there's no target-skeleton concept to retarget onto yet (every
+// imported asset owns its own independent skeleton), so a mapping table
+// would have nothing real to configure. Worth revisiting once clips can
+// actually be shared across differently-named skeletons.
 //
 // Owns the ImporterRegistry itself (RegisterBuiltins() in the
 // constructor) -- MainComponent doesn't need to know what formats exist,
@@ -50,6 +59,7 @@ public:
 
 private:
     class AudioClipRow;
+    class SliceRow;
 
     void AppendLogLine(const juce::String& line);
     void RebuildAudioClipRows();
@@ -62,6 +72,11 @@ private:
     void TogglePlay(const juce::String& name);
     bool IsPlayingClip(const juce::String& name) const { return currentlyPlayingName_ == name; }
     void RefreshPlayButtonLabels();
+
+    // AI6
+    import::AnimationImportOptions BuildAnimationImportOptions() const;
+    void AddSliceRow();
+    void RemoveSliceRow(SliceRow* row);
 
     import::ImporterRegistry registry_;
     import::ImportContext context_;
@@ -79,6 +94,16 @@ private:
 
     juce::Label audioClipsLabel_{ {}, "Audio Clips" };
     juce::OwnedArray<AudioClipRow> audioClipRows_;
+
+    // AI6: read into context_.animationOptions at the top of each
+    // filesDropped() call -- see this class's header comment.
+    juce::Label animationOptionsLabel_{ {}, "Animation Import Options" };
+    juce::Label interpolationLabel_{ {}, "Interpolation" };
+    juce::ComboBox interpolationCombo_;
+    juce::ToggleButton rootMotionToggle_{ "Extract root motion (root joint)" };
+    juce::Label slicesLabel_{ {}, "Timeline Slices (optional)" };
+    juce::OwnedArray<SliceRow> sliceRows_;
+    juce::TextButton addSliceButton_{ "+ Add Slice" };
 
     bool isDragHovering_ = false;
 

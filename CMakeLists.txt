@@ -93,6 +93,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Scene/AssetCatalog.cpp
     Source/Scene/AnimationSampler.h
     Source/Scene/AnimationSampler.cpp
+    Source/Scene/AnimationSlicer.h
+    Source/Scene/AnimationSlicer.cpp
     Source/Import/AssetImporter.h
     Source/Import/ImporterRegistry.h
     Source/Import/ImporterRegistry.cpp
