@@ -95,6 +95,12 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Import/ImporterRegistry.cpp
     Source/Import/Importers/GltfAssetImporter.h
     Source/Import/Importers/GltfAssetImporter.cpp
+    Source/Import/Importers/AudioAssetImporter.h
+    Source/Import/Importers/AudioAssetImporter.cpp
+    Source/Audio/AudioCatalog.h
+    Source/Audio/AudioCatalog.cpp
+    Source/Audio/AudioPreviewPlayer.h
+    Source/Audio/AudioPreviewPlayer.cpp
 )
 
 target_include_directories(CreationEngineEditor PRIVATE Source third_party)
@@ -115,6 +121,9 @@ target_link_libraries(CreationEngineEditor PRIVATE
     asset_system
     juce::juce_gui_extra
     juce::juce_opengl
+    juce::juce_audio_basics
+    juce::juce_audio_devices
+    juce::juce_audio_formats
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags

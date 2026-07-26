@@ -2,13 +2,54 @@
 
 namespace ce {
 
+// One imported audio clip: name/length + a Play/Stop button. All rows
+// share owner_'s single AudioPreviewPlayer, so the button doesn't own
+// its own playing/stopped state -- it asks owner_.IsPlayingClip() each
+// refresh, so switching playback to a different row's clip correctly
+// flips this row's button back to "Play" too.
+class ImportPanel::AudioClipRow final : public juce::Component {
+public:
+    AudioClipRow(ImportPanel& owner, juce::String name, double lengthSeconds)
+        : owner_(owner), name_(std::move(name)) {
+        nameLabel_.setText(name_ + "  (" + juce::String(lengthSeconds, 1) + "s)", juce::dontSendNotification);
+        nameLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffb8c4d5));
+        addAndMakeVisible(nameLabel_);
+
+        playButton_.onClick = [this] { owner_.TogglePlay(name_); };
+        addAndMakeVisible(playButton_);
+
+        UpdatePlayButtonLabel();
+    }
+
+    void UpdatePlayButtonLabel() { playButton_.setButtonText(owner_.IsPlayingClip(name_) ? "Stop" : "Play"); }
+
+    void resized() override {
+        auto bounds = getLocalBounds();
+        playButton_.setBounds(bounds.removeFromRight(56).reduced(2));
+        nameLabel_.setBounds(bounds);
+    }
+
+private:
+    ImportPanel& owner_;
+    juce::String name_;
+    juce::Label nameLabel_;
+    juce::TextButton playButton_;
+};
+
+ImportPanel::~ImportPanel() = default;
+
 ImportPanel::ImportPanel(engine::World& world, ViewportComponent& viewport) {
     registry_.RegisterBuiltins();
     context_.world = &world;
     context_.catalog = &viewport.Catalog();
     context_.viewport = &viewport;
+    context_.audioCatalog = &audioCatalog_;
+    context_.audioFormatManager = &audioFormatManager_;
     // context_.vfs stays null -- nothing registered yet persists into the
-    // VirtualFileSystem, only the live AssetCatalog (see GltfAssetImporter).
+    // VirtualFileSystem, only the live AssetCatalog/AudioCatalog (see
+    // GltfAssetImporter/AudioAssetImporter).
+
+    audioFormatManager_.registerBasicFormats(); // WAV, AIFF, and (JUCE_USE_FLAC defaults on) FLAC.
 
     titleLabel_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
     titleLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
@@ -24,6 +65,10 @@ ImportPanel::ImportPanel(engine::World& world, ViewportComponent& viewport) {
     log_.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff10141a));
     log_.setColour(juce::TextEditor::textColourId, juce::Colour(0xffb8c4d5));
     addAndMakeVisible(log_);
+
+    audioClipsLabel_.setFont(juce::Font(juce::FontOptions(15.0f)).boldened());
+    audioClipsLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
+    addAndMakeVisible(audioClipsLabel_);
 }
 
 bool ImportPanel::isInterestedInFileDrag(const juce::StringArray& files) {
@@ -61,6 +106,38 @@ void ImportPanel::filesDropped(const juce::StringArray& files, int, int) {
         AppendLogLine(juce::String(result.success ? "[ok]   " : "[fail] ") + file.getFileName() + " (" +
                       importer->DisplayName() + "): " + result.message);
     }
+
+    RebuildAudioClipRows();
+}
+
+void ImportPanel::RebuildAudioClipRows() {
+    audioClipRows_.clear();
+    for (const auto& name : audioCatalog_.Names()) {
+        const auto asset = audioCatalog_.Find(name);
+        auto* row = audioClipRows_.add(new AudioClipRow(*this, name, asset.lengthSeconds));
+        addAndMakeVisible(row);
+    }
+    resized();
+}
+
+void ImportPanel::TogglePlay(const juce::String& name) {
+    if (currentlyPlayingName_ == name) {
+        previewPlayer_.Stop();
+        currentlyPlayingName_.clear();
+    } else {
+        const auto asset = audioCatalog_.Find(name);
+        if (asset.buffer != nullptr) {
+            previewPlayer_.Play(asset.buffer, asset.sampleRate); // stops whatever was already playing first.
+            currentlyPlayingName_ = name;
+        }
+    }
+    RefreshPlayButtonLabels();
+}
+
+void ImportPanel::RefreshPlayButtonLabels() {
+    for (auto* row : audioClipRows_) {
+        row->UpdatePlayButtonLabel();
+    }
 }
 
 void ImportPanel::AppendLogLine(const juce::String& line) {
@@ -82,7 +159,17 @@ void ImportPanel::resized() {
     area.removeFromTop(8);
     dropZoneLabel_.setBounds(area.removeFromTop(100));
     area.removeFromTop(12);
+
+    auto audioArea = area.removeFromRight(280);
+    area.removeFromRight(12);
     log_.setBounds(area);
+
+    audioClipsLabel_.setBounds(audioArea.removeFromTop(22));
+    audioArea.removeFromTop(4);
+    for (auto* row : audioClipRows_) {
+        row->setBounds(audioArea.removeFromTop(26));
+        audioArea.removeFromTop(2);
+    }
 }
 
 } // namespace ce

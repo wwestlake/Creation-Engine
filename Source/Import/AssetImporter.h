@@ -18,6 +18,10 @@ namespace ce::assets {
 class VirtualFileSystem;
 }
 
+namespace ce::audio {
+class AudioCatalog;
+}
+
 namespace ce::import {
 
 // Everything a concrete AssetImporter might need to do its job. Not
@@ -32,6 +36,8 @@ struct ImportContext {
     scene::AssetCatalog* catalog = nullptr;
     assets::VirtualFileSystem* vfs = nullptr;
     ViewportComponent* viewport = nullptr; // for RunOnGLThread -- see ViewportComponent.h.
+    audio::AudioCatalog* audioCatalog = nullptr;
+    juce::AudioFormatManager* audioFormatManager = nullptr;
 };
 
 struct ImportResult {
