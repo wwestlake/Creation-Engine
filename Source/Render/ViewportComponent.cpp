@@ -2,9 +2,8 @@
 
 #include <array>
 #include <iostream>
-#include <vector>
 
-#include "Render/Scene/ProceduralMesh.h"
+#include "Render/Import/GltfLoader.h"
 
 using namespace juce::gl;
 
@@ -24,26 +23,6 @@ std::array<float, 9> ExtractUpperLeft3x3(const juce::Matrix3D<float>& m) {
     return { m.mat[0], m.mat[1], m.mat[2], m.mat[4], m.mat[5], m.mat[6], m.mat[8], m.mat[9], m.mat[10] };
 }
 
-// Generates a simple RGB checker pattern in memory — a stand-in test
-// texture until M4 loads real glTF-authored images through
-// Texture2D::LoadFromFile (the stb_image-backed path, implemented but
-// not yet exercised by this milestone's demo scene).
-std::vector<std::uint8_t> GenerateCheckerPixels(int size, int checksPerSide) {
-    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(size) * static_cast<std::size_t>(size) * 3);
-    for (int y = 0; y < size; ++y) {
-        for (int x = 0; x < size; ++x) {
-            const int checkX = (x * checksPerSide) / size;
-            const int checkY = (y * checksPerSide) / size;
-            const bool light = (checkX + checkY) % 2 == 0;
-            const std::size_t i = (static_cast<std::size_t>(y) * size + x) * 3;
-            pixels[i + 0] = light ? 235 : 60;
-            pixels[i + 1] = light ? 235 : 60;
-            pixels[i + 2] = light ? 235 : 70;
-        }
-    }
-    return pixels;
-}
-
 } // namespace
 
 namespace ce {
@@ -59,6 +38,26 @@ ViewportComponent::~ViewportComponent() {
     openGLContext_.detach();
 }
 
+void ViewportComponent::SetRoughness(float value) {
+    for (auto& material : materials_) {
+        material.roughness = value;
+    }
+}
+
+void ViewportComponent::SetMetallic(float value) {
+    for (auto& material : materials_) {
+        material.metallic = value;
+    }
+}
+
+float ViewportComponent::Roughness() const {
+    return materials_.empty() ? 0.4f : materials_.front().roughness;
+}
+
+float ViewportComponent::Metallic() const {
+    return materials_.empty() ? 0.2f : materials_.front().metallic;
+}
+
 void ViewportComponent::newOpenGLContextCreated() {
     std::cout << "[render] newOpenGLContextCreated: GL_VERSION="
               << reinterpret_cast<const char*>(glGetString(GL_VERSION)) << std::endl;
@@ -67,28 +66,55 @@ void ViewportComponent::newOpenGLContextCreated() {
 
     // Proves the composer handles more than one program/variant: the
     // unlit debug program is compiled and cached here even though the
-    // demo scene below only draws through the PBR material.
+    // demo scene below only draws through PBR materials.
     shaderComposer_->GetProgram(openGLContext_, "programs/unlit.vert", "programs/unlit.frag");
 
-    const auto checkerPixels = GenerateCheckerPixels(64, 8);
-    checkerTexture_.CreateFromPixels(64, 64, 3, checkerPixels.data());
-    material_.albedoTexture = &checkerTexture_;
+    const juce::File gltfFile =
+        juce::File(CE_ASSET_SOURCE_DIR).getChildFile("models/BoxTextured/BoxTextured.gltf");
 
-    if (material_.Resolve(*shaderComposer_, openGLContext_) == nullptr) {
-        std::cout << "[render] PBR material failed to compile; nothing will render." << std::endl;
+    LoadedModel model;
+    if (!LoadGltf(gltfFile, model)) {
+        std::cout << "[render] glTF load failed; nothing will render." << std::endl;
+        return;
     }
-    LogGLErrors("shader composition");
 
-    std::vector<Vertex> vertices;
-    std::vector<GLuint> indices;
-    GenerateUVSphere(24, 48, vertices, indices);
-    sphereMesh_.Upload(vertices, indices);
-    LogGLErrors("mesh upload");
+    for (const auto& srcMaterial : model.materials) {
+        Material material;
+        material.albedo = srcMaterial.baseColorFactor;
+        material.metallic = srcMaterial.metallicFactor;
+        material.roughness = srcMaterial.roughnessFactor;
+
+        if (srcMaterial.baseColorTexturePath.existsAsFile()) {
+            auto texture = std::make_unique<gl::Texture2D>();
+            if (texture->LoadFromFile(srcMaterial.baseColorTexturePath)) {
+                material.albedoTexture = texture.get();
+            }
+            loadedTextures_.push_back(std::move(texture));
+        }
+
+        materials_.push_back(std::move(material));
+    }
+    if (materials_.empty()) {
+        materials_.emplace_back(); // safety net: keep Roughness()/Metallic()/rendering well-defined.
+    }
+
+    meshes_.reserve(model.primitives.size());
+    primitiveMaterialIndex_.reserve(model.primitives.size());
+    for (const auto& primitive : model.primitives) {
+        Mesh mesh;
+        mesh.Upload(primitive.vertices, primitive.indices);
+        meshes_.push_back(std::move(mesh));
+
+        const bool validIndex = primitive.materialIndex >= 0 &&
+                                 primitive.materialIndex < static_cast<int>(model.materials.size());
+        primitiveMaterialIndex_.push_back(validIndex ? primitive.materialIndex : 0);
+    }
+    LogGLErrors("model load + upload");
 
     glEnable(GL_DEPTH_TEST);
 
     startTimeSeconds_ = juce::Time::getMillisecondCounterHiRes() / 1000.0;
-    std::cout << "[render] newOpenGLContextCreated: done" << std::endl;
+    std::cout << "[render] newOpenGLContextCreated: done (" << meshes_.size() << " mesh(es))" << std::endl;
 }
 
 void ViewportComponent::renderOpenGL() {
@@ -99,44 +125,54 @@ void ViewportComponent::renderOpenGL() {
     glClearColor(0.05f, 0.05f, 0.07f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    auto* program = material_.Resolve(*shaderComposer_, openGLContext_);
-    if (program == nullptr) {
+    if (meshes_.empty()) {
         return;
     }
 
     const float aspect = getHeight() > 0 ? static_cast<float>(getWidth()) / static_cast<float>(getHeight()) : 1.0f;
     camera_.SetPerspective(juce::MathConstants<float>::pi / 4.0f, aspect, 0.1f, 100.0f);
-    const juce::Vector3D<float> cameraPos{ 0.0f, 0.5f, 3.0f };
+    const juce::Vector3D<float> cameraPos{ 0.0f, 0.8f, 2.5f };
     camera_.SetLookAt(cameraPos, { 0.0f, 0.0f, 0.0f });
 
     const double elapsedSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0 - startTimeSeconds_;
     const auto model = juce::Matrix3D<float>::rotation({ 0.0f, 0.5f * static_cast<float>(elapsedSeconds), 0.0f });
     const auto normalMatrix = ExtractUpperLeft3x3(model);
 
-    program->use();
-    program->setUniformMat4("uModel", model.mat, 1, GL_FALSE);
-    program->setUniformMat4("uView", camera_.ViewMatrix().mat, 1, GL_FALSE);
-    program->setUniformMat4("uProjection", camera_.ProjectionMatrix().mat, 1, GL_FALSE);
-    program->setUniformMat3("uNormalMatrix", normalMatrix.data(), 1, GL_FALSE);
-    program->setUniform("uCameraPos", cameraPos.x, cameraPos.y, cameraPos.z);
+    for (std::size_t i = 0; i < meshes_.size(); ++i) {
+        Material& material = materials_[static_cast<std::size_t>(primitiveMaterialIndex_[i])];
+        auto* program = material.Resolve(*shaderComposer_, openGLContext_);
+        if (program == nullptr) {
+            continue;
+        }
 
-    material_.ApplyUniforms(*program);
+        program->use();
+        program->setUniformMat4("uModel", model.mat, 1, GL_FALSE);
+        program->setUniformMat4("uView", camera_.ViewMatrix().mat, 1, GL_FALSE);
+        program->setUniformMat4("uProjection", camera_.ProjectionMatrix().mat, 1, GL_FALSE);
+        program->setUniformMat3("uNormalMatrix", normalMatrix.data(), 1, GL_FALSE);
+        program->setUniform("uCameraPos", cameraPos.x, cameraPos.y, cameraPos.z);
 
-    // Hardcoded lights for this milestone — M5 adds an editable light list.
-    program->setUniform("uSunLight.direction", -0.4f, -1.0f, -0.3f);
-    program->setUniform("uSunLight.color", 1.0f, 0.97f, 0.9f);
-    program->setUniform("uSunLight.intensity", 3.0f);
+        material.ApplyUniforms(*program);
 
-    program->setUniform("uPointLight.position", 2.0f, 1.5f, 2.0f);
-    program->setUniform("uPointLight.color", 0.3f, 0.5f, 1.0f);
-    program->setUniform("uPointLight.intensity", 8.0f);
+        // Hardcoded lights for this milestone — M5 adds an editable light list.
+        program->setUniform("uSunLight.direction", -0.4f, -1.0f, -0.3f);
+        program->setUniform("uSunLight.color", 1.0f, 0.97f, 0.9f);
+        program->setUniform("uSunLight.intensity", 3.0f);
 
-    sphereMesh_.Draw();
+        program->setUniform("uPointLight.position", 2.0f, 1.5f, 2.0f);
+        program->setUniform("uPointLight.color", 0.3f, 0.5f, 1.0f);
+        program->setUniform("uPointLight.intensity", 8.0f);
+
+        meshes_[i].Draw();
+    }
+
     LogGLErrors("draw");
 }
 
 void ViewportComponent::openGLContextClosing() {
-    material_.InvalidateCache();
+    for (auto& material : materials_) {
+        material.InvalidateCache();
+    }
     shaderComposer_.reset();
 }
 

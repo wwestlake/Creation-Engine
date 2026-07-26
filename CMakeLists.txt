@@ -53,6 +53,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Render/Scene/ProceduralMesh.cpp
     Source/Render/Shaders/ShaderComposer.h
     Source/Render/Shaders/ShaderComposer.cpp
+    Source/Render/Import/GltfLoader.h
+    Source/Render/Import/GltfLoader.cpp
 )
 
 target_include_directories(CreationEngineEditor PRIVATE Source third_party)
@@ -64,6 +66,7 @@ target_compile_definitions(CreationEngineEditor PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:CreationEngineEditor,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:CreationEngineEditor,JUCE_VERSION>"
     CE_SHADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Source/Render/Shaders"
+    CE_ASSET_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
 )
 
 target_link_libraries(CreationEngineEditor PRIVATE
