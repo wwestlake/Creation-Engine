@@ -10,6 +10,20 @@ MainComponent::MainComponent() {
     tickLabel_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
     addAndMakeVisible(tickLabel_);
 
+    roughnessLabel_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+    addAndMakeVisible(roughnessLabel_);
+    roughnessSlider_.setRange(0.05, 1.0);
+    roughnessSlider_.setValue(viewport_.Roughness(), juce::dontSendNotification);
+    roughnessSlider_.onValueChange = [this] { viewport_.SetRoughness(static_cast<float>(roughnessSlider_.getValue())); };
+    addAndMakeVisible(roughnessSlider_);
+
+    metallicLabel_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+    addAndMakeVisible(metallicLabel_);
+    metallicSlider_.setRange(0.0, 1.0);
+    metallicSlider_.setValue(viewport_.Metallic(), juce::dontSendNotification);
+    metallicSlider_.onValueChange = [this] { viewport_.SetMetallic(static_cast<float>(metallicSlider_.getValue())); };
+    addAndMakeVisible(metallicSlider_);
+
     setSize(1400, 900);
     startTimerHz(30);
 }
@@ -32,6 +46,13 @@ void MainComponent::resized() {
     auto inspectorBounds = bounds.removeFromRight(280).reduced(12);
     inspectorTitle_.setBounds(inspectorBounds.removeFromTop(28));
     tickLabel_.setBounds(inspectorBounds.removeFromTop(24));
+
+    inspectorBounds.removeFromTop(12);
+    roughnessLabel_.setBounds(inspectorBounds.removeFromTop(18));
+    roughnessSlider_.setBounds(inspectorBounds.removeFromTop(24));
+    inspectorBounds.removeFromTop(8);
+    metallicLabel_.setBounds(inspectorBounds.removeFromTop(18));
+    metallicSlider_.setBounds(inspectorBounds.removeFromTop(24));
 
     viewport_.setBounds(bounds);
 }

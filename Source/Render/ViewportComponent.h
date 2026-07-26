@@ -2,7 +2,9 @@
 
 #include <JuceHeader.h>
 
+#include "Render/GL/Texture2D.h"
 #include "Render/Scene/Camera.h"
+#include "Render/Scene/Material.h"
 #include "Render/Scene/Mesh.h"
 #include "Render/Shaders/ShaderComposer.h"
 
@@ -17,12 +19,11 @@ namespace ce {
 // components composited in the same window/process as this viewport
 // (section 3.4) — see MainComponent for how they're arranged around it.
 //
-// Current state (M2 of the render pipeline plan): a procedural sphere
-// shaded by a Cook-Torrance PBR program assembled at runtime by
-// ShaderComposer from the reusable GLSL chunk library
-// (Source/Render/Shaders/library/), lit by one directional and one point
-// light. An "unlit" normal-visualization program is also composed and
-// cached, proving the composer handles more than one program/variant.
+// Current state (M3 of the render pipeline plan): a procedural sphere
+// shaded by a Material (Source/Render/Scene/Material.h) wrapping a
+// Cook-Torrance PBR program assembled by ShaderComposer, textured with a
+// generated checker pattern via the USE_ALBEDO_TEXTURE shader variant.
+// Roughness/metallic are live-tweakable from MainComponent's inspector.
 class ViewportComponent final : public juce::Component,
                                  private juce::OpenGLRenderer {
 public:
@@ -32,6 +33,11 @@ public:
     void paint(juce::Graphics&) override {}
     void resized() override {}
 
+    void SetRoughness(float value) { material_.roughness = value; }
+    void SetMetallic(float value) { material_.metallic = value; }
+    float Roughness() const { return material_.roughness; }
+    float Metallic() const { return material_.metallic; }
+
 private:
     void newOpenGLContextCreated() override;
     void renderOpenGL() override;
@@ -39,8 +45,8 @@ private:
 
     juce::OpenGLContext openGLContext_;
     std::unique_ptr<ShaderComposer> shaderComposer_;
-    juce::OpenGLShaderProgram* pbrProgram_ = nullptr;
-    juce::OpenGLShaderProgram* unlitProgram_ = nullptr;
+    Material material_;
+    gl::Texture2D checkerTexture_;
     Mesh sphereMesh_;
     Camera camera_;
     double startTimeSeconds_ = 0.0;

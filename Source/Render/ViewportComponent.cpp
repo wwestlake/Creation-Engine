@@ -2,6 +2,7 @@
 
 #include <array>
 #include <iostream>
+#include <vector>
 
 #include "Render/Scene/ProceduralMesh.h"
 
@@ -21,6 +22,26 @@ void LogGLErrors(const char* where) {
 // is needed — that requirement returns once non-uniform scale is possible.
 std::array<float, 9> ExtractUpperLeft3x3(const juce::Matrix3D<float>& m) {
     return { m.mat[0], m.mat[1], m.mat[2], m.mat[4], m.mat[5], m.mat[6], m.mat[8], m.mat[9], m.mat[10] };
+}
+
+// Generates a simple RGB checker pattern in memory — a stand-in test
+// texture until M4 loads real glTF-authored images through
+// Texture2D::LoadFromFile (the stb_image-backed path, implemented but
+// not yet exercised by this milestone's demo scene).
+std::vector<std::uint8_t> GenerateCheckerPixels(int size, int checksPerSide) {
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(size) * static_cast<std::size_t>(size) * 3);
+    for (int y = 0; y < size; ++y) {
+        for (int x = 0; x < size; ++x) {
+            const int checkX = (x * checksPerSide) / size;
+            const int checkY = (y * checksPerSide) / size;
+            const bool light = (checkX + checkY) % 2 == 0;
+            const std::size_t i = (static_cast<std::size_t>(y) * size + x) * 3;
+            pixels[i + 0] = light ? 235 : 60;
+            pixels[i + 1] = light ? 235 : 60;
+            pixels[i + 2] = light ? 235 : 70;
+        }
+    }
+    return pixels;
 }
 
 } // namespace
@@ -44,13 +65,17 @@ void ViewportComponent::newOpenGLContextCreated() {
 
     shaderComposer_ = std::make_unique<ShaderComposer>(juce::File(CE_SHADER_SOURCE_DIR));
 
-    pbrProgram_ = shaderComposer_->GetProgram(openGLContext_, "programs/pbr_lit.vert", "programs/pbr_lit.frag");
-    unlitProgram_ = shaderComposer_->GetProgram(openGLContext_, "programs/unlit.vert", "programs/unlit.frag");
-    // Fetching the same PBR program again proves the cache path (should log a hit, not a recompile).
-    shaderComposer_->GetProgram(openGLContext_, "programs/pbr_lit.vert", "programs/pbr_lit.frag");
+    // Proves the composer handles more than one program/variant: the
+    // unlit debug program is compiled and cached here even though the
+    // demo scene below only draws through the PBR material.
+    shaderComposer_->GetProgram(openGLContext_, "programs/unlit.vert", "programs/unlit.frag");
 
-    if (pbrProgram_ == nullptr) {
-        std::cout << "[render] PBR program failed to compile; nothing will render." << std::endl;
+    const auto checkerPixels = GenerateCheckerPixels(64, 8);
+    checkerTexture_.CreateFromPixels(64, 64, 3, checkerPixels.data());
+    material_.albedoTexture = &checkerTexture_;
+
+    if (material_.Resolve(*shaderComposer_, openGLContext_) == nullptr) {
+        std::cout << "[render] PBR material failed to compile; nothing will render." << std::endl;
     }
     LogGLErrors("shader composition");
 
@@ -74,7 +99,8 @@ void ViewportComponent::renderOpenGL() {
     glClearColor(0.05f, 0.05f, 0.07f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    if (pbrProgram_ == nullptr) {
+    auto* program = material_.Resolve(*shaderComposer_, openGLContext_);
+    if (program == nullptr) {
         return;
     }
 
@@ -87,34 +113,30 @@ void ViewportComponent::renderOpenGL() {
     const auto model = juce::Matrix3D<float>::rotation({ 0.0f, 0.5f * static_cast<float>(elapsedSeconds), 0.0f });
     const auto normalMatrix = ExtractUpperLeft3x3(model);
 
-    pbrProgram_->use();
-    pbrProgram_->setUniformMat4("uModel", model.mat, 1, GL_FALSE);
-    pbrProgram_->setUniformMat4("uView", camera_.ViewMatrix().mat, 1, GL_FALSE);
-    pbrProgram_->setUniformMat4("uProjection", camera_.ProjectionMatrix().mat, 1, GL_FALSE);
-    pbrProgram_->setUniformMat3("uNormalMatrix", normalMatrix.data(), 1, GL_FALSE);
-    pbrProgram_->setUniform("uCameraPos", cameraPos.x, cameraPos.y, cameraPos.z);
+    program->use();
+    program->setUniformMat4("uModel", model.mat, 1, GL_FALSE);
+    program->setUniformMat4("uView", camera_.ViewMatrix().mat, 1, GL_FALSE);
+    program->setUniformMat4("uProjection", camera_.ProjectionMatrix().mat, 1, GL_FALSE);
+    program->setUniformMat3("uNormalMatrix", normalMatrix.data(), 1, GL_FALSE);
+    program->setUniform("uCameraPos", cameraPos.x, cameraPos.y, cameraPos.z);
 
-    // Hardcoded material + lights for this milestone — M3 introduces a
-    // real Material type, M5 an editable light list.
-    pbrProgram_->setUniform("uAlbedo", 0.7f, 0.15f, 0.15f);
-    pbrProgram_->setUniform("uMetallic", 0.2f);
-    pbrProgram_->setUniform("uRoughness", 0.4f);
+    material_.ApplyUniforms(*program);
 
-    pbrProgram_->setUniform("uSunLight.direction", -0.4f, -1.0f, -0.3f);
-    pbrProgram_->setUniform("uSunLight.color", 1.0f, 0.97f, 0.9f);
-    pbrProgram_->setUniform("uSunLight.intensity", 3.0f);
+    // Hardcoded lights for this milestone — M5 adds an editable light list.
+    program->setUniform("uSunLight.direction", -0.4f, -1.0f, -0.3f);
+    program->setUniform("uSunLight.color", 1.0f, 0.97f, 0.9f);
+    program->setUniform("uSunLight.intensity", 3.0f);
 
-    pbrProgram_->setUniform("uPointLight.position", 2.0f, 1.5f, 2.0f);
-    pbrProgram_->setUniform("uPointLight.color", 0.3f, 0.5f, 1.0f);
-    pbrProgram_->setUniform("uPointLight.intensity", 8.0f);
+    program->setUniform("uPointLight.position", 2.0f, 1.5f, 2.0f);
+    program->setUniform("uPointLight.color", 0.3f, 0.5f, 1.0f);
+    program->setUniform("uPointLight.intensity", 8.0f);
 
     sphereMesh_.Draw();
     LogGLErrors("draw");
 }
 
 void ViewportComponent::openGLContextClosing() {
-    pbrProgram_ = nullptr;
-    unlitProgram_ = nullptr;
+    material_.InvalidateCache();
     shaderComposer_.reset();
 }
 

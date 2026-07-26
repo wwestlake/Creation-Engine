@@ -40,18 +40,22 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Render/GL/Buffer.cpp
     Source/Render/GL/VertexArray.h
     Source/Render/GL/VertexArray.cpp
+    Source/Render/GL/Texture2D.h
+    Source/Render/GL/Texture2D.cpp
     Source/Render/Scene/Camera.h
     Source/Render/Scene/Camera.cpp
     Source/Render/Scene/Vertex.h
     Source/Render/Scene/Mesh.h
     Source/Render/Scene/Mesh.cpp
+    Source/Render/Scene/Material.h
+    Source/Render/Scene/Material.cpp
     Source/Render/Scene/ProceduralMesh.h
     Source/Render/Scene/ProceduralMesh.cpp
     Source/Render/Shaders/ShaderComposer.h
     Source/Render/Shaders/ShaderComposer.cpp
 )
 
-target_include_directories(CreationEngineEditor PRIVATE Source)
+target_include_directories(CreationEngineEditor PRIVATE Source third_party)
 
 target_compile_definitions(CreationEngineEditor PRIVATE
     JUCE_WEB_BROWSER=0

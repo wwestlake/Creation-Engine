@@ -32,5 +32,10 @@ private:
     juce::Label inspectorTitle_ { {}, "Inspector" };
     juce::Label tickLabel_;
 
+    juce::Label roughnessLabel_ { {}, "Roughness" };
+    juce::Slider roughnessSlider_ { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+    juce::Label metallicLabel_ { {}, "Metallic" };
+    juce::Slider metallicSlider_ { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
