@@ -30,7 +30,7 @@ std::array<float, 9> ExtractUpperLeft3x3(const juce::Matrix3D<float>& m) {
 
 namespace ce {
 
-ViewportComponent::ViewportComponent(engine::World& world) : world_(world) {
+ViewportComponent::ViewportComponent(engine::World& world) : world_(world), freeCamera_(*this) {
     openGLContext_.setOpenGLVersionRequired(juce::OpenGLContext::openGL4_1);
     openGLContext_.setRenderer(this);
     openGLContext_.attachTo(*this);
@@ -226,7 +226,7 @@ void ViewportComponent::renderOpenGL() {
     const double nowSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0;
     const float deltaSeconds = static_cast<float>(nowSeconds - lastFrameTimeSeconds_);
     lastFrameTimeSeconds_ = nowSeconds;
-    freeCamera_.Update(deltaSeconds, getScreenBounds());
+    freeCamera_.Update(deltaSeconds);
 
     const float aspect = getHeight() > 0 ? static_cast<float>(getWidth()) / static_cast<float>(getHeight()) : 1.0f;
     camera_.SetPerspective(juce::MathConstants<float>::pi / 4.0f, aspect, 0.1f, 100.0f);

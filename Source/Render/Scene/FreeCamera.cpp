@@ -4,56 +4,90 @@
 
 namespace ce {
 
+FreeCamera::FreeCamera(juce::Component& viewport) : viewport_(viewport) {
+    viewport_.addMouseListener(this, false);
+}
+
+FreeCamera::~FreeCamera() {
+    viewport_.removeMouseListener(this);
+}
+
 juce::Vector3D<float> FreeCamera::Forward() const {
-    return { std::sin(yaw_) * std::cos(pitch_), std::sin(pitch_), -std::cos(yaw_) * std::cos(pitch_) };
+    const float yaw = yaw_.load(std::memory_order_relaxed);
+    const float pitch = pitch_.load(std::memory_order_relaxed);
+    return { std::sin(yaw) * std::cos(pitch), std::sin(pitch), -std::cos(yaw) * std::cos(pitch) };
 }
 
 juce::Vector3D<float> FreeCamera::FlatForward() const {
-    return { std::sin(yaw_), 0.0f, -std::cos(yaw_) };
+    const float yaw = yaw_.load(std::memory_order_relaxed);
+    return { std::sin(yaw), 0.0f, -std::cos(yaw) };
 }
 
-void FreeCamera::Update(float deltaSeconds, juce::Rectangle<int> viewportScreenBounds) {
-    const auto mods = juce::ModifierKeys::getCurrentModifiers();
-    const auto mousePosInt = juce::Desktop::getMousePosition();
-    const bool isLooking = mods.isRightButtonDown() && viewportScreenBounds.contains(mousePosInt);
-    const auto mousePos = mousePosInt.toFloat();
+void FreeCamera::mouseDown(const juce::MouseEvent& event) {
+    if (!event.mods.isRightButtonDown()) {
+        return;
+    }
 
-    if (isLooking) {
-        if (hasLastMousePos_) {
-            const auto delta = mousePos - lastMousePos_;
-            constexpr float sensitivity = 0.005f;
-            yaw_ += delta.x * sensitivity;
-            pitch_ = juce::jlimit(-1.5f, 1.5f, pitch_ - delta.y * sensitivity);
-        }
-        lastMousePos_ = mousePos;
-        hasLastMousePos_ = true;
-    } else {
-        hasLastMousePos_ = false;
+    isLooking_.store(true, std::memory_order_relaxed);
+    lastDragScreenPos_ = event.getScreenPosition().toFloat();
+    viewport_.setMouseCursor(juce::MouseCursor::NoCursor);
+    event.source.enableUnboundedMouseMovement(true);
+}
+
+void FreeCamera::mouseDrag(const juce::MouseEvent& event) {
+    if (!isLooking_.load(std::memory_order_relaxed)) {
+        return;
+    }
+
+    const auto currentPos = event.getScreenPosition().toFloat();
+    const auto delta = currentPos - lastDragScreenPos_;
+    lastDragScreenPos_ = currentPos;
+
+    constexpr float sensitivity = 0.005f;
+    yaw_.store(yaw_.load(std::memory_order_relaxed) + delta.x * sensitivity, std::memory_order_relaxed);
+    pitch_.store(
+        juce::jlimit(-1.5f, 1.5f, pitch_.load(std::memory_order_relaxed) - delta.y * sensitivity),
+        std::memory_order_relaxed);
+}
+
+void FreeCamera::mouseUp(const juce::MouseEvent& event) {
+    if (event.mods.isRightButtonDown()) {
+        return; // a different button was released; still right-dragging.
+    }
+    if (!isLooking_.exchange(false, std::memory_order_relaxed)) {
+        return; // wasn't looking, nothing to clean up.
+    }
+
+    viewport_.setMouseCursor(juce::MouseCursor::NormalCursor);
+    event.source.enableUnboundedMouseMovement(false);
+}
+
+void FreeCamera::Update(float deltaSeconds) {
+    if (!isLooking_.load(std::memory_order_relaxed)) {
+        return;
     }
 
     const auto flatForward = FlatForward();
     const auto right = flatForward ^ juce::Vector3D<float>{ 0.0f, 1.0f, 0.0f };
+    const float speed = 3.0f * deltaSeconds * speedMultiplier_.load(std::memory_order_relaxed);
 
-    if (isLooking) {
-        const float speed = 3.0f * deltaSeconds * speedMultiplier_.load(std::memory_order_relaxed);
-        if (juce::KeyPress::isKeyCurrentlyDown('W')) {
-            position_ += flatForward * speed;
-        }
-        if (juce::KeyPress::isKeyCurrentlyDown('S')) {
-            position_ -= flatForward * speed;
-        }
-        if (juce::KeyPress::isKeyCurrentlyDown('A')) {
-            position_ -= right * speed;
-        }
-        if (juce::KeyPress::isKeyCurrentlyDown('D')) {
-            position_ += right * speed;
-        }
-        if (juce::KeyPress::isKeyCurrentlyDown('E')) {
-            position_.y += speed;
-        }
-        if (juce::KeyPress::isKeyCurrentlyDown('Q')) {
-            position_.y -= speed;
-        }
+    if (juce::KeyPress::isKeyCurrentlyDown('W')) {
+        position_ += flatForward * speed;
+    }
+    if (juce::KeyPress::isKeyCurrentlyDown('S')) {
+        position_ -= flatForward * speed;
+    }
+    if (juce::KeyPress::isKeyCurrentlyDown('A')) {
+        position_ -= right * speed;
+    }
+    if (juce::KeyPress::isKeyCurrentlyDown('D')) {
+        position_ += right * speed;
+    }
+    if (juce::KeyPress::isKeyCurrentlyDown('E')) {
+        position_.y += speed;
+    }
+    if (juce::KeyPress::isKeyCurrentlyDown('Q')) {
+        position_.y -= speed;
     }
 }
 
