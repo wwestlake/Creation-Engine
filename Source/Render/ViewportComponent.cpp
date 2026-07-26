@@ -1,66 +1,27 @@
 #include "Render/ViewportComponent.h"
 
+#include <array>
 #include <iostream>
+
+#include "Render/Scene/ProceduralMesh.h"
 
 using namespace juce::gl;
 
 namespace {
 
-// M1 placeholder shaders: vertex-colored geometry, no lighting yet.
-// M2 replaces these with programs assembled by the shader composer.
-constexpr const char* kVertexSource = R"(
-#version 410 core
-layout(location = 0) in vec3 aPosition;
-layout(location = 1) in vec3 aColor;
-
-uniform mat4 uModel;
-uniform mat4 uView;
-uniform mat4 uProjection;
-
-out vec3 vColor;
-
-void main() {
-    vColor = aColor;
-    gl_Position = uProjection * uView * uModel * vec4(aPosition, 1.0);
+void LogGLErrors(const char* where) {
+    for (GLenum err = glGetError(); err != GL_NO_ERROR; err = glGetError()) {
+        std::cout << "[render] GL error 0x" << std::hex << err << std::dec << " at " << where << std::endl;
+    }
 }
-)";
 
-constexpr const char* kFragmentSource = R"(
-#version 410 core
-in vec3 vColor;
-out vec4 fragColor;
-
-void main() {
-    fragColor = vec4(vColor, 1.0);
+// Upper-left 3x3 of a 4x4 column-major matrix, as a 9-float column-major
+// array for setUniformMat3. Correct as a normal matrix here because the
+// model transform is rotation-only (orthonormal), so no inverse-transpose
+// is needed — that requirement returns once non-uniform scale is possible.
+std::array<float, 9> ExtractUpperLeft3x3(const juce::Matrix3D<float>& m) {
+    return { m.mat[0], m.mat[1], m.mat[2], m.mat[4], m.mat[5], m.mat[6], m.mat[8], m.mat[9], m.mat[10] };
 }
-)";
-
-struct Vertex {
-    float position[3];
-    float color[3];
-};
-
-// clang-format off
-constexpr Vertex kCubeVertices[8] = {
-    { { -0.5f, -0.5f, -0.5f }, { 0.0f, 0.0f, 0.0f } },
-    { {  0.5f, -0.5f, -0.5f }, { 1.0f, 0.0f, 0.0f } },
-    { {  0.5f,  0.5f, -0.5f }, { 1.0f, 1.0f, 0.0f } },
-    { { -0.5f,  0.5f, -0.5f }, { 0.0f, 1.0f, 0.0f } },
-    { { -0.5f, -0.5f,  0.5f }, { 0.0f, 0.0f, 1.0f } },
-    { {  0.5f, -0.5f,  0.5f }, { 1.0f, 0.0f, 1.0f } },
-    { {  0.5f,  0.5f,  0.5f }, { 1.0f, 1.0f, 1.0f } },
-    { { -0.5f,  0.5f,  0.5f }, { 0.0f, 1.0f, 1.0f } },
-};
-
-constexpr GLuint kCubeIndices[36] = {
-    0, 1, 2,  2, 3, 0, // -Z
-    4, 5, 6,  6, 7, 4, // +Z
-    0, 3, 7,  7, 4, 0, // -X
-    1, 5, 6,  6, 2, 1, // +X
-    0, 4, 5,  5, 1, 0, // -Y
-    3, 2, 6,  6, 7, 3, // +Y
-};
-// clang-format on
 
 } // namespace
 
@@ -77,38 +38,27 @@ ViewportComponent::~ViewportComponent() {
     openGLContext_.detach();
 }
 
-namespace {
-void LogGLErrors(const char* where) {
-    for (GLenum err = glGetError(); err != GL_NO_ERROR; err = glGetError()) {
-        std::cout << "[render] GL error 0x" << std::hex << err << std::dec << " at " << where << std::endl;
-    }
-}
-} // namespace
-
 void ViewportComponent::newOpenGLContextCreated() {
     std::cout << "[render] newOpenGLContextCreated: GL_VERSION="
               << reinterpret_cast<const char*>(glGetString(GL_VERSION)) << std::endl;
 
-    shader_ = std::make_unique<juce::OpenGLShaderProgram>(openGLContext_);
-    if (!shader_->addVertexShader(kVertexSource) || !shader_->addFragmentShader(kFragmentSource) ||
-        !shader_->link()) {
-        std::cout << "[render] shader compile/link failed: " << shader_->getLastError() << std::endl;
-        shader_.reset();
-        return;
+    shaderComposer_ = std::make_unique<ShaderComposer>(juce::File(CE_SHADER_SOURCE_DIR));
+
+    pbrProgram_ = shaderComposer_->GetProgram(openGLContext_, "programs/pbr_lit.vert", "programs/pbr_lit.frag");
+    unlitProgram_ = shaderComposer_->GetProgram(openGLContext_, "programs/unlit.vert", "programs/unlit.frag");
+    // Fetching the same PBR program again proves the cache path (should log a hit, not a recompile).
+    shaderComposer_->GetProgram(openGLContext_, "programs/pbr_lit.vert", "programs/pbr_lit.frag");
+
+    if (pbrProgram_ == nullptr) {
+        std::cout << "[render] PBR program failed to compile; nothing will render." << std::endl;
     }
-    LogGLErrors("shader link");
+    LogGLErrors("shader composition");
 
-    vertexBuffer_.Upload(GL_ARRAY_BUFFER, kCubeVertices, sizeof(kCubeVertices));
-    indexBuffer_.Upload(GL_ELEMENT_ARRAY_BUFFER, kCubeIndices, sizeof(kCubeIndices));
-    LogGLErrors("buffer upload");
-
-    vertexArray_.Bind();
-    vertexBuffer_.Bind(GL_ARRAY_BUFFER);
-    indexBuffer_.Bind(GL_ELEMENT_ARRAY_BUFFER);
-    vertexArray_.SetAttribute(0, 3, sizeof(Vertex), offsetof(Vertex, position));
-    vertexArray_.SetAttribute(1, 3, sizeof(Vertex), offsetof(Vertex, color));
-    gl::VertexArray::Unbind();
-    LogGLErrors("vertex array setup");
+    std::vector<Vertex> vertices;
+    std::vector<GLuint> indices;
+    GenerateUVSphere(24, 48, vertices, indices);
+    sphereMesh_.Upload(vertices, indices);
+    LogGLErrors("mesh upload");
 
     glEnable(GL_DEPTH_TEST);
 
@@ -121,35 +71,51 @@ void ViewportComponent::renderOpenGL() {
     glViewport(0, 0, juce::roundToInt(scale * static_cast<float>(getWidth())),
                juce::roundToInt(scale * static_cast<float>(getHeight())));
 
-    glClearColor(0.12f, 0.13f, 0.15f, 1.0f);
+    glClearColor(0.05f, 0.05f, 0.07f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    if (shader_ == nullptr) {
+    if (pbrProgram_ == nullptr) {
         return;
     }
 
     const float aspect = getHeight() > 0 ? static_cast<float>(getWidth()) / static_cast<float>(getHeight()) : 1.0f;
     camera_.SetPerspective(juce::MathConstants<float>::pi / 4.0f, aspect, 0.1f, 100.0f);
-    camera_.SetLookAt({ 0.0f, 0.0f, 3.0f }, { 0.0f, 0.0f, 0.0f });
+    const juce::Vector3D<float> cameraPos{ 0.0f, 0.5f, 3.0f };
+    camera_.SetLookAt(cameraPos, { 0.0f, 0.0f, 0.0f });
 
     const double elapsedSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0 - startTimeSeconds_;
-    const auto model =
-        juce::Matrix3D<float>::rotation({ 0.4f * static_cast<float>(elapsedSeconds),
-                                           0.7f * static_cast<float>(elapsedSeconds), 0.0f });
+    const auto model = juce::Matrix3D<float>::rotation({ 0.0f, 0.5f * static_cast<float>(elapsedSeconds), 0.0f });
+    const auto normalMatrix = ExtractUpperLeft3x3(model);
 
-    shader_->use();
-    shader_->setUniformMat4("uModel", model.mat, 1, GL_FALSE);
-    shader_->setUniformMat4("uView", camera_.ViewMatrix().mat, 1, GL_FALSE);
-    shader_->setUniformMat4("uProjection", camera_.ProjectionMatrix().mat, 1, GL_FALSE);
+    pbrProgram_->use();
+    pbrProgram_->setUniformMat4("uModel", model.mat, 1, GL_FALSE);
+    pbrProgram_->setUniformMat4("uView", camera_.ViewMatrix().mat, 1, GL_FALSE);
+    pbrProgram_->setUniformMat4("uProjection", camera_.ProjectionMatrix().mat, 1, GL_FALSE);
+    pbrProgram_->setUniformMat3("uNormalMatrix", normalMatrix.data(), 1, GL_FALSE);
+    pbrProgram_->setUniform("uCameraPos", cameraPos.x, cameraPos.y, cameraPos.z);
 
-    vertexArray_.Bind();
-    glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, nullptr);
-    gl::VertexArray::Unbind();
+    // Hardcoded material + lights for this milestone — M3 introduces a
+    // real Material type, M5 an editable light list.
+    pbrProgram_->setUniform("uAlbedo", 0.7f, 0.15f, 0.15f);
+    pbrProgram_->setUniform("uMetallic", 0.2f);
+    pbrProgram_->setUniform("uRoughness", 0.4f);
+
+    pbrProgram_->setUniform("uSunLight.direction", -0.4f, -1.0f, -0.3f);
+    pbrProgram_->setUniform("uSunLight.color", 1.0f, 0.97f, 0.9f);
+    pbrProgram_->setUniform("uSunLight.intensity", 3.0f);
+
+    pbrProgram_->setUniform("uPointLight.position", 2.0f, 1.5f, 2.0f);
+    pbrProgram_->setUniform("uPointLight.color", 0.3f, 0.5f, 1.0f);
+    pbrProgram_->setUniform("uPointLight.intensity", 8.0f);
+
+    sphereMesh_.Draw();
     LogGLErrors("draw");
 }
 
 void ViewportComponent::openGLContextClosing() {
-    shader_.reset();
+    pbrProgram_ = nullptr;
+    unlitProgram_ = nullptr;
+    shaderComposer_.reset();
 }
 
 } // namespace ce

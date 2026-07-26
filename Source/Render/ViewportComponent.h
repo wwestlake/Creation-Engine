@@ -2,9 +2,9 @@
 
 #include <JuceHeader.h>
 
-#include "Render/GL/Buffer.h"
-#include "Render/GL/VertexArray.h"
 #include "Render/Scene/Camera.h"
+#include "Render/Scene/Mesh.h"
+#include "Render/Shaders/ShaderComposer.h"
 
 namespace ce {
 
@@ -17,11 +17,12 @@ namespace ce {
 // components composited in the same window/process as this viewport
 // (section 3.4) — see MainComponent for how they're arranged around it.
 //
-// Current state (M1 of the render pipeline plan): a hardcoded, vertex-
-// colored cube proving the OpenGL 4.1 core context, VBO/EBO/VAO plumbing,
-// and shader compile/link path all work end to end. The shader source
-// here is a hand-written placeholder — M2 replaces it with a program
-// assembled by the shader composer from the reusable GLSL library.
+// Current state (M2 of the render pipeline plan): a procedural sphere
+// shaded by a Cook-Torrance PBR program assembled at runtime by
+// ShaderComposer from the reusable GLSL chunk library
+// (Source/Render/Shaders/library/), lit by one directional and one point
+// light. An "unlit" normal-visualization program is also composed and
+// cached, proving the composer handles more than one program/variant.
 class ViewportComponent final : public juce::Component,
                                  private juce::OpenGLRenderer {
 public:
@@ -37,10 +38,10 @@ private:
     void openGLContextClosing() override;
 
     juce::OpenGLContext openGLContext_;
-    std::unique_ptr<juce::OpenGLShaderProgram> shader_;
-    gl::Buffer vertexBuffer_;
-    gl::Buffer indexBuffer_;
-    gl::VertexArray vertexArray_;
+    std::unique_ptr<ShaderComposer> shaderComposer_;
+    juce::OpenGLShaderProgram* pbrProgram_ = nullptr;
+    juce::OpenGLShaderProgram* unlitProgram_ = nullptr;
+    Mesh sphereMesh_;
     Camera camera_;
     double startTimeSeconds_ = 0.0;
 

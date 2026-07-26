@@ -42,6 +42,13 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Render/GL/VertexArray.cpp
     Source/Render/Scene/Camera.h
     Source/Render/Scene/Camera.cpp
+    Source/Render/Scene/Vertex.h
+    Source/Render/Scene/Mesh.h
+    Source/Render/Scene/Mesh.cpp
+    Source/Render/Scene/ProceduralMesh.h
+    Source/Render/Scene/ProceduralMesh.cpp
+    Source/Render/Shaders/ShaderComposer.h
+    Source/Render/Shaders/ShaderComposer.cpp
 )
 
 target_include_directories(CreationEngineEditor PRIVATE Source)
@@ -52,6 +59,7 @@ target_compile_definitions(CreationEngineEditor PRIVATE
     JUCE_OPENGL3=1
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:CreationEngineEditor,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:CreationEngineEditor,JUCE_VERSION>"
+    CE_SHADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Source/Render/Shaders"
 )
 
 target_link_libraries(CreationEngineEditor PRIVATE
