@@ -33,6 +33,8 @@ juce_add_gui_app(CreationEngineEditor
     PRODUCT_NAME "Creation Engine"
     COMPANY_NAME "LagDaemon Software"
     BUNDLE_ID "com.lagdaemon.creationengine"
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/icon.png"
+    ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/icon.png"
 )
 
 juce_generate_juce_header(CreationEngineEditor)

@@ -1,5 +1,6 @@
 #include <JuceHeader.h>
 
+#include "Branding.h"
 #include "MainComponent.h"
 
 class CreationEngineApplication final : public juce::JUCEApplication {
@@ -26,6 +27,7 @@ private:
                               DocumentWindow::allButtons) {
             setUsingNativeTitleBar(true);
             setResizable(true, true);
+            setIcon(ce::branding::CreateLogoImage(64));
             setContentOwned(new MainComponent(), true);
             centreWithSize(1400, 900);
             setVisible(true);
