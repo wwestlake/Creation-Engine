@@ -41,4 +41,28 @@ struct MeshRenderer {
     std::shared_ptr<Material> material;
 };
 
+// Hierarchy grouping (spec section 3.2: "organize placed objects into a
+// scene hierarchy/grouping structure"). entt::null means "at the root."
+// Any entity can have a Parent — folders (below) are the common case,
+// but nothing stops a future feature from nesting an entity under
+// another entity directly.
+struct Parent {
+    entt::entity value = entt::null;
+};
+
+// Marks an entity as a pure organizational folder: it has a Name and
+// optionally a Parent, but no Transform/MeshRenderer — it's never drawn,
+// only used to group other entities in the hierarchy panel.
+struct Folder {};
+
+// Per-entity editor flags, attached to every entity/folder at creation
+// time (so nothing has to special-case "missing SceneFlags = default").
+// Flat, not cascading — locking or hiding a folder doesn't currently
+// affect its children; that's a reasonable follow-up, not implemented
+// here since it wasn't asked for.
+struct SceneFlags {
+    bool visible = true; // false: ViewportComponent skips drawing this entity.
+    bool locked = false; // true: this entity can't be reparented (or, once SC4 exists, transform-edited) in the editor.
+};
+
 } // namespace ce::scene

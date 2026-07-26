@@ -54,9 +54,12 @@ private:
 
     juce::Component& viewport_;
 
+    // Angled slightly down by default so a scene sitting near the origin
+    // (like the seeded demo entity, at ground level) is actually in view
+    // on launch — pitch 0 from this height looks dead level, past it.
     juce::Vector3D<float> position_{ 0.0f, 1.6f, 5.0f };
-    std::atomic<float> yaw_{ 0.0f };   // radians; 0 looks down -Z.
-    std::atomic<float> pitch_{ 0.0f };
+    std::atomic<float> yaw_{ 0.0f };     // radians; 0 looks down -Z.
+    std::atomic<float> pitch_{ -0.25f };
     std::atomic<bool> isLooking_{ false };
 
     juce::Point<float> lastDragScreenPos_;

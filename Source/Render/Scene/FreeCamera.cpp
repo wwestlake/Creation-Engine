@@ -67,15 +67,31 @@ void FreeCamera::Update(float deltaSeconds) {
         return;
     }
 
+    // isKeyCurrentlyDown polls real OS key state, not JUCE focus/event
+    // routing — without this check, WASD typed into some other app
+    // entirely (this chat, a browser, whatever has focus) still moves the
+    // camera as long as isLooking_ is (still) true. isForegroundProcess()
+    // is JUCE's own mechanism for "is my app actually the active one right
+    // now" — exactly the guard needed here.
+    if (!juce::Process::isForegroundProcess()) {
+        return;
+    }
+
+    // W/S fly along the camera's actual look direction (pitch included) —
+    // looking up and pressing W climbs, not just walks-while-level. A/D
+    // strafing stays derived from the flat (yaw-only) forward, since
+    // strafing shouldn't gain a vertical component just because you're
+    // looking up or down.
+    const auto forward = Forward();
     const auto flatForward = FlatForward();
     const auto right = flatForward ^ juce::Vector3D<float>{ 0.0f, 1.0f, 0.0f };
     const float speed = 3.0f * deltaSeconds * speedMultiplier_.load(std::memory_order_relaxed);
 
     if (juce::KeyPress::isKeyCurrentlyDown('W')) {
-        position_ += flatForward * speed;
+        position_ += forward * speed;
     }
     if (juce::KeyPress::isKeyCurrentlyDown('S')) {
-        position_ -= flatForward * speed;
+        position_ -= forward * speed;
     }
     if (juce::KeyPress::isKeyCurrentlyDown('A')) {
         position_ -= right * speed;

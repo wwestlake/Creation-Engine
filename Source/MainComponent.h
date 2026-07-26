@@ -5,6 +5,7 @@
 #include "engine/world.h"
 #include "node_system/graph.h"
 #include "Render/ViewportComponent.h"
+#include "Views/HierarchyPanel.h"
 #include "Views/LightPanel.h"
 #include "Views/PlaceholderPanel.h"
 #include "Views/TransportBar.h"
@@ -42,6 +43,7 @@ private:
     ce::WorkspaceMode activeMode_ = ce::WorkspaceMode::Scene;
 
     // --- Scene mode content ---
+    ce::HierarchyPanel hierarchyPanel_;
     ce::ViewportComponent viewport_;
     juce::Label inspectorTitle_ { {}, "Inspector" };
     juce::Label tickLabel_;

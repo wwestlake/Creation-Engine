@@ -2,6 +2,7 @@
 
 #include <array>
 #include <iostream>
+#include <mutex>
 
 #include "Scene/Components.h"
 
@@ -42,7 +43,7 @@ ViewportComponent::~ViewportComponent() {
 }
 
 void ViewportComponent::SetRoughness(float value) {
-    const juce::ScopedLock lock(stateLock_);
+    const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
     auto view = world_.Registry().view<scene::MeshRenderer>();
     for (auto entity : view) {
         if (auto& material = view.get<scene::MeshRenderer>(entity).material) {
@@ -52,7 +53,7 @@ void ViewportComponent::SetRoughness(float value) {
 }
 
 void ViewportComponent::SetMetallic(float value) {
-    const juce::ScopedLock lock(stateLock_);
+    const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
     auto view = world_.Registry().view<scene::MeshRenderer>();
     for (auto entity : view) {
         if (auto& material = view.get<scene::MeshRenderer>(entity).material) {
@@ -62,7 +63,7 @@ void ViewportComponent::SetMetallic(float value) {
 }
 
 float ViewportComponent::Roughness() const {
-    const juce::ScopedLock lock(stateLock_);
+    const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
     auto view = world_.Registry().view<const scene::MeshRenderer>();
     for (auto entity : view) {
         if (const auto& material = view.get<const scene::MeshRenderer>(entity).material) {
@@ -73,7 +74,7 @@ float ViewportComponent::Roughness() const {
 }
 
 float ViewportComponent::Metallic() const {
-    const juce::ScopedLock lock(stateLock_);
+    const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
     auto view = world_.Registry().view<const scene::MeshRenderer>();
     for (auto entity : view) {
         if (const auto& material = view.get<const scene::MeshRenderer>(entity).material) {
@@ -142,17 +143,19 @@ void ViewportComponent::SeedDemoScene() {
         return;
     }
 
+    const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
     const auto entity = world_.CreateEntity();
     world_.Registry().emplace<scene::Name>(entity, scene::Name{ "Box" });
     world_.Registry().emplace<scene::Transform>(entity, scene::Transform{});
     world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ asset->mesh, asset->material });
+    world_.Registry().emplace<scene::SceneFlags>(entity, scene::SceneFlags{});
     demoEntity_ = entity;
 
     std::cout << "[scene] seeded demo entity 'Box'" << std::endl;
 }
 
 void ViewportComponent::ResetDemoEntityTransform() {
-    const juce::ScopedLock lock(stateLock_);
+    const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
     if (demoEntity_ == entt::null || !world_.Registry().valid(demoEntity_)) {
         return;
     }
@@ -253,15 +256,23 @@ void ViewportComponent::renderOpenGL() {
         pointLightsSnapshot = pointLights_;
     }
 
+    // Everything below touches the World's registry — entities, their
+    // Transforms, and the Mesh/Material each MeshRenderer points at — so
+    // it all runs under one RegistryMutex lock for the rest of this
+    // function. entt::registry isn't internally thread-safe, and as of
+    // SC3 the message thread (HierarchyPanel, and Stop's
+    // ResetDemoEntityTransform) genuinely touches the same registry
+    // concurrently with this render loop — this isn't defensive
+    // programming against a hypothetical, it's a real, exercised race
+    // without this lock.
+    const std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
+
     // Demo-only: spins every placed entity's Transform based on the
     // World's tick count rather than wall-clock time, so the spin
     // actually stops when the transport is paused/stopped (World::
     // AdvanceTick() is gated on play state in MainComponent's timer) —
     // an editor "playing" a paused simulation should look paused.
-    // Locked because ResetDemoEntityTransform() (message thread, on Stop)
-    // writes the same Transform this loop writes from the render thread.
     {
-        const juce::ScopedLock lock(stateLock_);
         const float spinRadians = 0.5f * (static_cast<float>(world_.CurrentTick()) / 30.0f);
         auto view = world_.Registry().view<scene::Transform>();
         for (auto entity : view) {
@@ -275,6 +286,11 @@ void ViewportComponent::renderOpenGL() {
         const auto& renderer = drawView.get<const scene::MeshRenderer>(entity);
         if (!renderer.mesh || !renderer.material) {
             continue;
+        }
+        if (const auto* sceneFlags = world_.Registry().try_get<const scene::SceneFlags>(entity)) {
+            if (!sceneFlags->visible) {
+                continue;
+            }
         }
 
         auto* program = renderer.material->Resolve(*shaderComposer_, openGLContext_);
@@ -292,10 +308,7 @@ void ViewportComponent::renderOpenGL() {
         program->setUniformMat3("uNormalMatrix", normalMatrix.data(), 1, GL_FALSE);
         program->setUniform("uCameraPos", cameraPos.x, cameraPos.y, cameraPos.z);
 
-        {
-            const juce::ScopedLock lock(stateLock_);
-            renderer.material->ApplyUniforms(*program);
-        }
+        renderer.material->ApplyUniforms(*program);
 
         program->setUniform("uSunLight.direction", sunLightSnapshot.direction.x, sunLightSnapshot.direction.y,
                              sunLightSnapshot.direction.z);
@@ -321,10 +334,13 @@ void ViewportComponent::renderOpenGL() {
 }
 
 void ViewportComponent::openGLContextClosing() {
-    auto view = world_.Registry().view<scene::MeshRenderer>();
-    for (auto entity : view) {
-        if (auto& material = view.get<scene::MeshRenderer>(entity).material) {
-            material->InvalidateCache();
+    {
+        const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+        auto view = world_.Registry().view<scene::MeshRenderer>();
+        for (auto entity : view) {
+            if (auto& material = view.get<scene::MeshRenderer>(entity).material) {
+                material->InvalidateCache();
+            }
         }
     }
     gridProgram_ = nullptr;

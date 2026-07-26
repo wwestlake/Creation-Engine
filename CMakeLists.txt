@@ -79,6 +79,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/ViewModeBar.cpp
     Source/Views/PlaceholderPanel.h
     Source/Views/PlaceholderPanel.cpp
+    Source/Views/HierarchyPanel.h
+    Source/Views/HierarchyPanel.cpp
     Source/Scene/Components.h
     Source/Scene/AssetCatalog.h
     Source/Scene/AssetCatalog.cpp

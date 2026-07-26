@@ -1,6 +1,6 @@
 #include "MainComponent.h"
 
-MainComponent::MainComponent() : viewport_(world_), lightPanel_(viewport_) {
+MainComponent::MainComponent() : hierarchyPanel_(world_), viewport_(world_), lightPanel_(viewport_) {
     addAndMakeVisible(transportBar_);
     transportBar_.onPlay = [this] { SetPlaying(true); };
     transportBar_.onPause = [this] { SetPlaying(false); };
@@ -14,6 +14,7 @@ MainComponent::MainComponent() : viewport_(world_), lightPanel_(viewport_) {
     addAndMakeVisible(viewModeBar_);
     viewModeBar_.onModeSelected = [this](ce::WorkspaceMode mode) { SetActiveMode(mode); };
 
+    addAndMakeVisible(hierarchyPanel_);
     addAndMakeVisible(viewport_);
 
     inspectorTitle_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
@@ -70,6 +71,7 @@ void MainComponent::resized() {
     // Scene mode content — laid out even while hidden, so switching back
     // to Scene doesn't need a relayout.
     auto sceneArea = contentArea;
+    hierarchyPanel_.setBounds(sceneArea.removeFromLeft(220).reduced(4));
     auto inspectorBounds = sceneArea.removeFromRight(300).reduced(12);
     inspectorTitle_.setBounds(inspectorBounds.removeFromTop(28));
     tickLabel_.setBounds(inspectorBounds.removeFromTop(24));
@@ -96,6 +98,7 @@ void MainComponent::SetActiveMode(ce::WorkspaceMode mode) {
     activeMode_ = mode;
 
     const bool showScene = mode == ce::WorkspaceMode::Scene;
+    hierarchyPanel_.setVisible(showScene);
     viewport_.setVisible(showScene);
     inspectorTitle_.setVisible(showScene);
     tickLabel_.setVisible(showScene);
@@ -122,4 +125,5 @@ void MainComponent::timerCallback() {
         world_.AdvanceTick();
     }
     tickLabel_.setText("tick " + juce::String(world_.CurrentTick()), juce::dontSendNotification);
+    hierarchyPanel_.Refresh();
 }

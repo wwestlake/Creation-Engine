@@ -39,12 +39,18 @@ namespace ce {
 //
 // juce::OpenGLContext runs renderOpenGL() on its own background thread,
 // separate from the message thread these editing methods are called
-// from. Every method below that touches light or material-tweakable
-// state takes stateLock_ for exactly that reason — copy in, copy out,
-// never hand back a live reference the UI thread could hold onto while
-// the render thread is mid-frame. (Scene entity edits — SC4 onward —
-// need the same scrutiny; don't assume entt::registry access from two
-// threads is fine just because it wasn't flagged here.)
+// from. Two locks, two different things:
+//   - stateLock_ (juce::CriticalSection) guards sunLight_/pointLights_ —
+//     plain members, nothing to do with the ECS registry.
+//   - world_.RegistryMutex() (std::mutex, owned by World itself so every
+//     class touching the shared World uses the same lock) guards every
+//     access to world_.Registry() — entities, Transforms, and the Mesh/
+//     Material each MeshRenderer references. As of SC3, HierarchyPanel
+//     reads the registry from the message thread while this class reads
+//     and mutates it from the render thread every frame; that's a real,
+//     exercised race without the lock, not a hypothetical.
+// Either way: copy in, copy out, never hand back a live reference the UI
+// thread could hold onto while the render thread is mid-frame.
 class ViewportComponent final : public juce::Component,
                                  private juce::OpenGLRenderer {
 public:
