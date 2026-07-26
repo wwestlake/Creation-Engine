@@ -34,12 +34,19 @@ public:
     void resized() override;
     void paint(juce::Graphics& g) override;
 
-    static constexpr int kPreferredHeight = 250;
+    static constexpr int kPreferredHeight = 292;
 
 private:
     void PushToRegistry();
     bool AnySliderBeingDragged() const;
     void SetEditorsVisible(bool visible);
+
+    // AI5: shows Play/Pause for the selected entity's scene::Animator, if
+    // it has one -- separate visibility from SetEditorsVisible above,
+    // since an entity can have a Transform (editable) without a Skeleton/
+    // Animator (nothing to play).
+    void TogglePlayback();
+    void SetAnimationControlsVisible(bool visible);
 
     engine::World& world_;
     entt::entity selectedEntity_ = entt::null;
@@ -62,6 +69,12 @@ private:
     juce::Slider scaleXSlider_{ juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::Slider scaleYSlider_{ juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::Slider scaleZSlider_{ juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+
+    // AI5: only visible when the selected entity has a scene::Animator
+    // with at least one clip.
+    juce::Label animationLabel_{ {}, "Animation" };
+    juce::Label clipNameLabel_;
+    juce::TextButton playPauseButton_{ "Play" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TransformPanel)
 };

@@ -1,9 +1,12 @@
 #include "Render/ViewportComponent.h"
 
 #include <array>
+#include <cmath>
 #include <iostream>
 #include <mutex>
 
+#include "Render/Scene/Animation.h"
+#include "Scene/AnimationSampler.h"
 #include "Scene/Components.h"
 
 using namespace juce::gl;
@@ -349,6 +352,55 @@ void ViewportComponent::renderOpenGL() {
             program->setUniform((prefix + "intensity").toRawUTF8(), light.intensity);
         }
         program->setUniform("uPointLightCount", pointLightCount);
+
+        // AI5: for a skinned entity, advance its Animator (if playing)
+        // and upload the resulting bone matrix palette. Reads/writes the
+        // Animator component in place -- safe under the same
+        // RegistryMutex lock already held for this whole draw pass, and
+        // consistent with how the demo-entity spin above mutates a
+        // component straight from the render thread.
+        if (const auto* skeleton = world_.Registry().try_get<const scene::Skeleton>(entity)) {
+            if (!skeleton->joints.empty()) {
+                std::vector<juce::Matrix3D<float>> localTransforms;
+                auto* animator = world_.Registry().try_get<scene::Animator>(entity);
+                const AnimationClip* activeClip = nullptr;
+                if (animator != nullptr && animator->clips != nullptr && animator->activeClip >= 0 &&
+                    static_cast<std::size_t>(animator->activeClip) < animator->clips->size()) {
+                    activeClip = &(*animator->clips)[static_cast<std::size_t>(animator->activeClip)];
+                }
+
+                if (activeClip != nullptr) {
+                    if (animator->playing) {
+                        animator->time += deltaSeconds;
+                        if (activeClip->duration > 0.0f) {
+                            if (animator->loop) {
+                                animator->time = std::fmod(animator->time, activeClip->duration);
+                                if (animator->time < 0.0f) {
+                                    animator->time += activeClip->duration;
+                                }
+                            } else if (animator->time > activeClip->duration) {
+                                animator->time = activeClip->duration;
+                                animator->playing = false;
+                            }
+                        }
+                    }
+                    localTransforms = scene::SampleLocalTransforms(*activeClip, animator->time, *skeleton);
+                } else {
+                    localTransforms.reserve(skeleton->joints.size());
+                    for (const auto& joint : skeleton->joints) {
+                        localTransforms.push_back(joint.localBindTransform);
+                    }
+                }
+
+                const auto skinningMatrices = scene::ComputeSkinningMatrices(*skeleton, localTransforms);
+                const int boneCount = juce::jmin(static_cast<int>(skinningMatrices.size()), kMaxBones);
+                for (int b = 0; b < boneCount; ++b) {
+                    const juce::String uniformName = "uBoneMatrices[" + juce::String(b) + "]";
+                    program->setUniformMat4(uniformName.toRawUTF8(), skinningMatrices[static_cast<std::size_t>(b)].mat,
+                                             1, GL_FALSE);
+                }
+            }
+        }
 
         renderer.mesh->Draw();
     }

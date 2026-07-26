@@ -95,6 +95,7 @@ bool AssetCatalog::AddFromModel(const juce::String& name, const LoadedModel& mod
 
     std::shared_ptr<Skeleton> skeleton;
     if (model.skin.has_value()) {
+        material->isSkinned = true;
         skeleton = std::make_shared<Skeleton>();
         skeleton->joints.reserve(model.skin->joints.size());
         for (const auto& loadedJoint : model.skin->joints) {
@@ -103,8 +104,19 @@ bool AssetCatalog::AddFromModel(const juce::String& name, const LoadedModel& mod
             joint.parentIndex = loadedJoint.parentIndex;
             joint.inverseBindMatrix = loadedJoint.inverseBindMatrix;
             joint.localBindTransform = loadedJoint.localBindTransform;
+            joint.bindTranslation = loadedJoint.bindTranslation;
+            joint.bindRotation[0] = loadedJoint.bindRotation[0];
+            joint.bindRotation[1] = loadedJoint.bindRotation[1];
+            joint.bindRotation[2] = loadedJoint.bindRotation[2];
+            joint.bindRotation[3] = loadedJoint.bindRotation[3];
+            joint.bindScale = loadedJoint.bindScale;
             skeleton->joints.push_back(std::move(joint));
         }
+    }
+
+    std::shared_ptr<std::vector<AnimationClip>> animationClips;
+    if (!model.animations.empty()) {
+        animationClips = std::make_shared<std::vector<AnimationClip>>(model.animations);
     }
 
     const std::lock_guard<std::mutex> lock(mutex_);
@@ -114,7 +126,7 @@ bool AssetCatalog::AddFromModel(const juce::String& name, const LoadedModel& mod
     if (assets_.find(name.toStdString()) == assets_.end()) {
         names_.push_back(name);
     }
-    assets_[name.toStdString()] = Asset{ mesh, material, skeleton };
+    assets_[name.toStdString()] = Asset{ mesh, material, skeleton, animationClips };
     return true;
 }
 

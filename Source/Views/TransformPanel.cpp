@@ -41,7 +41,18 @@ TransformPanel::TransformPanel(engine::World& world) : world_(world) {
         addAndMakeVisible(slider);
     }
 
+    animationLabel_.setFont(juce::Font(juce::FontOptions(13.0f)).boldened());
+    animationLabel_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+    addAndMakeVisible(animationLabel_);
+
+    clipNameLabel_.setColour(juce::Label::textColourId, juce::Colours::grey);
+    addAndMakeVisible(clipNameLabel_);
+
+    playPauseButton_.onClick = [this] { TogglePlayback(); };
+    addAndMakeVisible(playPauseButton_);
+
     SetEditorsVisible(false);
+    SetAnimationControlsVisible(false);
 }
 
 void TransformPanel::SetSelectedEntity(entt::entity entity) {
@@ -62,6 +73,7 @@ bool TransformPanel::AnySliderBeingDragged() const {
 void TransformPanel::Refresh() {
     if (selectedEntity_ == entt::null) {
         SetEditorsVisible(false);
+        SetAnimationControlsVisible(false);
         return;
     }
 
@@ -90,6 +102,7 @@ void TransformPanel::Refresh() {
         // entity -- either way, nothing here to edit right now.
         selectedEntity_ = entt::null;
         SetEditorsVisible(false);
+        SetAnimationControlsVisible(false);
         return;
     }
 
@@ -112,6 +125,29 @@ void TransformPanel::Refresh() {
                            &rotationZSlider_, &scaleXSlider_, &scaleYSlider_, &scaleZSlider_ }) {
         slider->setEnabled(enabled);
     }
+
+    bool hasAnimator = false;
+    bool playing = false;
+    juce::String clipName;
+    {
+        std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+        auto& registry = world_.Registry();
+        if (const auto* animator = registry.try_get<scene::Animator>(selectedEntity_)) {
+            if (animator->clips != nullptr && animator->activeClip >= 0 &&
+                static_cast<std::size_t>(animator->activeClip) < animator->clips->size()) {
+                hasAnimator = true;
+                playing = animator->playing;
+                clipName = (*animator->clips)[static_cast<std::size_t>(animator->activeClip)].name;
+            }
+        }
+    }
+
+    SetAnimationControlsVisible(hasAnimator);
+    if (hasAnimator) {
+        clipNameLabel_.setText(clipName, juce::dontSendNotification);
+        playPauseButton_.setButtonText(playing ? "Pause" : "Play");
+        playPauseButton_.setEnabled(!locked_);
+    }
 }
 
 void TransformPanel::PushToRegistry() {
@@ -133,6 +169,41 @@ void TransformPanel::PushToRegistry() {
                                         juce::degreesToRadians(static_cast<float>(rotationZSlider_.getValue())) };
     transform.scale = { static_cast<float>(scaleXSlider_.getValue()), static_cast<float>(scaleYSlider_.getValue()),
                          static_cast<float>(scaleZSlider_.getValue()) };
+}
+
+void TransformPanel::TogglePlayback() {
+    if (selectedEntity_ == entt::null || locked_) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+    auto& registry = world_.Registry();
+    if (!registry.valid(selectedEntity_)) {
+        return;
+    }
+
+    auto* animator = registry.try_get<scene::Animator>(selectedEntity_);
+    if (animator == nullptr || animator->clips == nullptr || animator->activeClip < 0 ||
+        static_cast<std::size_t>(animator->activeClip) >= animator->clips->size()) {
+        return;
+    }
+
+    // Restarting a finished non-looping clip from Play should replay from
+    // the top, not do nothing -- ViewportComponent's per-frame update
+    // already clamps time to duration and sets playing=false when a
+    // non-looping clip runs out, so "at the end, not playing" is exactly
+    // the state this button needs to recognize and reset.
+    const auto& clip = (*animator->clips)[static_cast<std::size_t>(animator->activeClip)];
+    if (!animator->playing && !animator->loop && clip.duration > 0.0f && animator->time >= clip.duration) {
+        animator->time = 0.0f;
+    }
+    animator->playing = !animator->playing;
+}
+
+void TransformPanel::SetAnimationControlsVisible(bool visible) {
+    animationLabel_.setVisible(visible);
+    clipNameLabel_.setVisible(visible);
+    playPauseButton_.setVisible(visible);
 }
 
 void TransformPanel::SetEditorsVisible(bool visible) {
@@ -174,6 +245,12 @@ void TransformPanel::resized() {
     scaleXSlider_.setBounds(scaleRow.removeFromLeft(third));
     scaleYSlider_.setBounds(scaleRow.removeFromLeft(third));
     scaleZSlider_.setBounds(scaleRow);
+    bounds.removeFromTop(kRowGap);
+
+    animationLabel_.setBounds(bounds.removeFromTop(kLabelHeight));
+    auto animationRow = bounds.removeFromTop(kSliderHeight + 4);
+    clipNameLabel_.setBounds(animationRow.removeFromLeft(animationRow.getWidth() * 2 / 3));
+    playPauseButton_.setBounds(animationRow);
 }
 
 } // namespace ce

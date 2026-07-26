@@ -55,6 +55,13 @@ public:
         // differs per instance, only future per-instance animation
         // playback state (AI5) would.
         std::shared_ptr<Skeleton> skeleton;
+
+        // AI5: null unless the source model carried at least one
+        // animation clip targeting `skeleton`'s joints. Shared across
+        // instances for the same reason skeleton is -- clip DATA is
+        // asset-level, only a placed entity's scene::Animator (playback
+        // position/state) is per-instance.
+        std::shared_ptr<std::vector<AnimationClip>> animationClips;
     };
 
     // Loads the built-in demo set: a procedural cube, a procedural

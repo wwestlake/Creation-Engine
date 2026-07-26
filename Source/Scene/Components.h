@@ -6,6 +6,7 @@
 #include <entt/entt.hpp>
 #include <JuceHeader.h>
 
+#include "Render/Scene/Animation.h"
 #include "Render/Scene/Material.h"
 #include "Render/Scene/Mesh.h"
 
@@ -89,8 +90,30 @@ struct Skeleton {
         int parentIndex = -1; // index into Skeleton::joints, or -1 for a root joint.
         juce::Matrix3D<float> inverseBindMatrix;
         juce::Matrix3D<float> localBindTransform;
+
+        // AI5: bind pose decomposed into TRS (see LoadedJoint's matching
+        // fields in Render/Import/GltfLoader.h for why) -- the fallback
+        // an animation channel that doesn't touch this joint, or a joint
+        // path a clip never animates, keeps instead of snapping to
+        // identity translation/rotation/scale.
+        juce::Vector3D<float> bindTranslation;
+        float bindRotation[4] = { 0.0f, 0.0f, 0.0f, 1.0f }; // x, y, z, w.
+        juce::Vector3D<float> bindScale{ 1.0f, 1.0f, 1.0f };
     };
     std::vector<Joint> joints;
+};
+
+// AI5: per-instance animation playback state for an entity that also has
+// a Skeleton. `clips` is shared (shared_ptr, not copied) across every
+// placed instance of the same source asset -- the clip DATA never
+// differs per instance, same reasoning as MeshRenderer's shared Mesh/
+// Material, only where playback currently is does.
+struct Animator {
+    std::shared_ptr<std::vector<AnimationClip>> clips;
+    int activeClip = -1; // index into *clips, or -1 for "no clip / bind pose."
+    float time = 0.0f;   // seconds into the active clip.
+    bool playing = false;
+    bool loop = true;
 };
 
 } // namespace ce::scene

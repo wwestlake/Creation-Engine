@@ -28,6 +28,14 @@ public:
 
     gl::Texture2D* albedoTexture = nullptr; // non-owning; asset ownership is future work.
 
+    // AI5: set by AssetCatalog::AddFromModel when the source model was
+    // skinned -- selects the USE_SKINNING shader variant the same way
+    // hasTexture below selects USE_ALBEDO_TEXTURE. Asset-level, not
+    // per-instance (every entity sharing this Material is the same
+    // skinned mesh), so it lives here rather than on MeshRenderer/
+    // Skeleton.
+    bool isSkinned = false;
+
     juce::OpenGLShaderProgram* Resolve(ShaderComposer& composer, const juce::OpenGLContext& context);
     void ApplyUniforms(juce::OpenGLShaderProgram& program) const;
 
@@ -43,6 +51,7 @@ public:
 private:
     juce::OpenGLShaderProgram* cachedProgram_ = nullptr;
     bool cachedHadTexture_ = false;
+    bool cachedWasSkinned_ = false;
     bool hasResolvedOnce_ = false;
 };
 

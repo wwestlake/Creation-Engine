@@ -52,6 +52,22 @@ LoadedSkin ExtractSkin(const cgltf_skin& skin) {
         cgltf_node_transform_local(node, localMatrix);
         joint.localBindTransform = juce::Matrix3D<float>(localMatrix);
 
+        // node->translation/rotation/scale are populated by cgltf with
+        // the correct glTF-spec defaults regardless of whether the node
+        // authored them explicitly -- EXCEPT when the node instead
+        // authors a raw `matrix` (has_matrix true), in which case these
+        // stay at identity rather than being decomposed from it. glTF
+        // exporters overwhelmingly author animated joints as TRS, not
+        // matrix, so this is accepted as a known limitation rather than
+        // implemented (matrix decomposition) for a case that's rare in
+        // practice.
+        joint.bindTranslation = { node->translation[0], node->translation[1], node->translation[2] };
+        joint.bindRotation[0] = node->rotation[0];
+        joint.bindRotation[1] = node->rotation[1];
+        joint.bindRotation[2] = node->rotation[2];
+        joint.bindRotation[3] = node->rotation[3];
+        joint.bindScale = { node->scale[0], node->scale[1], node->scale[2] };
+
         loadedSkin.joints.push_back(joint);
     }
 
@@ -65,6 +81,100 @@ LoadedSkin ExtractSkin(const cgltf_skin& skin) {
     }
 
     return loadedSkin;
+}
+
+// Extracts every animation clip whose channels drive one of `skin`'s
+// joints. A channel targeting a node outside the skin (root motion, a
+// camera, ...) is logged and skipped -- root motion extraction is
+// explicitly AI6 scope, not this pass. Channels targeting morph-target
+// weights are skipped too (no morph target support yet).
+void ExtractAnimations(const cgltf_data& data, const cgltf_skin* skin, LoadedModel& outModel) {
+    if (skin == nullptr) {
+        return;
+    }
+
+    std::unordered_map<const cgltf_node*, int> jointIndexByNode;
+    for (cgltf_size j = 0; j < skin->joints_count; ++j) {
+        jointIndexByNode[skin->joints[j]] = static_cast<int>(j);
+    }
+
+    for (cgltf_size a = 0; a < data.animations_count; ++a) {
+        const cgltf_animation& anim = data.animations[a];
+        AnimationClip clip;
+        clip.name = anim.name != nullptr ? juce::String(anim.name) : ("Animation" + juce::String(static_cast<int>(a)));
+
+        for (cgltf_size c = 0; c < anim.channels_count; ++c) {
+            const cgltf_animation_channel& channel = anim.channels[c];
+            if (channel.target_node == nullptr || channel.sampler == nullptr) {
+                continue;
+            }
+
+            const auto jointIt = jointIndexByNode.find(channel.target_node);
+            if (jointIt == jointIndexByNode.end()) {
+                continue; // targets a node outside this skin -- not this pass's concern.
+            }
+
+            AnimationChannel loaded;
+            loaded.jointIndex = jointIt->second;
+            switch (channel.target_path) {
+                case cgltf_animation_path_type_translation:
+                    loaded.path = AnimationChannel::Path::Translation;
+                    break;
+                case cgltf_animation_path_type_rotation:
+                    loaded.path = AnimationChannel::Path::Rotation;
+                    break;
+                case cgltf_animation_path_type_scale:
+                    loaded.path = AnimationChannel::Path::Scale;
+                    break;
+                default:
+                    continue; // weights (morph targets) -- not supported.
+            }
+
+            const cgltf_animation_sampler& sampler = *channel.sampler;
+            if (sampler.input == nullptr || sampler.output == nullptr) {
+                continue;
+            }
+
+            switch (sampler.interpolation) {
+                case cgltf_interpolation_type_step:
+                    loaded.interpolation = AnimationInterpolation::Step;
+                    break;
+                case cgltf_interpolation_type_cubic_spline:
+                    loaded.interpolation = AnimationInterpolation::CubicSpline;
+                    break;
+                default:
+                    loaded.interpolation = AnimationInterpolation::Linear;
+                    break;
+            }
+
+            const cgltf_accessor& timesAccessor = *sampler.input;
+            loaded.times.resize(timesAccessor.count);
+            for (cgltf_size k = 0; k < timesAccessor.count; ++k) {
+                cgltf_accessor_read_float(&timesAccessor, k, &loaded.times[k], 1);
+            }
+            if (!loaded.times.empty()) {
+                clip.duration = juce::jmax(clip.duration, loaded.times.back());
+            }
+
+            const int componentsPerKey = loaded.path == AnimationChannel::Path::Rotation ? 4 : 3;
+            const cgltf_accessor& valuesAccessor = *sampler.output;
+            loaded.values.resize(valuesAccessor.count * static_cast<cgltf_size>(componentsPerKey));
+            for (cgltf_size k = 0; k < valuesAccessor.count; ++k) {
+                cgltf_accessor_read_float(&valuesAccessor, k, &loaded.values[k * static_cast<cgltf_size>(componentsPerKey)],
+                                           componentsPerKey);
+            }
+
+            clip.channels.push_back(std::move(loaded));
+        }
+
+        if (!clip.channels.empty()) {
+            outModel.animations.push_back(std::move(clip));
+        }
+    }
+
+    if (!outModel.animations.empty()) {
+        std::cout << "[gltf] extracted " << outModel.animations.size() << " animation clip(s)" << std::endl;
+    }
 }
 
 // Extracts materials (with baseColorTextureUri left for the caller to
@@ -207,14 +317,18 @@ void ExtractModel(const cgltf_data& data, LoadedModel& outModel, std::vector<juc
     // first node that actually uses one and extract just that skin.
     // Multiple distinct skeletons in one file is a real glTF capability
     // but not one anything in this engine needs yet.
+    const cgltf_skin* foundSkin = nullptr;
     for (cgltf_size nodeIndex = 0; nodeIndex < data.nodes_count; ++nodeIndex) {
         const cgltf_node& node = data.nodes[nodeIndex];
         if (node.skin != nullptr) {
+            foundSkin = node.skin;
             outModel.skin = ExtractSkin(*node.skin);
             std::cout << "[gltf] extracted skin: " << outModel.skin->joints.size() << " joint(s)" << std::endl;
             break;
         }
     }
+
+    ExtractAnimations(data, foundSkin, outModel);
 }
 
 cgltf_result VfsFileRead(const cgltf_memory_options* memoryOptions, const cgltf_file_options* fileOptions,

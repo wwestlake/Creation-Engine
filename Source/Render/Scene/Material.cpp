@@ -5,7 +5,7 @@ namespace ce {
 juce::OpenGLShaderProgram* Material::Resolve(ShaderComposer& composer, const juce::OpenGLContext& context) {
     const bool hasTexture = albedoTexture != nullptr && albedoTexture->IsValid();
 
-    if (hasResolvedOnce_ && hasTexture == cachedHadTexture_) {
+    if (hasResolvedOnce_ && hasTexture == cachedHadTexture_ && isSkinned == cachedWasSkinned_) {
         return cachedProgram_;
     }
 
@@ -13,9 +13,13 @@ juce::OpenGLShaderProgram* Material::Resolve(ShaderComposer& composer, const juc
     if (hasTexture) {
         defines.push_back("USE_ALBEDO_TEXTURE");
     }
+    if (isSkinned) {
+        defines.push_back("USE_SKINNING");
+    }
 
     cachedProgram_ = composer.GetProgram(context, vertexEntry, fragmentEntry, defines);
     cachedHadTexture_ = hasTexture;
+    cachedWasSkinned_ = isSkinned;
     hasResolvedOnce_ = true;
     return cachedProgram_;
 }

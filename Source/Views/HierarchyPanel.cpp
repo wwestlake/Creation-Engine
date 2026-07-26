@@ -277,6 +277,15 @@ void HierarchyPanel::AddEntity(const juce::String& assetName) {
             // across instances is the whole point.
             registry.emplace<scene::Skeleton>(newEntity, *asset.skeleton);
         }
+        if (asset.animationClips != nullptr && !asset.animationClips->empty()) {
+            // clips itself is shared (asset-level clip data), activeClip
+            // defaults to the first clip so a freshly-placed animated
+            // asset has something to preview immediately -- playing
+            // starts false, matching TransportBar's own "starts paused"
+            // convention.
+            registry.emplace<scene::Animator>(newEntity,
+                                               scene::Animator{ asset.animationClips, 0, 0.0f, false, true });
+        }
     }
 
     // Select before Refresh(), not after: Refresh()'s rebuild re-selects

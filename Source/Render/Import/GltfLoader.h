@@ -8,6 +8,7 @@
 
 #include "assets/VirtualFileSystem.h"
 #include "Render/GL/Texture2D.h"
+#include "Render/Scene/Animation.h"
 #include "Render/Scene/Vertex.h"
 
 namespace ce {
@@ -36,6 +37,21 @@ struct LoadedJoint {
     int parentIndex = -1; // index into LoadedSkin::joints, or -1 for a root joint.
     juce::Matrix3D<float> inverseBindMatrix; // mesh-space -> this joint's space, at bind pose.
     juce::Matrix3D<float> localBindTransform; // this joint's transform relative to its parent, at bind pose.
+
+    // Same bind pose as localBindTransform above, but decomposed into TRS
+    // rather than pre-composed -- AI5's animation channels only ever
+    // animate translation/rotation/scale individually (never "the whole
+    // matrix"), so a channel that animates just this joint's rotation
+    // needs a real translation/scale default to fall back to, not an
+    // identity one. Read straight from cgltf_node's own translation/
+    // rotation/scale fields, which cgltf populates with the correct
+    // glTF-spec defaults even for nodes that don't explicitly author
+    // them -- see ExtractSkin in the .cpp for the one documented case
+    // (a node authored with a raw matrix instead of TRS) where this
+    // doesn't reconstruct the bind pose exactly.
+    juce::Vector3D<float> bindTranslation;
+    float bindRotation[4] = { 0.0f, 0.0f, 0.0f, 1.0f }; // x, y, z, w.
+    juce::Vector3D<float> bindScale{ 1.0f, 1.0f, 1.0f };
 };
 
 // One glTF skin, flattened into a cache-friendly array (see LoadedJoint)
@@ -66,6 +82,14 @@ struct LoadedModel {
     std::vector<LoadedPrimitive> primitives;
     std::vector<LoadedMaterial> materials;
     std::optional<LoadedSkin> skin; // set only if some mesh in the file is actually skinned.
+
+    // AI5: animation clips whose channels target a joint in `skin` above
+    // -- only extracted when a skin exists, and only channels landing on
+    // one of its joints are kept (a channel targeting some other node,
+    // e.g. root motion or a camera, is out of scope for this pass and is
+    // skipped). AnimationChannel::jointIndex indexes into skin->joints /
+    // the resulting scene::Skeleton::joints the same way.
+    std::vector<AnimationClip> animations;
 };
 
 // Parses gltfFile (.gltf with a sibling .bin, or .glb) via cgltf and

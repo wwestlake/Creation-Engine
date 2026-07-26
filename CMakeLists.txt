@@ -64,6 +64,7 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Render/Scene/Mesh.cpp
     Source/Render/Scene/Material.h
     Source/Render/Scene/Material.cpp
+    Source/Render/Scene/Animation.h
     Source/Render/Scene/ProceduralMesh.h
     Source/Render/Scene/ProceduralMesh.cpp
     Source/Render/Shaders/ShaderComposer.h
@@ -90,6 +91,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Scene/Components.h
     Source/Scene/AssetCatalog.h
     Source/Scene/AssetCatalog.cpp
+    Source/Scene/AnimationSampler.h
+    Source/Scene/AnimationSampler.cpp
     Source/Import/AssetImporter.h
     Source/Import/ImporterRegistry.h
     Source/Import/ImporterRegistry.cpp
