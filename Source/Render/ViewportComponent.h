@@ -5,6 +5,7 @@
 
 #include <JuceHeader.h>
 
+#include "assets/VirtualFileSystem.h"
 #include "Render/GL/Texture2D.h"
 #include "Render/Scene/Camera.h"
 #include "Render/Scene/Light.h"
@@ -23,9 +24,12 @@ namespace ce {
 // components composited in the same window/process as this viewport
 // (section 3.4) — see MainComponent for how they're arranged around it.
 //
-// Current state (M5 of the render pipeline plan): renders a real glTF
-// 2.0 asset lit by an editable light list — one directional light plus
-// up to kMaxPointLights point lights — surfaced through LightPanel
+// Current state (VFS follow-on to M5): the demo glTF asset and its base
+// color texture load through a mounted .zip archive (assets/packages/
+// base.zip) via VirtualFileSystem (AssetSystem/) instead of loose disk
+// files — LoadGltfFromVfs + Texture2D::LoadFromMemory, fully in-memory.
+// Lit by an editable light list — one directional light plus up to
+// kMaxPointLights point lights — surfaced through LightPanel
 // (Source/Views/LightPanel.h) in MainComponent's inspector dock.
 //
 // juce::OpenGLContext runs renderOpenGL() on its own background thread,
@@ -64,6 +68,7 @@ private:
 
     juce::OpenGLContext openGLContext_;
     std::unique_ptr<ShaderComposer> shaderComposer_;
+    assets::VirtualFileSystem vfs_;
 
     std::vector<Mesh> meshes_;
     std::vector<Material> materials_;

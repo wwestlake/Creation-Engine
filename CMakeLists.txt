@@ -18,6 +18,13 @@ add_subdirectory(third_party/entt)
 add_subdirectory(NodeSystem)
 add_subdirectory(EngineCore)
 
+# --- Shared, juce_core-only libraries -------------------------------------
+# Not framework-agnostic like the two above (needs juce::juce_core for
+# juce::ZipFile), but still no GUI/rendering dependency, so a future
+# server-side asset loader could link this without pulling in anything
+# beyond what CreationEngineServer already links.
+add_subdirectory(AssetSystem)
+
 # --- Client / editor executable ------------------------------------------
 # Per spec section 1, the editor and the runtime are the same binary in
 # different modes — not a separate desktop app talking to the game over a
@@ -75,6 +82,7 @@ target_compile_definitions(CreationEngineEditor PRIVATE
 target_link_libraries(CreationEngineEditor PRIVATE
     engine_core
     node_system
+    asset_system
     juce::juce_gui_extra
     juce::juce_opengl
     juce::juce_recommended_config_flags

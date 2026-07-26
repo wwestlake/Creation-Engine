@@ -120,11 +120,23 @@ void ViewportComponent::newOpenGLContextCreated() {
     // demo scene below only draws through PBR materials.
     shaderComposer_->GetProgram(openGLContext_, "programs/unlit.vert", "programs/unlit.frag");
 
-    const juce::File gltfFile =
-        juce::File(CE_ASSET_SOURCE_DIR).getChildFile("models/BoxTextured/BoxTextured.gltf");
+    const juce::File packagesDir = juce::File(CE_ASSET_SOURCE_DIR).getChildFile("packages");
+    if (!vfs_.Mount(packagesDir.getChildFile("base.zip"), 0)) {
+        std::cout << "[render] failed to mount base.zip; nothing will render." << std::endl;
+        return;
+    }
+    // Mount-priority demo: override.zip only contains a replacement
+    // CesiumLogoFlat.png, mounted at higher priority than base.zip. The
+    // VFS should resolve that path to override.zip's copy instead of
+    // base.zip's — verified by the differing byte size/dimensions
+    // VirtualFileSystem::ReadFile and Texture2D log for that read.
+    const juce::File overrideFile = packagesDir.getChildFile("override.zip");
+    if (overrideFile.existsAsFile()) {
+        vfs_.Mount(overrideFile, 10);
+    }
 
     LoadedModel model;
-    if (!LoadGltf(gltfFile, model)) {
+    if (!LoadGltfFromVfs(vfs_, "BoxTextured.gltf", model)) {
         std::cout << "[render] glTF load failed; nothing will render." << std::endl;
         return;
     }
@@ -141,6 +153,16 @@ void ViewportComponent::newOpenGLContextCreated() {
                 material.albedoTexture = texture.get();
             }
             loadedTextures_.push_back(std::move(texture));
+        } else if (srcMaterial.baseColorTextureVirtualPath.isNotEmpty()) {
+            juce::MemoryBlock textureBytes;
+            if (vfs_.ReadFile(srcMaterial.baseColorTextureVirtualPath, textureBytes)) {
+                auto texture = std::make_unique<gl::Texture2D>();
+                if (texture->LoadFromMemory(textureBytes.getData(), textureBytes.getSize(),
+                                             srcMaterial.baseColorTextureVirtualPath)) {
+                    material.albedoTexture = texture.get();
+                }
+                loadedTextures_.push_back(std::move(texture));
+            }
         }
 
         materials_.push_back(std::move(material));

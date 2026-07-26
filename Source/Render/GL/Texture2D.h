@@ -27,6 +27,12 @@ public:
     // is left unchanged.
     bool LoadFromFile(const juce::File& file, bool generateMipmaps = true);
 
+    // Decodes an image already in memory (e.g. read from a VirtualFileSystem
+    // mount) via stb_image's memory-buffer path — no disk I/O. `debugName`
+    // is only used in log messages on failure.
+    bool LoadFromMemory(const void* data, std::size_t sizeBytes, const juce::String& debugName = {},
+                         bool generateMipmaps = true);
+
     // Uploads raw pixel data already in memory. `channels` must be 1
     // (R), 3 (RGB), or 4 (RGBA); data is tightly packed, row-major,
     // top-to-bottom.

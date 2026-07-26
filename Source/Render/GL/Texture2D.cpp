@@ -59,6 +59,27 @@ bool Texture2D::LoadFromFile(const juce::File& file, bool generateMipmaps) {
     return true;
 }
 
+bool Texture2D::LoadFromMemory(const void* data, std::size_t sizeBytes, const juce::String& debugName,
+                                bool generateMipmaps) {
+    int width = 0;
+    int height = 0;
+    int channelsInFile = 0;
+    stbi_uc* pixels = stbi_load_from_memory(static_cast<const stbi_uc*>(data), static_cast<int>(sizeBytes), &width,
+                                             &height, &channelsInFile, 0);
+    if (pixels == nullptr) {
+        std::cout << "[texture] failed to decode " << (debugName.isNotEmpty() ? debugName : juce::String("<memory>"))
+                   << ": " << stbi_failure_reason() << std::endl;
+        return false;
+    }
+
+    UploadCurrent(width, height, channelsInFile, pixels, generateMipmaps);
+    stbi_image_free(pixels);
+
+    std::cout << "[texture] loaded " << (debugName.isNotEmpty() ? debugName : juce::String("<memory>")) << " ("
+               << width << "x" << height << ", " << channelsInFile << " channels, from memory)" << std::endl;
+    return true;
+}
+
 void Texture2D::CreateFromPixels(int width, int height, int channels, const std::uint8_t* pixels,
                                   bool generateMipmaps) {
     UploadCurrent(width, height, channels, pixels, generateMipmaps);

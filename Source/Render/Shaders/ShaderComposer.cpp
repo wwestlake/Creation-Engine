@@ -7,8 +7,25 @@ namespace ce {
 
 ShaderComposer::ShaderComposer(juce::File shaderRoot) : shaderRoot_(std::move(shaderRoot)) {}
 
-juce::String ShaderComposer::ReadFile(const juce::File& file) {
-    return file.loadFileAsString();
+ShaderComposer::ShaderComposer(assets::VirtualFileSystem& vfs, juce::String vfsRootPrefix)
+    : vfs_(&vfs), vfsRootPrefix_(std::move(vfsRootPrefix)) {}
+
+bool ShaderComposer::ReadTextByRelativePath(const juce::String& relativePath, juce::String& outText) const {
+    if (vfs_ != nullptr) {
+        juce::MemoryBlock data;
+        if (!vfs_->ReadFile(vfsRootPrefix_ + relativePath, data)) {
+            return false;
+        }
+        outText = juce::String::createStringFromData(data.getData(), static_cast<int>(data.getSize()));
+        return true;
+    }
+
+    const juce::File file = shaderRoot_.getChildFile(relativePath);
+    if (!file.existsAsFile()) {
+        return false;
+    }
+    outText = file.loadFileAsString();
+    return true;
 }
 
 juce::String ShaderComposer::ResolveIncludes(const juce::String& source, std::vector<juce::String>& alreadyIncluded) {
@@ -31,20 +48,18 @@ juce::String ShaderComposer::ResolveIncludes(const juce::String& source, std::ve
         }
 
         const auto includeRelative = trimmed.substring(firstQuote + 1, lastQuote);
-        const juce::File includeFile = shaderRoot_.getChildFile(includeRelative);
-        const auto fullPath = includeFile.getFullPathName();
 
-        if (std::find(alreadyIncluded.begin(), alreadyIncluded.end(), fullPath) != alreadyIncluded.end()) {
+        if (std::find(alreadyIncluded.begin(), alreadyIncluded.end(), includeRelative) != alreadyIncluded.end()) {
             continue; // already inlined elsewhere in this composition — skip, like #pragma once.
         }
-        alreadyIncluded.push_back(fullPath);
+        alreadyIncluded.push_back(includeRelative);
 
-        if (!includeFile.existsAsFile()) {
-            std::cout << "[shader] ERROR: include not found: " << fullPath << std::endl;
+        juce::String includedSource;
+        if (!ReadTextByRelativePath(includeRelative, includedSource)) {
+            std::cout << "[shader] ERROR: include not found: " << includeRelative << std::endl;
             continue;
         }
 
-        const auto includedSource = ReadFile(includeFile);
         result << ResolveIncludes(includedSource, alreadyIncluded) << "\n";
     }
 
@@ -53,13 +68,12 @@ juce::String ShaderComposer::ResolveIncludes(const juce::String& source, std::ve
 
 juce::String ShaderComposer::ComposeSource(const juce::String& entryRelativePath,
                                             const std::vector<juce::String>& defines) {
-    const juce::File entryFile = shaderRoot_.getChildFile(entryRelativePath);
-    if (!entryFile.existsAsFile()) {
-        std::cout << "[shader] ERROR: entry file not found: " << entryFile.getFullPathName() << std::endl;
+    juce::String raw;
+    if (!ReadTextByRelativePath(entryRelativePath, raw)) {
+        std::cout << "[shader] ERROR: entry file not found: " << entryRelativePath << std::endl;
         return {};
     }
 
-    const auto raw = ReadFile(entryFile);
     juce::StringArray lines = juce::StringArray::fromLines(raw);
     if (lines.isEmpty() || !lines[0].trim().startsWith("#version")) {
         std::cout << "[shader] ERROR: " << entryRelativePath << " must start with a #version line" << std::endl;
@@ -70,7 +84,7 @@ juce::String ShaderComposer::ComposeSource(const juce::String& entryRelativePath
     lines.remove(0);
     const juce::String rest = lines.joinIntoString("\n");
 
-    std::vector<juce::String> alreadyIncluded{ entryFile.getFullPathName() };
+    std::vector<juce::String> alreadyIncluded{ entryRelativePath };
     const juce::String resolvedRest = ResolveIncludes(rest, alreadyIncluded);
 
     juce::String defineBlock;
