@@ -81,6 +81,19 @@ public:
     // instead of just freezing the tick counter.
     void ResetDemoEntityTransform();
 
+    // Read-only catalog access for SC5's "+ Add" menu (HierarchyPanel) to
+    // list/look up placeable assets. Safe to call from the message thread
+    // without a lock: LoadBuiltins() populates it once during
+    // newOpenGLContextCreated() and nothing ever mutates it afterward.
+    const scene::AssetCatalog& Catalog() const { return assetCatalog_; }
+
+    // A point `distance` units in front of the free camera, for SC5's
+    // "place a new entity where I'm looking" — reads the snapshot taken
+    // under stateLock_ each frame (see stateLock_ doc above), not
+    // freeCamera_ directly, since freeCamera_'s position is only safe to
+    // touch from the render thread.
+    juce::Vector3D<float> SpawnPosition(float distance = 4.0f) const;
+
 private:
     void newOpenGLContextCreated() override;
     void renderOpenGL() override;
@@ -109,6 +122,8 @@ private:
     mutable juce::CriticalSection stateLock_;
     DirectionalLight sunLight_;
     std::vector<PointLight> pointLights_{ PointLight{} };
+    juce::Vector3D<float> lastCameraPosition_;
+    juce::Vector3D<float> lastCameraForward_{ 0.0f, 0.0f, -1.0f };
 
     Camera camera_;
     FreeCamera freeCamera_;

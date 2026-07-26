@@ -167,13 +167,29 @@ private:
     bool hasChildren_;
 };
 
-HierarchyPanel::HierarchyPanel(engine::World& world) : world_(world) {
+HierarchyPanel::HierarchyPanel(engine::World& world, ViewportComponent& viewport)
+    : world_(world), viewport_(viewport) {
     titleLabel_.setFont(juce::Font(juce::FontOptions(15.0f)).boldened());
     titleLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
     addAndMakeVisible(titleLabel_);
 
     addFolderButton_.onClick = [this] { CreateFolder(); };
     addAndMakeVisible(addFolderButton_);
+
+    addAssetButton_.onClick = [this] {
+        juce::PopupMenu menu;
+        for (const auto& name : viewport_.Catalog().Names()) {
+            menu.addItem(name, [this, name] { AddEntity(name); });
+        }
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&addAssetButton_));
+    };
+    addAndMakeVisible(addAssetButton_);
+
+    duplicateButton_.onClick = [this] { DuplicateSelected(); };
+    addAndMakeVisible(duplicateButton_);
+
+    deleteButton_.onClick = [this] { DeleteSelected(); };
+    addAndMakeVisible(deleteButton_);
 
     treeView_.setColour(juce::TreeView::backgroundColourId, juce::Colour(0xff10141a));
     treeView_.setRootItemVisible(false);
@@ -184,6 +200,8 @@ HierarchyPanel::HierarchyPanel(engine::World& world) : world_(world) {
 
     rootItem_ = std::make_unique<EntityTreeItem>(*this, entt::null, true, "Root", true, false, true);
     treeView_.setRootItem(rootItem_.get());
+
+    UpdateActionButtonState();
 }
 
 HierarchyPanel::~HierarchyPanel() {
@@ -195,9 +213,16 @@ HierarchyPanel::~HierarchyPanel() {
 
 void HierarchyPanel::NotifySelected(entt::entity entity) {
     selectedEntity_ = entity;
+    UpdateActionButtonState();
     if (onSelectionChanged) {
         onSelectionChanged(selectedEntity_);
     }
+}
+
+void HierarchyPanel::UpdateActionButtonState() {
+    const bool hasSelection = selectedEntity_ != entt::null;
+    duplicateButton_.setEnabled(hasSelection);
+    deleteButton_.setEnabled(hasSelection);
 }
 
 void HierarchyPanel::CreateFolder() {
@@ -217,6 +242,124 @@ void HierarchyPanel::CreateFolder() {
         registry.emplace<scene::SceneFlags>(entity, scene::SceneFlags{});
         registry.emplace<scene::Parent>(entity, scene::Parent{ parent });
     }
+    Refresh();
+}
+
+void HierarchyPanel::AddEntity(const juce::String& assetName) {
+    const auto* asset = viewport_.Catalog().Find(assetName);
+    if (asset == nullptr) {
+        return;
+    }
+    const auto spawnPosition = viewport_.SpawnPosition();
+
+    entt::entity newEntity = entt::null;
+    {
+        std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+        auto& registry = world_.Registry();
+
+        entt::entity parent = entt::null;
+        if (selectedEntity_ != entt::null && registry.valid(selectedEntity_) &&
+            registry.all_of<scene::Folder>(selectedEntity_)) {
+            parent = selectedEntity_;
+        }
+
+        newEntity = world_.CreateEntity();
+        registry.emplace<scene::Name>(newEntity, scene::Name{ assetName + " " + juce::String(nextEntityNumber_++) });
+        registry.emplace<scene::Transform>(newEntity, scene::Transform{ spawnPosition });
+        registry.emplace<scene::MeshRenderer>(newEntity, scene::MeshRenderer{ asset->mesh, asset->material });
+        registry.emplace<scene::SceneFlags>(newEntity, scene::SceneFlags{});
+        registry.emplace<scene::Parent>(newEntity, scene::Parent{ parent });
+    }
+
+    // Select before Refresh(), not after: Refresh()'s rebuild re-selects
+    // whatever selectedEntity_ already is by matching entity ids, so this
+    // ordering is what makes the new row actually show highlighted
+    // instead of just being the (invisibly) selected entity.
+    NotifySelected(newEntity);
+    Refresh();
+}
+
+void HierarchyPanel::DuplicateSelected() {
+    if (selectedEntity_ == entt::null) {
+        return;
+    }
+
+    entt::entity newEntity = entt::null;
+    {
+        std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+        auto& registry = world_.Registry();
+        if (!registry.valid(selectedEntity_)) {
+            return;
+        }
+
+        const auto* name = registry.try_get<scene::Name>(selectedEntity_);
+        const auto* transform = registry.try_get<scene::Transform>(selectedEntity_);
+        const auto* meshRenderer = registry.try_get<scene::MeshRenderer>(selectedEntity_);
+        const auto* parent = registry.try_get<scene::Parent>(selectedEntity_);
+        const bool isFolder = registry.all_of<scene::Folder>(selectedEntity_);
+
+        newEntity = world_.CreateEntity();
+        registry.emplace<scene::Name>(
+            newEntity, scene::Name{ (name != nullptr ? name->value : juce::String("Entity")) + " copy" });
+        if (transform != nullptr) {
+            registry.emplace<scene::Transform>(newEntity, *transform);
+        }
+        if (meshRenderer != nullptr) {
+            registry.emplace<scene::MeshRenderer>(newEntity, *meshRenderer);
+        }
+        if (isFolder) {
+            registry.emplace<scene::Folder>(newEntity);
+        }
+        // Always unlocked/visible on the copy, even if the source is
+        // locked -- duplicating doesn't modify the source, so "locked"
+        // has no reason to carry over.
+        registry.emplace<scene::SceneFlags>(newEntity, scene::SceneFlags{});
+        registry.emplace<scene::Parent>(newEntity, scene::Parent{ parent != nullptr ? parent->value : entt::null });
+    }
+
+    NotifySelected(newEntity);
+    Refresh();
+}
+
+void HierarchyPanel::DeleteSelected() {
+    if (selectedEntity_ == entt::null) {
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+        auto& registry = world_.Registry();
+        if (!registry.valid(selectedEntity_)) {
+            return;
+        }
+
+        if (const auto* sceneFlags = registry.try_get<scene::SceneFlags>(selectedEntity_)) {
+            if (sceneFlags->locked) {
+                std::cout << "[scene] refused to delete a locked entity" << std::endl;
+                return;
+            }
+        }
+
+        // Reparent any children up to this entity's own parent instead of
+        // leaving them pointing at a destroyed entity -- deleting a
+        // folder ungroups its contents rather than silently vanishing
+        // them from the tree (Refresh() only ever walks children of
+        // entities that still exist in `nodes`).
+        entt::entity replacementParent = entt::null;
+        if (const auto* parent = registry.try_get<scene::Parent>(selectedEntity_)) {
+            replacementParent = parent->value;
+        }
+        auto childView = registry.view<scene::Parent>();
+        for (auto candidate : childView) {
+            if (childView.get<scene::Parent>(candidate).value == selectedEntity_) {
+                childView.get<scene::Parent>(candidate).value = replacementParent;
+            }
+        }
+
+        registry.destroy(selectedEntity_);
+    }
+
+    NotifySelected(entt::null);
     Refresh();
 }
 
@@ -387,6 +530,14 @@ void HierarchyPanel::resized() {
     auto headerArea = area.removeFromTop(24);
     titleLabel_.setBounds(headerArea.removeFromLeft(headerArea.getWidth() - 72));
     addFolderButton_.setBounds(headerArea.reduced(2));
+
+    area.removeFromTop(4);
+    auto actionsArea = area.removeFromTop(24);
+    const int third = actionsArea.getWidth() / 3;
+    addAssetButton_.setBounds(actionsArea.removeFromLeft(third).reduced(2));
+    duplicateButton_.setBounds(actionsArea.removeFromLeft(third).reduced(2));
+    deleteButton_.setBounds(actionsArea.reduced(2));
+
     area.removeFromTop(4);
     treeView_.setBounds(area);
 }

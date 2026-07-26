@@ -1,7 +1,7 @@
 #include "MainComponent.h"
 
 MainComponent::MainComponent()
-    : hierarchyPanel_(world_), viewport_(world_), transformPanel_(world_), lightPanel_(viewport_) {
+    : viewport_(world_), hierarchyPanel_(world_, viewport_), transformPanel_(world_), lightPanel_(viewport_) {
     addAndMakeVisible(transportBar_);
     transportBar_.onPlay = [this] { SetPlaying(true); };
     transportBar_.onPause = [this] { SetPlaying(false); };

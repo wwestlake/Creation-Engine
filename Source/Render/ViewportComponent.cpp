@@ -154,6 +154,11 @@ void ViewportComponent::SeedDemoScene() {
     std::cout << "[scene] seeded demo entity 'Box'" << std::endl;
 }
 
+juce::Vector3D<float> ViewportComponent::SpawnPosition(float distance) const {
+    const juce::ScopedLock lock(stateLock_);
+    return lastCameraPosition_ + lastCameraForward_ * distance;
+}
+
 void ViewportComponent::ResetDemoEntityTransform() {
     const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
     if (demoEntity_ == entt::null || !world_.Registry().valid(demoEntity_)) {
@@ -234,7 +239,14 @@ void ViewportComponent::renderOpenGL() {
     const float aspect = getHeight() > 0 ? static_cast<float>(getWidth()) / static_cast<float>(getHeight()) : 1.0f;
     camera_.SetPerspective(juce::MathConstants<float>::pi / 4.0f, aspect, 0.1f, 100.0f);
     const auto cameraPos = freeCamera_.Position();
-    camera_.SetLookAt(cameraPos, freeCamera_.Target());
+    const auto cameraTarget = freeCamera_.Target();
+    camera_.SetLookAt(cameraPos, cameraTarget);
+
+    {
+        const juce::ScopedLock lock(stateLock_);
+        lastCameraPosition_ = cameraPos;
+        lastCameraForward_ = cameraTarget - cameraPos; // Target() = Position() + Forward(), already unit length.
+    }
 
     if (gridProgram_ != nullptr) {
         gridProgram_->use();

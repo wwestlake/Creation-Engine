@@ -44,8 +44,13 @@ private:
     ce::WorkspaceMode activeMode_ = ce::WorkspaceMode::Scene;
 
     // --- Scene mode content ---
-    ce::HierarchyPanel hierarchyPanel_;
+    // viewport_ must be declared (and therefore constructed) before
+    // hierarchyPanel_: HierarchyPanel now takes a ViewportComponent&
+    // (SC5's "+ Add" menu reads the asset catalog and camera position
+    // through it), and member init order follows declaration order, not
+    // the constructor's initializer-list order.
     ce::ViewportComponent viewport_;
+    ce::HierarchyPanel hierarchyPanel_;
     juce::Label inspectorTitle_ { {}, "Inspector" };
     juce::Label tickLabel_;
 

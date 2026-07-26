@@ -7,6 +7,7 @@
 #include <JuceHeader.h>
 
 #include "engine/world.h"
+#include "Render/ViewportComponent.h"
 
 namespace ce {
 
@@ -42,7 +43,7 @@ namespace ce {
 class HierarchyPanel final : public juce::Component,
                               private juce::DragAndDropContainer {
 public:
-    explicit HierarchyPanel(engine::World& world);
+    HierarchyPanel(engine::World& world, ViewportComponent& viewport);
     ~HierarchyPanel() override;
 
     std::function<void(entt::entity)> onSelectionChanged;
@@ -90,14 +91,35 @@ private:
     void SetVisible(entt::entity entity, bool visible);
     void SetLocked(entt::entity entity, bool locked);
 
+    // SC5: place/duplicate/delete. AddEntity spawns a new instance of a
+    // catalog asset (see ViewportComponent::Catalog()) at
+    // viewport_.SpawnPosition(), parented under the currently-selected
+    // folder if there is one (same "drop into whatever folder is active"
+    // convention CreateFolder() already uses). DuplicateSelected() copies
+    // the selected entity's Name/Transform/MeshRenderer/Parent as a
+    // sibling — always unlocked, even if the source is locked, since
+    // duplicating doesn't modify the original. DeleteSelected() refuses
+    // (and logs why) on a locked entity, same as Reparent(); deleting a
+    // folder reparents its children up to the folder's own parent rather
+    // than leaving them pointing at a destroyed entity.
+    void AddEntity(const juce::String& assetName);
+    void DuplicateSelected();
+    void DeleteSelected();
+    void UpdateActionButtonState();
+
     engine::World& world_;
+    ViewportComponent& viewport_;
     juce::Label titleLabel_{ {}, "Hierarchy" };
     juce::TextButton addFolderButton_{ "+ Folder" };
+    juce::TextButton addAssetButton_{ "+ Add" };
+    juce::TextButton duplicateButton_{ "Duplicate" };
+    juce::TextButton deleteButton_{ "Delete" };
     juce::TreeView treeView_;
     std::unique_ptr<juce::TreeViewItem> rootItem_;
 
     entt::entity selectedEntity_ = entt::null;
     int nextFolderNumber_ = 1;
+    int nextEntityNumber_ = 1;
     std::vector<NodeInfo> lastSnapshot_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(HierarchyPanel)
