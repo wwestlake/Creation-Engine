@@ -185,8 +185,12 @@ void ViewportComponent::newOpenGLContextCreated() {
     assetCatalog_.LoadBuiltins(vfs_);
     SeedDemoScene();
 
-    LogGLErrors("catalog load + scene seed");
+    gridRenderer_.Build(10.0f, 1.0f);
+    gridProgram_ = shaderComposer_->GetProgram(openGLContext_, "programs/grid.vert", "programs/grid.frag");
 
+    LogGLErrors("catalog load + scene seed + grid");
+
+    lastFrameTimeSeconds_ = juce::Time::getMillisecondCounterHiRes() / 1000.0;
     std::cout << "[render] newOpenGLContextCreated: done" << std::endl;
 }
 
@@ -219,10 +223,23 @@ void ViewportComponent::renderOpenGL() {
         return;
     }
 
+    const double nowSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+    const float deltaSeconds = static_cast<float>(nowSeconds - lastFrameTimeSeconds_);
+    lastFrameTimeSeconds_ = nowSeconds;
+    freeCamera_.Update(deltaSeconds, getScreenBounds());
+
     const float aspect = getHeight() > 0 ? static_cast<float>(getWidth()) / static_cast<float>(getHeight()) : 1.0f;
     camera_.SetPerspective(juce::MathConstants<float>::pi / 4.0f, aspect, 0.1f, 100.0f);
-    const juce::Vector3D<float> cameraPos{ 0.0f, 0.8f, 2.5f };
-    camera_.SetLookAt(cameraPos, { 0.0f, 0.0f, 0.0f });
+    const auto cameraPos = freeCamera_.Position();
+    camera_.SetLookAt(cameraPos, freeCamera_.Target());
+
+    if (gridProgram_ != nullptr) {
+        gridProgram_->use();
+        gridProgram_->setUniformMat4("uView", camera_.ViewMatrix().mat, 1, GL_FALSE);
+        gridProgram_->setUniformMat4("uProjection", camera_.ProjectionMatrix().mat, 1, GL_FALSE);
+        gridProgram_->setUniform("uColor", 0.2f, 0.24f, 0.32f);
+        gridRenderer_.Draw();
+    }
 
     // Snapshot the UI-editable light state once per frame under the lock,
     // then do all the (fast, non-blocking) GL uniform work below without
@@ -310,7 +327,12 @@ void ViewportComponent::openGLContextClosing() {
             material->InvalidateCache();
         }
     }
+    gridProgram_ = nullptr;
     shaderComposer_.reset();
+}
+
+void ViewportComponent::mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) {
+    freeCamera_.AdjustSpeed(wheel.deltaY);
 }
 
 } // namespace ce

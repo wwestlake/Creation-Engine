@@ -7,6 +7,8 @@
 #include "assets/VirtualFileSystem.h"
 #include "engine/world.h"
 #include "Render/Scene/Camera.h"
+#include "Render/Scene/FreeCamera.h"
+#include "Render/Scene/GridRenderer.h"
 #include "Render/Scene/Light.h"
 #include "Render/Scene/Material.h"
 #include "Render/Scene/Mesh.h"
@@ -24,7 +26,10 @@ namespace ce {
 // components composited in the same window/process as this viewport
 // (section 3.4) — see MainComponent for how they're arranged around it.
 //
-// Current state (SC1 of the scene-composition plan): draws every entity
+// Current state (SC2 of the scene-composition plan): a free-fly camera
+// (Source/Render/Scene/FreeCamera.h — hold right mouse + WASD/Q/E) over a
+// reference ground grid (GridRenderer), replacing the earlier fixed
+// SetLookAt. Draws every entity
 // in the shared ce::engine::World that has both a scene::Transform and a
 // scene::MeshRenderer component, instead of a fixed hardcoded model —
 // per spec section 1, placed objects are real entities in the same World
@@ -48,6 +53,7 @@ public:
 
     void paint(juce::Graphics&) override {}
     void resized() override {}
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override;
 
     void SetRoughness(float value);
     void SetMetallic(float value);
@@ -89,6 +95,10 @@ private:
     std::vector<PointLight> pointLights_{ PointLight{} };
 
     Camera camera_;
+    FreeCamera freeCamera_;
+    GridRenderer gridRenderer_;
+    juce::OpenGLShaderProgram* gridProgram_ = nullptr;
+    double lastFrameTimeSeconds_ = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ViewportComponent)
 };

@@ -53,6 +53,10 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Render/GL/Texture2D.cpp
     Source/Render/Scene/Camera.h
     Source/Render/Scene/Camera.cpp
+    Source/Render/Scene/FreeCamera.h
+    Source/Render/Scene/FreeCamera.cpp
+    Source/Render/Scene/GridRenderer.h
+    Source/Render/Scene/GridRenderer.cpp
     Source/Render/Scene/Vertex.h
     Source/Render/Scene/Mesh.h
     Source/Render/Scene/Mesh.cpp
