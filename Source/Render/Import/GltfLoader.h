@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <JuceHeader.h>
@@ -13,12 +14,36 @@ namespace ce {
 
 // One glTF mesh primitive as plain CPU-side geometry, ready for
 // Mesh::Upload. Only triangle-list primitives with POSITION/NORMAL/
-// TEXCOORD_0 are handled — the rest of the M4 scope (skinning, morph
-// targets, non-triangle topologies) is explicitly deferred.
+// TEXCOORD_0 are handled — morph targets and non-triangle topologies are
+// still deferred. JOINTS_0/WEIGHTS_0 are read into Vertex's
+// boneIndices/boneWeights when present (AI4) — see LoadedSkin below for
+// the bone hierarchy those indices refer to.
 struct LoadedPrimitive {
     std::vector<Vertex> vertices;
     std::vector<GLuint> indices;
     int materialIndex = -1; // index into LoadedModel::materials, -1 if none.
+};
+
+// One joint in a skin's bind pose. Everything a scene::Skeleton component
+// needs to both skin a mesh (inverseBindMatrix) and reconstruct the
+// hierarchy at any pose, bind or animated (parentIndex +
+// localBindTransform) — AI4 only ever displays the bind pose, but AI5's
+// animation playback needs the same hierarchy walked with animated local
+// transforms instead of these bind ones, so it's captured now rather
+// than re-parsing the glTF a second time later.
+struct LoadedJoint {
+    juce::String name;
+    int parentIndex = -1; // index into LoadedSkin::joints, or -1 for a root joint.
+    juce::Matrix3D<float> inverseBindMatrix; // mesh-space -> this joint's space, at bind pose.
+    juce::Matrix3D<float> localBindTransform; // this joint's transform relative to its parent, at bind pose.
+};
+
+// One glTF skin, flattened into a cache-friendly array (see LoadedJoint)
+// instead of the glTF node-graph representation cgltf hands back. Only
+// the first skin actually referenced by a mesh in the file is extracted
+// — multi-skin files are rare and out of scope for this pass.
+struct LoadedSkin {
+    std::vector<LoadedJoint> joints;
 };
 
 // A glTF material's PBR metallic-roughness inputs, translated into the
@@ -40,6 +65,7 @@ struct LoadedMaterial {
 struct LoadedModel {
     std::vector<LoadedPrimitive> primitives;
     std::vector<LoadedMaterial> materials;
+    std::optional<LoadedSkin> skin; // set only if some mesh in the file is actually skinned.
 };
 
 // Parses gltfFile (.gltf with a sibling .bin, or .glb) via cgltf and

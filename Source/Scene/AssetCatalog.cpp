@@ -93,6 +93,20 @@ bool AssetCatalog::AddFromModel(const juce::String& name, const LoadedModel& mod
         }
     }
 
+    std::shared_ptr<Skeleton> skeleton;
+    if (model.skin.has_value()) {
+        skeleton = std::make_shared<Skeleton>();
+        skeleton->joints.reserve(model.skin->joints.size());
+        for (const auto& loadedJoint : model.skin->joints) {
+            Skeleton::Joint joint;
+            joint.name = loadedJoint.name;
+            joint.parentIndex = loadedJoint.parentIndex;
+            joint.inverseBindMatrix = loadedJoint.inverseBindMatrix;
+            joint.localBindTransform = loadedJoint.localBindTransform;
+            skeleton->joints.push_back(std::move(joint));
+        }
+    }
+
     const std::lock_guard<std::mutex> lock(mutex_);
     if (texture != nullptr) {
         ownedTextures_.push_back(std::move(texture));
@@ -100,7 +114,7 @@ bool AssetCatalog::AddFromModel(const juce::String& name, const LoadedModel& mod
     if (assets_.find(name.toStdString()) == assets_.end()) {
         names_.push_back(name);
     }
-    assets_[name.toStdString()] = Asset{ mesh, material };
+    assets_[name.toStdString()] = Asset{ mesh, material, skeleton };
     return true;
 }
 

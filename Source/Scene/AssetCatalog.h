@@ -13,6 +13,7 @@
 #include "Render/Scene/Material.h"
 #include "Render/Scene/Mesh.h"
 #include "Render/Scene/Vertex.h"
+#include "Scene/Components.h"
 
 namespace ce {
 struct LoadedModel; // Render/Import/GltfLoader.h
@@ -48,6 +49,12 @@ public:
     struct Asset {
         std::shared_ptr<Mesh> mesh;
         std::shared_ptr<Material> material;
+        // AI4: null unless the source model was skinned. Shared (not
+        // copied) across every placed instance of this asset the same
+        // way mesh/material already are -- the bind pose itself never
+        // differs per instance, only future per-instance animation
+        // playback state (AI5) would.
+        std::shared_ptr<Skeleton> skeleton;
     };
 
     // Loads the built-in demo set: a procedural cube, a procedural
@@ -55,11 +62,12 @@ public:
     // assets/packages/base.zip already mounted).
     void LoadBuiltins(assets::VirtualFileSystem& vfs);
 
-    // Builds a Mesh/Material (and texture, if the model has one) from
-    // already-parsed glTF data and registers it under `name`, overwriting
-    // any existing asset with that name. Only the first primitive is
-    // used, same limitation LoadBuiltins()' BoxTextured loading already
-    // has. Pass `vfs` when model's textures were resolved through it
+    // Builds a Mesh/Material (and texture/Skeleton, if the model has
+    // them) from already-parsed glTF data and registers it under `name`,
+    // overwriting any existing asset with that name. Only the first
+    // primitive is used, same limitation LoadBuiltins()' BoxTextured
+    // loading already has. Pass `vfs` when model's textures were
+    // resolved through it
     // (LoadGltfFromVfs populated LoadedMaterial::baseColorTextureVirtualPath);
     // leave it null for disk-resolved models (LoadGltf populated
     // baseColorTexturePath instead) -- mirrors LoadGltf/LoadGltfFromVfs's

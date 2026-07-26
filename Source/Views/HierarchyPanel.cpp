@@ -269,6 +269,14 @@ void HierarchyPanel::AddEntity(const juce::String& assetName) {
         registry.emplace<scene::MeshRenderer>(newEntity, scene::MeshRenderer{ asset.mesh, asset.material });
         registry.emplace<scene::SceneFlags>(newEntity, scene::SceneFlags{});
         registry.emplace<scene::Parent>(newEntity, scene::Parent{ parent });
+        if (asset.skeleton != nullptr) {
+            // Copied, not shared -- this entity owns an independent
+            // joint hierarchy from here on, which is what AI5/AI6's
+            // per-instance animation playback and pose editing actually
+            // want, unlike Mesh/Material where sharing GPU resources
+            // across instances is the whole point.
+            registry.emplace<scene::Skeleton>(newEntity, *asset.skeleton);
+        }
     }
 
     // Select before Refresh(), not after: Refresh()'s rebuild re-selects

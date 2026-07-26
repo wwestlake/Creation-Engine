@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <iostream>
+#include <unordered_map>
 #include <utility>
 
 #define CGLTF_IMPLEMENTATION
@@ -18,6 +19,52 @@ const cgltf_accessor* FindAttributeAccessor(const cgltf_primitive& primitive, cg
         }
     }
     return nullptr;
+}
+
+// Flattens one cgltf_skin's node-graph joints into LoadedSkin's
+// cache-friendly array. A joint's parentIndex only points at another
+// joint WITHIN this same skin -- if a joint's real glTF parent isn't
+// itself one of the skin's joints (e.g. it's the skeleton root sitting
+// just outside the joint list), it's treated as a root (-1) here, since
+// there's no other joint transform to compose it with anyway.
+LoadedSkin ExtractSkin(const cgltf_skin& skin) {
+    LoadedSkin loadedSkin;
+    loadedSkin.joints.reserve(skin.joints_count);
+
+    std::unordered_map<const cgltf_node*, int> jointIndexByNode;
+    for (cgltf_size j = 0; j < skin.joints_count; ++j) {
+        jointIndexByNode[skin.joints[j]] = static_cast<int>(j);
+    }
+
+    for (cgltf_size j = 0; j < skin.joints_count; ++j) {
+        const cgltf_node* node = skin.joints[j];
+        LoadedJoint joint;
+        joint.name = node->name != nullptr ? juce::String(node->name) : ("Joint" + juce::String(static_cast<int>(j)));
+
+        if (node->parent != nullptr) {
+            const auto it = jointIndexByNode.find(node->parent);
+            if (it != jointIndexByNode.end()) {
+                joint.parentIndex = it->second;
+            }
+        }
+
+        float localMatrix[16];
+        cgltf_node_transform_local(node, localMatrix);
+        joint.localBindTransform = juce::Matrix3D<float>(localMatrix);
+
+        loadedSkin.joints.push_back(joint);
+    }
+
+    if (skin.inverse_bind_matrices != nullptr) {
+        const cgltf_size count = juce::jmin(skin.joints_count, skin.inverse_bind_matrices->count);
+        for (cgltf_size j = 0; j < count; ++j) {
+            float inverseBindMatrix[16];
+            cgltf_accessor_read_float(skin.inverse_bind_matrices, j, inverseBindMatrix, 16);
+            loadedSkin.joints[j].inverseBindMatrix = juce::Matrix3D<float>(inverseBindMatrix);
+        }
+    }
+
+    return loadedSkin;
 }
 
 // Extracts materials (with baseColorTextureUri left for the caller to
@@ -80,6 +127,8 @@ void ExtractModel(const cgltf_data& data, LoadedModel& outModel, std::vector<juc
             }
             const cgltf_accessor* normalAccessor = FindAttributeAccessor(primitive, cgltf_attribute_type_normal);
             const cgltf_accessor* uvAccessor = FindAttributeAccessor(primitive, cgltf_attribute_type_texcoord);
+            const cgltf_accessor* jointsAccessor = FindAttributeAccessor(primitive, cgltf_attribute_type_joints);
+            const cgltf_accessor* weightsAccessor = FindAttributeAccessor(primitive, cgltf_attribute_type_weights);
 
             LoadedPrimitive loaded;
             loaded.vertices.resize(positionAccessor->count);
@@ -107,6 +156,31 @@ void ExtractModel(const cgltf_data& data, LoadedModel& outModel, std::vector<juc
                     vertex.uv[0] = uv[0];
                     vertex.uv[1] = uv[1];
                 }
+
+                // JOINTS_0 is always an unsigned byte/short index per the
+                // glTF spec (never float, never normalized) -- read_uint
+                // is the semantically correct accessor for it, unlike
+                // read_float's implicit int->float conversion elsewhere
+                // in this function. WEIGHTS_0 genuinely is a float (or a
+                // normalized ubyte/ushort spec allows too, which
+                // read_float also converts correctly).
+                if (jointsAccessor != nullptr) {
+                    cgltf_uint joints[4] = { 0, 0, 0, 0 };
+                    cgltf_accessor_read_uint(jointsAccessor, v, joints, 4);
+                    vertex.boneIndices[0] = static_cast<float>(joints[0]);
+                    vertex.boneIndices[1] = static_cast<float>(joints[1]);
+                    vertex.boneIndices[2] = static_cast<float>(joints[2]);
+                    vertex.boneIndices[3] = static_cast<float>(joints[3]);
+                }
+
+                if (weightsAccessor != nullptr) {
+                    float weights[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+                    cgltf_accessor_read_float(weightsAccessor, v, weights, 4);
+                    vertex.boneWeights[0] = weights[0];
+                    vertex.boneWeights[1] = weights[1];
+                    vertex.boneWeights[2] = weights[2];
+                    vertex.boneWeights[3] = weights[3];
+                }
             }
 
             if (primitive.indices != nullptr) {
@@ -126,6 +200,19 @@ void ExtractModel(const cgltf_data& data, LoadedModel& outModel, std::vector<juc
             }
 
             outModel.primitives.push_back(std::move(loaded));
+        }
+    }
+
+    // Skins are attached to nodes, not meshes/primitives -- find the
+    // first node that actually uses one and extract just that skin.
+    // Multiple distinct skeletons in one file is a real glTF capability
+    // but not one anything in this engine needs yet.
+    for (cgltf_size nodeIndex = 0; nodeIndex < data.nodes_count; ++nodeIndex) {
+        const cgltf_node& node = data.nodes[nodeIndex];
+        if (node.skin != nullptr) {
+            outModel.skin = ExtractSkin(*node.skin);
+            std::cout << "[gltf] extracted skin: " << outModel.skin->joints.size() << " joint(s)" << std::endl;
+            break;
         }
     }
 }

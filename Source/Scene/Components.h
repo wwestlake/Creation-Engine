@@ -1,7 +1,9 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 
+#include <entt/entt.hpp>
 #include <JuceHeader.h>
 
 #include "Render/Scene/Material.h"
@@ -63,6 +65,32 @@ struct Folder {};
 struct SceneFlags {
     bool visible = true; // false: ViewportComponent skips drawing this entity.
     bool locked = false; // true: this entity can't be reparented (or, once SC4 exists, transform-edited) in the editor.
+};
+
+// AI4: a skinned mesh's bind-pose skeleton, flattened into a
+// cache-friendly array rather than the node-graph shape glTF (or any
+// other format) represents it as -- deliberately its own type, not a
+// reuse of Render/Import/GltfLoader.h's LoadedSkin/LoadedJoint, so this
+// component doesn't depend on which importer happened to produce it.
+// Attached alongside MeshRenderer on entities placed from a skinned
+// catalog asset (see AssetCatalog::AddFromModel); simply absent on
+// non-skinned entities, same "missing component = doesn't apply"
+// convention the rest of this file already uses.
+//
+// AI4 only ever displays the bind pose (localBindTransform as-is, no
+// animation). AI5's animation playback will walk the same parentIndex
+// hierarchy but compose ANIMATED local transforms instead of these bind
+// ones -- inverseBindMatrix is what makes either pose actually skin the
+// mesh correctly (mesh-space -> joint-space at bind time, composed with
+// the joint's current -- bind or animated -- world matrix).
+struct Skeleton {
+    struct Joint {
+        juce::String name;
+        int parentIndex = -1; // index into Skeleton::joints, or -1 for a root joint.
+        juce::Matrix3D<float> inverseBindMatrix;
+        juce::Matrix3D<float> localBindTransform;
+    };
+    std::vector<Joint> joints;
 };
 
 } // namespace ce::scene
