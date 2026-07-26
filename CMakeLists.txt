@@ -1,40 +1,92 @@
-cmake_minimum_required(VERSION 3.20)
-project(CreationEngine LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.22)
+
+set(CREATION_ENGINE_VERSION "0.0.1" CACHE STRING "Creation Engine product version")
+project(CreationEngine VERSION ${CREATION_ENGINE_VERSION} LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+if(NOT DEFINED JUCE_DIR)
+    message(FATAL_ERROR "Set JUCE_DIR to your JUCE root directory before configuring (same JUCE checkout Creation Station uses).")
 endif()
 
-# --- Third-party dependencies -----------------------------------------
-# bgfx.cmake vendors bgfx/bx/bimg together and provides CMake targets
-# (bgfx, bx, bimg) plus shader-compilation helpers.
-set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(BGFX_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
-set(BGFX_INSTALL OFF CACHE BOOL "" FORCE)
-add_subdirectory(third_party/bgfx.cmake)
-
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-add_subdirectory(third_party/glfw)
-
+add_subdirectory("${JUCE_DIR}" juce)
 add_subdirectory(third_party/entt)
 
-add_library(imgui STATIC
-    third_party/imgui/imgui.cpp
-    third_party/imgui/imgui_draw.cpp
-    third_party/imgui/imgui_tables.cpp
-    third_party/imgui/imgui_widgets.cpp
-    third_party/imgui/imgui_demo.cpp
-)
-target_include_directories(imgui PUBLIC third_party/imgui)
+# --- Shared, framework-agnostic libraries --------------------------------
+add_subdirectory(NodeSystem)
+add_subdirectory(EngineCore)
 
-# --- Engine subsystems ---------------------------------------------------
-add_subdirectory(node_system)
-add_subdirectory(engine)
-add_subdirectory(editor)
-add_subdirectory(server)
+# --- Client / editor executable ------------------------------------------
+# Per spec section 1, the editor and the runtime are the same binary in
+# different modes — not a separate desktop app talking to the game over a
+# socket.
+juce_add_gui_app(CreationEngineEditor
+    PRODUCT_NAME "Creation Engine"
+    COMPANY_NAME "LagDaemon Software"
+    BUNDLE_ID "com.lagdaemon.creationengine"
+)
+
+juce_generate_juce_header(CreationEngineEditor)
+
+target_sources(CreationEngineEditor PRIVATE
+    Source/Main.cpp
+    Source/MainComponent.h
+    Source/MainComponent.cpp
+    Source/Render/ViewportComponent.h
+    Source/Render/ViewportComponent.cpp
+)
+
+target_include_directories(CreationEngineEditor PRIVATE Source)
+
+target_compile_definitions(CreationEngineEditor PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_OPENGL3=1
+    JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:CreationEngineEditor,JUCE_PRODUCT_NAME>"
+    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:CreationEngineEditor,JUCE_VERSION>"
+)
+
+target_link_libraries(CreationEngineEditor PRIVATE
+    engine_core
+    node_system
+    juce::juce_gui_extra
+    juce::juce_opengl
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_lto_flags
+    juce::juce_recommended_warning_flags
+)
+
+# --- Dedicated server executable ------------------------------------------
+# Headless build: no rendering, no client-only assets (spec section 6.2).
+# Only juce_core/juce_events for cross-platform utilities (threads, time,
+# argument parsing, logging) — never juce_gui_* or juce_opengl.
+juce_add_console_app(CreationEngineServer
+    PRODUCT_NAME "Creation Engine Server"
+    COMPANY_NAME "LagDaemon Software"
+    BUNDLE_ID "com.lagdaemon.creationengine.server"
+)
+
+juce_generate_juce_header(CreationEngineServer)
+
+target_sources(CreationEngineServer PRIVATE
+    Server/Source/Main.cpp
+)
+
+target_compile_definitions(CreationEngineServer PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:CreationEngineServer,JUCE_PRODUCT_NAME>"
+    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:CreationEngineServer,JUCE_VERSION>"
+)
+
+target_link_libraries(CreationEngineServer PRIVATE
+    engine_core
+    node_system
+    juce::juce_core
+    juce::juce_events
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_lto_flags
+    juce::juce_recommended_warning_flags
+)
