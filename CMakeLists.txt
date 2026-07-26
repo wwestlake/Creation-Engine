@@ -97,6 +97,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Import/Importers/GltfAssetImporter.cpp
     Source/Import/Importers/AudioAssetImporter.h
     Source/Import/Importers/AudioAssetImporter.cpp
+    Source/Import/Importers/TextureAssetImporter.h
+    Source/Import/Importers/TextureAssetImporter.cpp
     Source/Audio/AudioCatalog.h
     Source/Audio/AudioCatalog.cpp
     Source/Audio/AudioPreviewPlayer.h

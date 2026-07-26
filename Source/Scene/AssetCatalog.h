@@ -68,6 +68,19 @@ public:
     // need to hop via OpenGLContext::executeOnGLThread first.
     bool AddFromModel(const juce::String& name, const LoadedModel& model, assets::VirtualFileSystem* vfs = nullptr);
 
+    // Registers an already-built mesh/material pair under `name`,
+    // overwriting any existing asset with that name -- the generic
+    // primitive AddProcedural/AddFromModel are themselves effectively
+    // built on top of. For an importer that just needs "here's a Mesh
+    // and Material, please track them" (e.g. TextureAssetImporter, which
+    // reuses a stock cube mesh rather than parsing one), this skips the
+    // model-parsing-specific machinery those two carry. Pass
+    // ownedTexture when the caller built a new Texture2D for this asset
+    // -- ownership transfers to the catalog (same as AddFromModel's own
+    // textures), and material->albedoTexture should already point at it.
+    bool Add(const juce::String& name, std::shared_ptr<Mesh> mesh, std::shared_ptr<Material> material,
+             std::unique_ptr<gl::Texture2D> ownedTexture = nullptr);
+
     // Returns a copy (two shared_ptr refcount bumps, cheap) rather than a
     // pointer/reference into assets_ -- a concurrent AddFromModel() call
     // re-importing the same name would otherwise be free to overwrite the
@@ -80,6 +93,7 @@ private:
     void AddProcedural(const juce::String& name, const std::vector<Vertex>& vertices,
                         const std::vector<GLuint>& indices, juce::Vector3D<float> albedo);
 
+    bool hasLoadedBuiltins_ = false;
     mutable std::mutex mutex_;
     std::vector<std::unique_ptr<gl::Texture2D>> ownedTextures_;
     std::unordered_map<std::string, Asset> assets_;

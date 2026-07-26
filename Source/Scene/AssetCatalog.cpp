@@ -18,11 +18,25 @@ void AssetCatalog::AddProcedural(const juce::String& name, const std::vector<Ver
     material->roughness = 0.6f;
 
     const std::lock_guard<std::mutex> lock(mutex_);
-    assets_.emplace(name.toStdString(), Asset{ mesh, material });
-    names_.push_back(name);
+    if (assets_.find(name.toStdString()) == assets_.end()) {
+        names_.push_back(name);
+    }
+    assets_[name.toStdString()] = Asset{ mesh, material };
 }
 
 void AssetCatalog::LoadBuiltins(assets::VirtualFileSystem& vfs) {
+    // Guards against a GL context recreation (e.g. the window moving to
+    // a monitor with a different pixel format) re-running this: without
+    // it, every procedural Mesh this builds a second time would be a
+    // real GPU-resource leak (uploaded, then immediately orphaned, since
+    // re-registering under the same name just replaces the catalog
+    // entry) -- same class of bug ViewportComponent::hasSeededDemoScene_
+    // already guards against for the demo entity.
+    if (hasLoadedBuiltins_) {
+        return;
+    }
+    hasLoadedBuiltins_ = true;
+
     std::vector<Vertex> cubeVertices;
     std::vector<GLuint> cubeIndices;
     GenerateCube(cubeVertices, cubeIndices);
@@ -87,6 +101,23 @@ bool AssetCatalog::AddFromModel(const juce::String& name, const LoadedModel& mod
         names_.push_back(name);
     }
     assets_[name.toStdString()] = Asset{ mesh, material };
+    return true;
+}
+
+bool AssetCatalog::Add(const juce::String& name, std::shared_ptr<Mesh> mesh, std::shared_ptr<Material> material,
+                        std::unique_ptr<gl::Texture2D> ownedTexture) {
+    if (mesh == nullptr || material == nullptr) {
+        return false;
+    }
+
+    const std::lock_guard<std::mutex> lock(mutex_);
+    if (ownedTexture != nullptr) {
+        ownedTextures_.push_back(std::move(ownedTexture));
+    }
+    if (assets_.find(name.toStdString()) == assets_.end()) {
+        names_.push_back(name);
+    }
+    assets_[name.toStdString()] = Asset{ std::move(mesh), std::move(material) };
     return true;
 }
 

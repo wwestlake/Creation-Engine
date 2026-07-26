@@ -72,7 +72,9 @@ private:
     juce::String currentlyPlayingName_;
 
     juce::Label titleLabel_{ {}, "Import" };
-    juce::Label dropZoneLabel_{ {}, "Drag files here to import\n(currently: glTF/GLB models, WAV/AIFF/FLAC audio)" };
+    juce::Label dropZoneLabel_{ {},
+                                 "Drag files here to import\n(currently: glTF/GLB models, WAV/AIFF/FLAC audio, "
+                                 "PNG/JPG/TGA/BMP/HDR textures)" };
     juce::TextEditor log_;
 
     juce::Label audioClipsLabel_{ {}, "Audio Clips" };
