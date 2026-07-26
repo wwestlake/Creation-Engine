@@ -85,9 +85,16 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/HierarchyPanel.cpp
     Source/Views/TransformPanel.h
     Source/Views/TransformPanel.cpp
+    Source/Views/ImportPanel.h
+    Source/Views/ImportPanel.cpp
     Source/Scene/Components.h
     Source/Scene/AssetCatalog.h
     Source/Scene/AssetCatalog.cpp
+    Source/Import/AssetImporter.h
+    Source/Import/ImporterRegistry.h
+    Source/Import/ImporterRegistry.cpp
+    Source/Import/Importers/GltfAssetImporter.h
+    Source/Import/Importers/GltfAssetImporter.cpp
 )
 
 target_include_directories(CreationEngineEditor PRIVATE Source third_party)

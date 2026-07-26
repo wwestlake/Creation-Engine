@@ -1,7 +1,11 @@
 #include "MainComponent.h"
 
 MainComponent::MainComponent()
-    : viewport_(world_), hierarchyPanel_(world_, viewport_), transformPanel_(world_), lightPanel_(viewport_) {
+    : viewport_(world_),
+      hierarchyPanel_(world_, viewport_),
+      transformPanel_(world_),
+      importPanel_(world_, viewport_),
+      lightPanel_(viewport_) {
     addAndMakeVisible(transportBar_);
     transportBar_.onPlay = [this] { SetPlaying(true); };
     transportBar_.onPause = [this] { SetPlaying(false); };
@@ -45,7 +49,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(lightPanel_);
 
     addAndMakeVisible(materialsPanel_);
-    addAndMakeVisible(assetsPanel_);
+    addAndMakeVisible(importPanel_);
     addAndMakeVisible(serverPanel_);
     addAndMakeVisible(settingsPanel_);
 
@@ -96,7 +100,7 @@ void MainComponent::resized() {
     viewport_.setBounds(sceneArea);
 
     materialsPanel_.setBounds(contentArea);
-    assetsPanel_.setBounds(contentArea);
+    importPanel_.setBounds(contentArea);
     serverPanel_.setBounds(contentArea);
     settingsPanel_.setBounds(contentArea);
 }
@@ -117,7 +121,7 @@ void MainComponent::SetActiveMode(ce::WorkspaceMode mode) {
     lightPanel_.setVisible(showScene);
 
     materialsPanel_.setVisible(mode == ce::WorkspaceMode::Materials);
-    assetsPanel_.setVisible(mode == ce::WorkspaceMode::Assets);
+    importPanel_.setVisible(mode == ce::WorkspaceMode::Assets);
     serverPanel_.setVisible(mode == ce::WorkspaceMode::Server);
     settingsPanel_.setVisible(mode == ce::WorkspaceMode::Settings);
 }

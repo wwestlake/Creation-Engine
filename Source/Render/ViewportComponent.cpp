@@ -137,8 +137,8 @@ void ViewportComponent::SeedDemoScene() {
     }
     hasSeededDemoScene_ = true;
 
-    const auto* asset = assetCatalog_.Find("BoxTextured");
-    if (asset == nullptr) {
+    const auto asset = assetCatalog_.Find("BoxTextured");
+    if (asset.mesh == nullptr) {
         std::cout << "[scene] BoxTextured not in catalog; demo scene will be empty." << std::endl;
         return;
     }
@@ -147,7 +147,7 @@ void ViewportComponent::SeedDemoScene() {
     const auto entity = world_.CreateEntity();
     world_.Registry().emplace<scene::Name>(entity, scene::Name{ "Box" });
     world_.Registry().emplace<scene::Transform>(entity, scene::Transform{});
-    world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ asset->mesh, asset->material });
+    world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ asset.mesh, asset.material });
     world_.Registry().emplace<scene::SceneFlags>(entity, scene::SceneFlags{});
     demoEntity_ = entity;
 
@@ -157,6 +157,10 @@ void ViewportComponent::SeedDemoScene() {
 juce::Vector3D<float> ViewportComponent::SpawnPosition(float distance) const {
     const juce::ScopedLock lock(stateLock_);
     return lastCameraPosition_ + lastCameraForward_ * distance;
+}
+
+void ViewportComponent::RunOnGLThread(std::function<void()> work, bool blockUntilFinished) {
+    openGLContext_.executeOnGLThread([work = std::move(work)](juce::OpenGLContext&) { work(); }, blockUntilFinished);
 }
 
 void ViewportComponent::ResetDemoEntityTransform() {

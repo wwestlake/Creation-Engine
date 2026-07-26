@@ -6,6 +6,7 @@
 #include "node_system/graph.h"
 #include "Render/ViewportComponent.h"
 #include "Views/HierarchyPanel.h"
+#include "Views/ImportPanel.h"
 #include "Views/LightPanel.h"
 #include "Views/PlaceholderPanel.h"
 #include "Views/TransformPanel.h"
@@ -63,9 +64,13 @@ private:
 
     ce::LightPanel lightPanel_;
 
+    // AI1: Import Hub -- real panel, not a placeholder. Declared after
+    // viewport_ (like hierarchyPanel_ above) since its constructor also
+    // needs a fully-constructed ViewportComponent&.
+    ce::ImportPanel importPanel_;
+
     // --- Other modes: stand-ins until their milestones land ---
     ce::PlaceholderPanel materialsPanel_ { "Materials", "Node-based material editor - coming soon" };
-    ce::PlaceholderPanel assetsPanel_ { "Assets", "Asset catalog / VFS browser - coming soon" };
     ce::PlaceholderPanel serverPanel_ { "Server", "Dedicated server operational view - coming soon" };
     ce::PlaceholderPanel settingsPanel_ { "Settings", "Application settings - coming soon" };
 

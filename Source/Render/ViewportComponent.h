@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <limits>
 #include <memory>
 
@@ -81,11 +82,14 @@ public:
     // instead of just freezing the tick counter.
     void ResetDemoEntityTransform();
 
-    // Read-only catalog access for SC5's "+ Add" menu (HierarchyPanel) to
-    // list/look up placeable assets. Safe to call from the message thread
-    // without a lock: LoadBuiltins() populates it once during
-    // newOpenGLContextCreated() and nothing ever mutates it afterward.
+    // Catalog access for SC5's "+ Add" menu (HierarchyPanel) to list/look
+    // up placeable assets, and for Source/Import's importers to register
+    // newly-imported ones. Safe to call from any thread without an
+    // external lock -- AssetCatalog guards its own state internally (see
+    // its own header comment) precisely because it's no longer just
+    // populated once at startup.
     const scene::AssetCatalog& Catalog() const { return assetCatalog_; }
+    scene::AssetCatalog& Catalog() { return assetCatalog_; }
 
     // A point `distance` units in front of the free camera, for SC5's
     // "place a new entity where I'm looking" — reads the snapshot taken
@@ -93,6 +97,13 @@ public:
     // freeCamera_ directly, since freeCamera_'s position is only safe to
     // touch from the render thread.
     juce::Vector3D<float> SpawnPosition(float distance = 4.0f) const;
+
+    // Runs work that needs a current GL context (Mesh::Upload,
+    // Texture2D::Load*, ...) on the render thread, regardless of which
+    // thread calls RunOnGLThread itself. For the asset importers
+    // (Source/Import): a drag-and-drop lands on the message thread, but
+    // building GPU resources for the imported asset can't happen there.
+    void RunOnGLThread(std::function<void()> work, bool blockUntilFinished);
 
 private:
     void newOpenGLContextCreated() override;
