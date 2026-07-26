@@ -81,6 +81,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/PlaceholderPanel.cpp
     Source/Views/HierarchyPanel.h
     Source/Views/HierarchyPanel.cpp
+    Source/Views/TransformPanel.h
+    Source/Views/TransformPanel.cpp
     Source/Scene/Components.h
     Source/Scene/AssetCatalog.h
     Source/Scene/AssetCatalog.cpp

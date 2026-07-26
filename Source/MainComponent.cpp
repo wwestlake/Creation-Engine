@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 
-MainComponent::MainComponent() : hierarchyPanel_(world_), viewport_(world_), lightPanel_(viewport_) {
+MainComponent::MainComponent()
+    : hierarchyPanel_(world_), viewport_(world_), transformPanel_(world_), lightPanel_(viewport_) {
     addAndMakeVisible(transportBar_);
     transportBar_.onPlay = [this] { SetPlaying(true); };
     transportBar_.onPause = [this] { SetPlaying(false); };
@@ -15,6 +16,7 @@ MainComponent::MainComponent() : hierarchyPanel_(world_), viewport_(world_), lig
     viewModeBar_.onModeSelected = [this](ce::WorkspaceMode mode) { SetActiveMode(mode); };
 
     addAndMakeVisible(hierarchyPanel_);
+    hierarchyPanel_.onSelectionChanged = [this](entt::entity entity) { transformPanel_.SetSelectedEntity(entity); };
     addAndMakeVisible(viewport_);
 
     inspectorTitle_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
@@ -23,6 +25,8 @@ MainComponent::MainComponent() : hierarchyPanel_(world_), viewport_(world_), lig
 
     tickLabel_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
     addAndMakeVisible(tickLabel_);
+
+    addAndMakeVisible(transformPanel_);
 
     roughnessLabel_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
     addAndMakeVisible(roughnessLabel_);
@@ -77,6 +81,9 @@ void MainComponent::resized() {
     tickLabel_.setBounds(inspectorBounds.removeFromTop(24));
 
     inspectorBounds.removeFromTop(12);
+    transformPanel_.setBounds(inspectorBounds.removeFromTop(ce::TransformPanel::kPreferredHeight));
+
+    inspectorBounds.removeFromTop(12);
     roughnessLabel_.setBounds(inspectorBounds.removeFromTop(18));
     roughnessSlider_.setBounds(inspectorBounds.removeFromTop(24));
     inspectorBounds.removeFromTop(8);
@@ -102,6 +109,7 @@ void MainComponent::SetActiveMode(ce::WorkspaceMode mode) {
     viewport_.setVisible(showScene);
     inspectorTitle_.setVisible(showScene);
     tickLabel_.setVisible(showScene);
+    transformPanel_.setVisible(showScene);
     roughnessLabel_.setVisible(showScene);
     roughnessSlider_.setVisible(showScene);
     metallicLabel_.setVisible(showScene);
@@ -126,4 +134,5 @@ void MainComponent::timerCallback() {
     }
     tickLabel_.setText("tick " + juce::String(world_.CurrentTick()), juce::dontSendNotification);
     hierarchyPanel_.Refresh();
+    transformPanel_.Refresh();
 }

@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <mutex>
+#include <vector>
 
 #include <JuceHeader.h>
 
@@ -29,11 +30,15 @@ namespace ce {
 // ViewportComponent's render thread concurrently iterates/mutates the
 // same registry every frame — takes world_.RegistryMutex() for exactly
 // that reason (see World's own header comment for why this lock exists
-// and who else has to use it). The tree is rebuilt from scratch on every
-// Refresh() call (simplest correct option while entity counts are
-// small), but open/selected state is captured before the rebuild and
-// reapplied after by matching entt::entity ids, so expanding a folder
-// doesn't fight the next refresh tick.
+// and who else has to use it). MainComponent calls Refresh() on every
+// 30Hz timer tick (so it notices entities appearing/changing from
+// elsewhere), so the tree is only actually torn down and rebuilt when
+// the snapshot read this call differs from the previous one — rebuilding
+// unconditionally every tick was measured to occasionally destroy and
+// recreate the TreeViewItem/RowComponent a click had just landed on,
+// silently eating the click. Open/selected state is still captured
+// before a real rebuild and reapplied after by matching entt::entity
+// ids, so expanding a folder doesn't fight the next refresh tick.
 class HierarchyPanel final : public juce::Component,
                               private juce::DragAndDropContainer {
 public:
@@ -54,6 +59,26 @@ private:
     friend class EntityTreeItem;
     friend class RowComponent;
 
+    // One row's worth of state as read from the registry, snapshotted
+    // under the lock each Refresh() call — also doubles as a cheap
+    // "did anything actually change" comparison against the previous
+    // snapshot, so Refresh() can skip the teardown-and-rebuild when
+    // nothing did (see class comment above for why that matters).
+    struct NodeInfo {
+        entt::entity entity;
+        juce::String name;
+        bool isFolder;
+        bool visible;
+        bool locked;
+        entt::entity parent;
+
+        bool operator==(const NodeInfo& other) const {
+            return entity == other.entity && name == other.name && isFolder == other.isFolder &&
+                   visible == other.visible && locked == other.locked && parent == other.parent;
+        }
+        bool operator!=(const NodeInfo& other) const { return !(*this == other); }
+    };
+
     void NotifySelected(entt::entity entity);
     void CreateFolder();
 
@@ -73,6 +98,7 @@ private:
 
     entt::entity selectedEntity_ = entt::null;
     int nextFolderNumber_ = 1;
+    std::vector<NodeInfo> lastSnapshot_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(HierarchyPanel)
 };

@@ -98,6 +98,16 @@ public:
         return std::make_unique<RowComponent>(owner_, entity_, name_, isFolder_, visible_, locked_);
     }
 
+    // Without this, JUCE's own doc comment on the base declaration says a
+    // custom item component "consume[s] all mouse clicks" — verified the
+    // hard way: without this override, clicking a row did nothing at all
+    // (no selection, no drag) because TreeView only wires up its built-in
+    // mouse handling (selection, itemClicked, drag-and-drop) when this
+    // returns true. Button clicks inside RowComponent still work
+    // normally alongside it; this only adds a listener, it doesn't divert
+    // the click away from its actual target.
+    bool customComponentUsesTreeViewMouseHandler() const override { return true; }
+
     void itemSelectionChanged(bool isNowSelected) override {
         if (isNowSelected) {
             owner_.NotifySelected(entity_);
@@ -264,31 +274,6 @@ void HierarchyPanel::SetLocked(entt::entity entity, bool locked) {
 void HierarchyPanel::Refresh() {
     using RawEntity = std::underlying_type_t<entt::entity>;
 
-    // Capture which folders are open and what's selected before the tree
-    // gets torn down and rebuilt from scratch below.
-    std::vector<RawEntity> openIds;
-    std::function<void(juce::TreeViewItem*)> captureOpen = [&](juce::TreeViewItem* item) {
-        for (int i = 0; i < item->getNumSubItems(); ++i) {
-            auto* child = item->getSubItem(i);
-            if (child->isOpen()) {
-                openIds.push_back(entt::to_integral(static_cast<EntityTreeItem*>(child)->EntityId()));
-            }
-            captureOpen(child);
-        }
-    };
-    if (rootItem_ != nullptr) {
-        captureOpen(rootItem_.get());
-    }
-    const entt::entity previousSelection = selectedEntity_;
-
-    struct NodeInfo {
-        entt::entity entity;
-        juce::String name;
-        bool isFolder;
-        bool visible;
-        bool locked;
-        entt::entity parent;
-    };
     std::vector<NodeInfo> nodes;
     {
         std::lock_guard<std::mutex> lock(world_.RegistryMutex());
@@ -314,6 +299,33 @@ void HierarchyPanel::Refresh() {
             nodes.push_back(std::move(info));
         }
     }
+
+    // Called on every 30Hz timer tick (see class comment for why) — most
+    // of those ticks see the exact same scene, so bail out before
+    // touching the TreeView at all when nothing did. This is also what
+    // makes it safe for something else to have clicked/dragged a row in
+    // between calls: a no-op Refresh() can never race that.
+    if (nodes == lastSnapshot_) {
+        return;
+    }
+    lastSnapshot_ = nodes;
+
+    // Capture which folders are open and what's selected before the tree
+    // gets torn down and rebuilt from scratch below.
+    std::vector<RawEntity> openIds;
+    std::function<void(juce::TreeViewItem*)> captureOpen = [&](juce::TreeViewItem* item) {
+        for (int i = 0; i < item->getNumSubItems(); ++i) {
+            auto* child = item->getSubItem(i);
+            if (child->isOpen()) {
+                openIds.push_back(entt::to_integral(static_cast<EntityTreeItem*>(child)->EntityId()));
+            }
+            captureOpen(child);
+        }
+    };
+    if (rootItem_ != nullptr) {
+        captureOpen(rootItem_.get());
+    }
+    const entt::entity previousSelection = selectedEntity_;
 
     std::unordered_map<RawEntity, std::vector<const NodeInfo*>> childrenByParent;
     for (const auto& node : nodes) {

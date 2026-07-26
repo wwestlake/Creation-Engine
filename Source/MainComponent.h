@@ -8,6 +8,7 @@
 #include "Views/HierarchyPanel.h"
 #include "Views/LightPanel.h"
 #include "Views/PlaceholderPanel.h"
+#include "Views/TransformPanel.h"
 #include "Views/TransportBar.h"
 #include "Views/ViewModeBar.h"
 
@@ -47,6 +48,8 @@ private:
     ce::ViewportComponent viewport_;
     juce::Label inspectorTitle_ { {}, "Inspector" };
     juce::Label tickLabel_;
+
+    ce::TransformPanel transformPanel_;
 
     juce::Label roughnessLabel_ { {}, "Roughness" };
     juce::Slider roughnessSlider_ { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };

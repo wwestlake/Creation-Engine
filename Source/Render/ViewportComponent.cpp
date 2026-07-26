@@ -267,16 +267,23 @@ void ViewportComponent::renderOpenGL() {
     // without this lock.
     const std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
 
-    // Demo-only: spins every placed entity's Transform based on the
+    // Demo-only: spins the seeded demo entity's Transform based on the
     // World's tick count rather than wall-clock time, so the spin
     // actually stops when the transport is paused/stopped (World::
     // AdvanceTick() is gated on play state in MainComponent's timer) —
-    // an editor "playing" a paused simulation should look paused.
-    {
-        const float spinRadians = 0.5f * (static_cast<float>(world_.CurrentTick()) / 30.0f);
-        auto view = world_.Registry().view<scene::Transform>();
-        for (auto entity : view) {
-            view.get<scene::Transform>(entity).eulerRotationRadians.y = spinRadians;
+    // an editor "playing" a paused simulation should look paused. Only
+    // writes when the tick has actually changed since the last frame
+    // (not unconditionally every frame): SC4's inspector edits the same
+    // Transform from the message thread, and an unconditional per-frame
+    // write here would stomp any edit made while paused right back to
+    // the spin value on the very next frame.
+    const auto currentTick = world_.CurrentTick();
+    if (currentTick != lastSpinTick_) {
+        lastSpinTick_ = currentTick;
+        if (demoEntity_ != entt::null && world_.Registry().valid(demoEntity_) &&
+            world_.Registry().all_of<scene::Transform>(demoEntity_)) {
+            const float spinRadians = 0.5f * (static_cast<float>(currentTick) / 30.0f);
+            world_.Registry().get<scene::Transform>(demoEntity_).eulerRotationRadians.y = spinRadians;
         }
     }
 
