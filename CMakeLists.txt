@@ -36,6 +36,12 @@ target_sources(CreationEngineEditor PRIVATE
     Source/MainComponent.cpp
     Source/Render/ViewportComponent.h
     Source/Render/ViewportComponent.cpp
+    Source/Render/GL/Buffer.h
+    Source/Render/GL/Buffer.cpp
+    Source/Render/GL/VertexArray.h
+    Source/Render/GL/VertexArray.cpp
+    Source/Render/Scene/Camera.h
+    Source/Render/Scene/Camera.cpp
 )
 
 target_include_directories(CreationEngineEditor PRIVATE Source)
