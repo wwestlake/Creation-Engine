@@ -8,11 +8,14 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
-#include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/TargetSelect.h>
 
-// This translation unit is the ONLY place in the whole project an
-// llvm/*.h header is allowed to appear -- see runtime.h's own comment.
+#include "module_builder.h"
+#include "optimizer.h"
+
+// This translation unit (and module_builder.cpp/optimizer.cpp alongside
+// it) are the only places in the whole project an llvm/*.h header is
+// allowed to appear -- see runtime.h's own comment.
 
 namespace ce::lang::jit {
 
@@ -95,18 +98,7 @@ bool Runtime::RunSelfTest() {
 
     // Run the real O2 pipeline over it -- proves PassBuilder integration
     // works, not just raw codegen.
-    llvm::PassBuilder passBuilder;
-    llvm::LoopAnalysisManager loopAM;
-    llvm::FunctionAnalysisManager functionAM;
-    llvm::CGSCCAnalysisManager cgsccAM;
-    llvm::ModuleAnalysisManager moduleAM;
-    passBuilder.registerModuleAnalyses(moduleAM);
-    passBuilder.registerCGSCCAnalyses(cgsccAM);
-    passBuilder.registerFunctionAnalyses(functionAM);
-    passBuilder.registerLoopAnalyses(loopAM);
-    passBuilder.crossRegisterProxies(loopAM, functionAM, cgsccAM, moduleAM);
-    auto modulePassManager = passBuilder.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2);
-    modulePassManager.run(*module, moduleAM);
+    RunOptimizationPasses(*module, /*optLevel=*/2);
 
     auto jitOrErr = llvm::orc::LLJITBuilder().create();
     if (!jitOrErr) {
@@ -160,6 +152,99 @@ bool Runtime::RunSelfTest() {
     std::cout << "[lang.jit] selftest: add(2,3)=" << addResult << " call_host(40,2)=" << callHostResult << std::endl;
 
     return addResult == 5 && callHostResult == 42;
+}
+
+ExecResult Runtime::CompileAndRun(Program& program, const std::string& entryPoint, int optLevel) {
+    // Find the entry point's declared return type before compiling, so
+    // we know which native function-pointer signature to invoke it
+    // through after JITing -- LLJIT's lookup() only gives back an
+    // address, not a type.
+    Type returnType = Type::Unknown;
+    bool found = false;
+    for (Decl* decl : program.decls) {
+        if (decl->kind == DeclKind::Func && decl->funcDecl->name == entryPoint) {
+            if (!decl->funcDecl->params.empty()) {
+                return ExecResult{ ResultKind::Error, 0, 0.0f, false,
+                                    "entry point '" + entryPoint + "' must take zero arguments" };
+            }
+            returnType = decl->funcDecl->returnType.empty() ? Type::Void : ParseTypeName(decl->funcDecl->returnType);
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        return ExecResult{ ResultKind::Error, 0, 0.0f, false, "no zero-argument function named '" + entryPoint + "'" };
+    }
+    if (returnType != Type::Int && returnType != Type::Float && returnType != Type::Bool && returnType != Type::Void) {
+        return ExecResult{ ResultKind::Error, 0, 0.0f, false,
+                            "entry point '" + entryPoint + "' returns " + std::string(ToString(returnType)) +
+                                ", which --run can't print (only int/float/bool/void are supported)" };
+    }
+
+    auto context = std::make_unique<llvm::LLVMContext>();
+    std::string buildError;
+    auto module = BuildModule(*context, "cel_module", program, buildError);
+    if (module == nullptr) {
+        return ExecResult{ ResultKind::Error, 0, 0.0f, false, buildError };
+    }
+
+    RunOptimizationPasses(*module, optLevel);
+
+    auto jitOrErr = llvm::orc::LLJITBuilder().create();
+    if (!jitOrErr) {
+        return ExecResult{ ResultKind::Error, 0, 0.0f, false, llvm::toString(jitOrErr.takeError()) };
+    }
+    impl_->lljit = std::move(*jitOrErr);
+
+    llvm::orc::ThreadSafeModule tsm(std::move(module), std::move(context));
+    if (auto err = impl_->lljit->addIRModule(std::move(tsm))) {
+        return ExecResult{ ResultKind::Error, 0, 0.0f, false, llvm::toString(std::move(err)) };
+    }
+
+    auto symOrErr = impl_->lljit->lookup(entryPoint);
+    if (!symOrErr) {
+        return ExecResult{ ResultKind::Error, 0, 0.0f, false, llvm::toString(symOrErr.takeError()) };
+    }
+
+    switch (returnType) {
+        case Type::Int: {
+            auto* fn = symOrErr->toPtr<int64_t (*)()>();
+            return ExecResult{ ResultKind::Int, fn(), 0.0f, false, {} };
+        }
+        case Type::Float: {
+            auto* fn = symOrErr->toPtr<float (*)()>();
+            return ExecResult{ ResultKind::Float, 0, fn(), false, {} };
+        }
+        case Type::Bool: {
+            // bool crosses the ABI as i1 in this pure-IR (no external
+            // call) path, which the C++ calling convention maps to
+            // native `bool` cleanly -- the "i32 at the ABI boundary"
+            // rule from the plan matters once GS5's extern "C" host
+            // trampolines are involved, not here.
+            auto* fn = symOrErr->toPtr<bool (*)()>();
+            return ExecResult{ ResultKind::Bool, 0, 0.0f, fn(), {} };
+        }
+        case Type::Void: {
+            auto* fn = symOrErr->toPtr<void (*)()>();
+            fn();
+            return ExecResult{ ResultKind::Void, 0, 0.0f, false, {} };
+        }
+        default:
+            return ExecResult{ ResultKind::Error, 0, 0.0f, false, "internal error: unreachable return type" };
+    }
+}
+
+std::string Runtime::EmitLLVMIR(Program& program) {
+    llvm::LLVMContext context;
+    std::string buildError;
+    auto module = BuildModule(context, "cel_module", program, buildError);
+    if (module == nullptr) {
+        return "error: " + buildError;
+    }
+    std::string ir;
+    llvm::raw_string_ostream stream(ir);
+    module->print(stream, nullptr);
+    return stream.str();
 }
 
 } // namespace ce::lang::jit

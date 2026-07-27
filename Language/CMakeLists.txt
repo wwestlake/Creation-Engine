@@ -49,6 +49,10 @@ llvm_map_components_to_libnames(CE_LLVM_LIBS core orcjit native)
 add_library(ce_lang_jit STATIC
     include/lang/jit/runtime.h
     src/jit/runtime.cpp
+    src/jit/optimizer.h
+    src/jit/optimizer.cpp
+    src/jit/module_builder.h
+    src/jit/module_builder.cpp
 )
 
 target_include_directories(ce_lang_jit
@@ -56,7 +60,11 @@ target_include_directories(ce_lang_jit
     PRIVATE ${LLVM_INCLUDE_DIRS}
 )
 target_compile_definitions(ce_lang_jit PRIVATE ${LLVM_DEFINITIONS} NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(ce_lang_jit PUBLIC ${CE_LLVM_LIBS})
+# PUBLIC: runtime.h (a public header of this target) includes lang/ast.h
+# since GS4's CompileAndRun takes a Program& directly -- ce_lang_frontend
+# stays LLVM-free either way (see its own comment), this just makes the
+# AST types visible to anything that includes runtime.h.
+target_link_libraries(ce_lang_jit PUBLIC ce_lang_frontend ${CE_LLVM_LIBS})
 target_compile_features(ce_lang_jit PUBLIC cxx_std_20)
 
 # Plain add_executable, deliberately NOT juce_add_console_app: this
@@ -133,5 +141,22 @@ foreach(test_file ${CE_CEL_SEMA_FAIL_TESTS})
                 -DTEST_CEL=${test_file}
                 -DEXPECT_CODE_FILE=${test_dir}/${test_name}.expect_code
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_sema_diag_test.cmake"
+    )
+endforeach()
+
+# GS4: Language/tests/exec/*.cel are real, hand-computed programs run
+# through `celc --run` at both -O0 and -O2 -- see run_exec_test.cmake
+# for why both, not just one.
+file(GLOB CE_CEL_EXEC_TESTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/exec/*.cel")
+foreach(test_file ${CE_CEL_EXEC_TESTS})
+    get_filename_component(test_name "${test_file}" NAME_WE)
+    get_filename_component(test_dir "${test_file}" DIRECTORY)
+    add_test(
+        NAME "gs4_exec_${test_name}"
+        COMMAND ${CMAKE_COMMAND}
+                -DCELC_EXE=$<TARGET_FILE:celc>
+                -DTEST_CEL=${test_file}
+                -DEXPECTED_FILE=${test_dir}/${test_name}.expected
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_exec_test.cmake"
     )
 endforeach()

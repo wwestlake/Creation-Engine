@@ -1,0 +1,670 @@
+#include "module_builder.h"
+
+#include <functional>
+#include <stdexcept>
+#include <unordered_map>
+#include <vector>
+
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/Function.h>
+#include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Intrinsics.h>
+#include <llvm/IR/Verifier.h>
+
+namespace ce::lang::jit {
+
+namespace {
+
+// Thrown for anything BuildModule doesn't (yet) support -- caught once,
+// at BuildModule's own top level, and turned into the errorOut string.
+// Purely an internal control-flow convenience for this translation
+// unit; never crosses into JIT'd code or an ABI boundary (the "no
+// exceptions across JIT frames" rule is about the *generated* code,
+// not the host-side compiler that generates it).
+struct CodegenError : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+// A single loop's break/continue targets, so nested loops each get
+// their own pair without threading them through every CodegenStmt call.
+struct LoopTargets {
+    llvm::BasicBlock* breakTarget;
+    llvm::BasicBlock* continueTarget;
+};
+
+class CodeGenerator {
+public:
+    CodeGenerator(llvm::LLVMContext& context, llvm::Module& module)
+        : context_(context), module_(module), builder_(context) {
+        vec3Type_ = llvm::StructType::get(context_, { builder_.getFloatTy(), builder_.getFloatTy(), builder_.getFloatTy() },
+                                           /*isPacked=*/false);
+    }
+
+    void Build(Program& program) {
+        DeclareFunctions(program);
+        DeclareGlobals(program);
+        for (Decl* decl : program.decls) {
+            if (decl->kind == DeclKind::Func) {
+                CodegenFunctionBody(*decl->funcDecl);
+            }
+        }
+
+        std::string verifyError;
+        llvm::raw_string_ostream verifyStream(verifyError);
+        if (llvm::verifyModule(module_, &verifyStream)) {
+            throw CodegenError("generated module failed verification: " + verifyStream.str());
+        }
+    }
+
+private:
+    // --- Types -----------------------------------------------------------
+
+    llvm::Type* MapType(Type t) {
+        switch (t) {
+            case Type::Int: return builder_.getInt64Ty();
+            case Type::Float: return builder_.getFloatTy();
+            case Type::Bool: return builder_.getInt1Ty();
+            case Type::Vec3: return vec3Type_;
+            case Type::Entity: return builder_.getInt64Ty();
+            case Type::Void: return builder_.getVoidTy();
+            case Type::String:
+            case Type::Unknown:
+                break;
+        }
+        throw CodegenError("internal error: cannot map type '" + std::string(ToString(t)) + "' to an LLVM type");
+    }
+
+    // --- Declarations ------------------------------------------------------
+
+    void DeclareFunctions(Program& program) {
+        for (Decl* decl : program.decls) {
+            if (decl->kind != DeclKind::Func) {
+                continue;
+            }
+            FuncDecl& f = *decl->funcDecl;
+            std::vector<llvm::Type*> paramTypes;
+            for (const Param& p : f.params) {
+                paramTypes.push_back(MapType(ParseTypeName(p.type)));
+            }
+            llvm::Type* returnType = MapType(f.returnType.empty() ? Type::Void : ParseTypeName(f.returnType));
+            auto* fnType = llvm::FunctionType::get(returnType, paramTypes, /*isVarArg=*/false);
+            auto* fn = llvm::Function::Create(fnType, llvm::Function::ExternalLinkage, f.name, module_);
+            fn->setDoesNotThrow();
+            functions_[f.name] = fn;
+        }
+    }
+
+    void DeclareGlobals(Program& program) {
+        for (Decl* decl : program.decls) {
+            if (decl->kind != DeclKind::Var) {
+                continue;
+            }
+            GlobalVarDecl& v = *decl->varDecl;
+            llvm::Constant* init = ConstantFold(*v.initExpr);
+            if (init == nullptr) {
+                throw CodegenError("global '" + v.name +
+                                    "' must be initialized with a literal constant (module-level globals with a "
+                                    "computed initializer are deferred to a later milestone)");
+            }
+            auto* gv = new llvm::GlobalVariable(module_, MapType(v.resolvedType), /*isConstant=*/false,
+                                                 llvm::GlobalValue::InternalLinkage, init, v.name);
+            globals_[v.name] = gv;
+        }
+    }
+
+    // Folds a literal-only expr (after sema's own const-folding, only
+    // compound literal arithmetic should ever reach here as a single
+    // literal node already, but this stays recursive in case a future
+    // milestone loosens that) into an llvm::Constant, or returns nullptr
+    // if it isn't one -- global initializers must be constants; DeclareGlobals
+    // reports a clear error rather than attempting general runtime
+    // initialization, which is out of this milestone's scope.
+    llvm::Constant* ConstantFold(const Expr& e) {
+        switch (e.kind) {
+            case ExprKind::IntLiteral: return llvm::ConstantInt::get(builder_.getInt64Ty(), static_cast<uint64_t>(e.intValue), true);
+            case ExprKind::FloatLiteral: return llvm::ConstantFP::get(builder_.getFloatTy(), e.floatValue);
+            case ExprKind::BoolLiteral: return llvm::ConstantInt::get(builder_.getInt1Ty(), e.boolValue ? 1 : 0);
+            default: return nullptr;
+        }
+    }
+
+    // --- Scopes (mirrors sema's own scope stack, one alloca per local) ----
+
+    void PushScope() { locals_.emplace_back(); }
+    void PopScope() { locals_.pop_back(); }
+
+    llvm::AllocaInst* LookupLocal(const std::string& name) const {
+        for (auto it = locals_.rbegin(); it != locals_.rend(); ++it) {
+            const auto found = it->find(name);
+            if (found != it->end()) {
+                return found->second;
+            }
+        }
+        return nullptr;
+    }
+
+    // Entry-block allocas: always inserted at the start of the current
+    // function's entry block regardless of where the builder's main
+    // insertion point currently is, so mem2reg/SROA can promote every
+    // local to an SSA register during optimization -- the pattern the
+    // GS scripting plan calls for explicitly.
+    llvm::AllocaInst* CreateEntryBlockAlloca(llvm::Function* fn, const std::string& name, llvm::Type* type) {
+        llvm::IRBuilder<> entryBuilder(&fn->getEntryBlock(), fn->getEntryBlock().begin());
+        return entryBuilder.CreateAlloca(type, nullptr, name);
+    }
+
+    // --- Functions ----------------------------------------------------
+
+    void CodegenFunctionBody(FuncDecl& f) {
+        llvm::Function* fn = functions_.at(f.name);
+        currentFunction_ = fn;
+        loopStack_.clear();
+
+        auto* entryBB = llvm::BasicBlock::Create(context_, "entry", fn);
+        builder_.SetInsertPoint(entryBB);
+
+        PushScope();
+        auto argIt = fn->arg_begin();
+        for (const Param& p : f.params) {
+            llvm::Argument* arg = &*argIt++;
+            arg->setName(p.name);
+            llvm::AllocaInst* alloca = CreateEntryBlockAlloca(fn, p.name, arg->getType());
+            builder_.CreateStore(arg, alloca);
+            locals_.back()[p.name] = alloca;
+        }
+
+        CodegenStmt(*f.body);
+
+        // sema's return-on-all-paths check guarantees a non-void function
+        // always hits an explicit `return` before falling off the end of
+        // its body -- so if the block the builder ends up in here still
+        // has no terminator, it can only be one of StartDeadBlock's
+        // never-branched-to blocks (created right after that explicit
+        // return/break/continue so the builder has *somewhere* valid to
+        // keep inserting into for any dead code textually after it).
+        // LLVM's verifier checks every block's terminator against the
+        // function's return type regardless of reachability, so a
+        // genuinely void function gets `ret void` here, but a non-void
+        // one needs `unreachable` -- there's no real value to return
+        // from code that can never execute, and `ret void` there would
+        // be a real type mismatch, not a formality.
+        if (builder_.GetInsertBlock()->getTerminator() == nullptr) {
+            if (fn->getReturnType()->isVoidTy()) {
+                builder_.CreateRetVoid();
+            } else {
+                builder_.CreateUnreachable();
+            }
+        }
+        PopScope();
+    }
+
+    // --- Statements ------------------------------------------------------
+
+    void CodegenStmt(Stmt& s) {
+        switch (s.kind) {
+            case StmtKind::Block: {
+                PushScope();
+                for (Stmt* child : s.statements) {
+                    CodegenStmt(*child);
+                }
+                PopScope();
+                return;
+            }
+            case StmtKind::VarDecl: {
+                llvm::Value* initVal = CodegenExpr(*s.initExpr);
+                llvm::AllocaInst* alloca = CreateEntryBlockAlloca(currentFunction_, s.name, MapType(s.resolvedType));
+                builder_.CreateStore(initVal, alloca);
+                locals_.back()[s.name] = alloca;
+                return;
+            }
+            case StmtKind::Assign: {
+                llvm::Value* value = CodegenExpr(*s.assignValue);
+                if (s.assignOp != AssignOp::Assign) {
+                    llvm::Value* current = CodegenExpr(*s.assignTarget);
+                    value = ApplyCompoundOp(s.assignOp, current, value, s.assignTarget->type);
+                }
+                StoreToLvalue(*s.assignTarget, value);
+                return;
+            }
+            case StmtKind::If: {
+                llvm::Value* cond = CodegenExpr(*s.condition);
+                auto* thenBB = llvm::BasicBlock::Create(context_, "then", currentFunction_);
+                auto* elseBB = llvm::BasicBlock::Create(context_, "else", currentFunction_);
+                auto* mergeBB = llvm::BasicBlock::Create(context_, "ifcont", currentFunction_);
+                builder_.CreateCondBr(cond, thenBB, elseBB);
+
+                builder_.SetInsertPoint(thenBB);
+                CodegenStmt(*s.thenBranch);
+                if (builder_.GetInsertBlock()->getTerminator() == nullptr) {
+                    builder_.CreateBr(mergeBB);
+                }
+
+                builder_.SetInsertPoint(elseBB);
+                if (s.elseBranch != nullptr) {
+                    CodegenStmt(*s.elseBranch);
+                }
+                if (builder_.GetInsertBlock()->getTerminator() == nullptr) {
+                    builder_.CreateBr(mergeBB);
+                }
+
+                builder_.SetInsertPoint(mergeBB);
+                return;
+            }
+            case StmtKind::While: {
+                auto* condBB = llvm::BasicBlock::Create(context_, "whilecond", currentFunction_);
+                auto* bodyBB = llvm::BasicBlock::Create(context_, "whilebody", currentFunction_);
+                auto* afterBB = llvm::BasicBlock::Create(context_, "whileafter", currentFunction_);
+                builder_.CreateBr(condBB);
+
+                builder_.SetInsertPoint(condBB);
+                llvm::Value* cond = CodegenExpr(*s.condition);
+                builder_.CreateCondBr(cond, bodyBB, afterBB);
+
+                builder_.SetInsertPoint(bodyBB);
+                loopStack_.push_back({ afterBB, condBB });
+                CodegenStmt(*s.body);
+                loopStack_.pop_back();
+                if (builder_.GetInsertBlock()->getTerminator() == nullptr) {
+                    builder_.CreateBr(condBB);
+                }
+
+                builder_.SetInsertPoint(afterBB);
+                return;
+            }
+            case StmtKind::For: {
+                PushScope();
+                if (s.forInit != nullptr) {
+                    CodegenStmt(*s.forInit);
+                }
+                auto* condBB = llvm::BasicBlock::Create(context_, "forcond", currentFunction_);
+                auto* bodyBB = llvm::BasicBlock::Create(context_, "forbody", currentFunction_);
+                auto* stepBB = llvm::BasicBlock::Create(context_, "forstep", currentFunction_);
+                auto* afterBB = llvm::BasicBlock::Create(context_, "forafter", currentFunction_);
+                builder_.CreateBr(condBB);
+
+                builder_.SetInsertPoint(condBB);
+                llvm::Value* cond = CodegenExpr(*s.forCond);
+                builder_.CreateCondBr(cond, bodyBB, afterBB);
+
+                builder_.SetInsertPoint(bodyBB);
+                // continue jumps to the step block, not straight back to
+                // the condition, so `continue` still runs the step --
+                // exactly like C's for-loop semantics.
+                loopStack_.push_back({ afterBB, stepBB });
+                CodegenStmt(*s.body);
+                loopStack_.pop_back();
+                if (builder_.GetInsertBlock()->getTerminator() == nullptr) {
+                    builder_.CreateBr(stepBB);
+                }
+
+                builder_.SetInsertPoint(stepBB);
+                if (s.forStep != nullptr) {
+                    CodegenStmt(*s.forStep);
+                }
+                builder_.CreateBr(condBB);
+
+                builder_.SetInsertPoint(afterBB);
+                PopScope();
+                return;
+            }
+            case StmtKind::Break:
+                builder_.CreateBr(loopStack_.back().breakTarget);
+                StartDeadBlock("afterbreak");
+                return;
+            case StmtKind::Continue:
+                builder_.CreateBr(loopStack_.back().continueTarget);
+                StartDeadBlock("aftercontinue");
+                return;
+            case StmtKind::Return:
+                if (s.returnValue != nullptr) {
+                    builder_.CreateRet(CodegenExpr(*s.returnValue));
+                } else {
+                    builder_.CreateRetVoid();
+                }
+                StartDeadBlock("afterreturn");
+                return;
+            case StmtKind::ExprStmt:
+                CodegenExpr(*s.expr);
+                return;
+        }
+    }
+
+    // After an unconditional branch (break/continue/return), the
+    // IRBuilder still needs *some* block to keep inserting into if the
+    // AST has more statements textually after it (sema doesn't forbid
+    // that, it's just dead code) -- point it at a fresh, unreferenced
+    // block rather than trying to detect and skip trailing dead
+    // statements ourselves. LLVM's own optimizer deletes it later.
+    void StartDeadBlock(const char* name) {
+        builder_.SetInsertPoint(llvm::BasicBlock::Create(context_, name, currentFunction_));
+    }
+
+    void StoreToLvalue(Expr& target, llvm::Value* value) {
+        if (target.kind == ExprKind::Identifier) {
+            builder_.CreateStore(value, ResolveVariablePointer(target.text));
+            return;
+        }
+        // Member assignment (`p.x = ...`): rebuild the vec3 with one
+        // component replaced, then store the whole struct back --
+        // vec3 is a value type here (an LLVM struct value, not a
+        // pointer), so "assigning to a field" means "load, insertvalue,
+        // store" rather than a pointer-to-field GEP.
+        llvm::Value* basePtr = ResolveVariablePointer(target.lhs->text);
+        llvm::Value* current = builder_.CreateLoad(vec3Type_, basePtr);
+        const unsigned index = FieldIndex(target.text);
+        llvm::Value* updated = builder_.CreateInsertValue(current, value, index);
+        builder_.CreateStore(updated, basePtr);
+    }
+
+    static unsigned FieldIndex(const std::string& field) {
+        if (field == "x") return 0;
+        if (field == "y") return 1;
+        return 2; // sema already validated this is x/y/z; "z" is the only remaining case.
+    }
+
+    llvm::Value* ResolveVariablePointer(const std::string& name) {
+        if (llvm::AllocaInst* local = LookupLocal(name)) {
+            return local;
+        }
+        const auto globalIt = globals_.find(name);
+        if (globalIt != globals_.end()) {
+            return globalIt->second;
+        }
+        throw CodegenError("internal error: unresolved variable '" + name + "' reached codegen");
+    }
+
+    llvm::Value* ApplyCompoundOp(AssignOp op, llvm::Value* current, llvm::Value* rhs, Type targetType) {
+        switch (op) {
+            case AssignOp::AddAssign: return ArithAdd(current, rhs, targetType);
+            case AssignOp::SubAssign: return ArithSub(current, rhs, targetType);
+            case AssignOp::MulAssign: return ArithMul(current, rhs, targetType);
+            case AssignOp::DivAssign: return ArithDiv(current, rhs, targetType);
+            case AssignOp::Assign: break;
+        }
+        throw CodegenError("internal error: unreachable compound assign operator");
+    }
+
+    // --- Expressions -----------------------------------------------------
+
+    llvm::Value* CodegenExpr(Expr& e) {
+        switch (e.kind) {
+            case ExprKind::IntLiteral:
+                return llvm::ConstantInt::get(builder_.getInt64Ty(), static_cast<uint64_t>(e.intValue), true);
+            case ExprKind::FloatLiteral:
+                return llvm::ConstantFP::get(builder_.getFloatTy(), e.floatValue);
+            case ExprKind::BoolLiteral:
+                return llvm::ConstantInt::get(builder_.getInt1Ty(), e.boolValue ? 1 : 0);
+            case ExprKind::StringLiteral:
+                throw CodegenError(
+                    "string literals are only valid as arguments to intrinsics this milestone doesn't implement yet "
+                    "(log/find_by_name/... land in GS5)");
+            case ExprKind::Identifier: {
+                llvm::Value* ptr = ResolveVariablePointer(e.text);
+                return builder_.CreateLoad(MapType(e.type), ptr, e.text);
+            }
+            case ExprKind::Binary:
+                return CodegenBinary(e);
+            case ExprKind::Unary:
+                return CodegenUnary(e);
+            case ExprKind::Call:
+                return CodegenCall(e);
+            case ExprKind::Member: {
+                llvm::Value* base = CodegenExpr(*e.lhs);
+                return builder_.CreateExtractValue(base, FieldIndex(e.text));
+            }
+        }
+        throw CodegenError("internal error: unhandled expression kind reached codegen");
+    }
+
+    llvm::Value* Vec3ComponentWise(llvm::Value* a, llvm::Value* b,
+                                    const std::function<llvm::Value*(llvm::Value*, llvm::Value*)>& op) {
+        llvm::Value* result = llvm::UndefValue::get(vec3Type_);
+        for (unsigned i = 0; i < 3; ++i) {
+            llvm::Value* ai = builder_.CreateExtractValue(a, i);
+            llvm::Value* bi = builder_.CreateExtractValue(b, i);
+            result = builder_.CreateInsertValue(result, op(ai, bi), i);
+        }
+        return result;
+    }
+
+    llvm::Value* Vec3ScalarOp(llvm::Value* v, llvm::Value* scalar,
+                               const std::function<llvm::Value*(llvm::Value*, llvm::Value*)>& op) {
+        llvm::Value* result = llvm::UndefValue::get(vec3Type_);
+        for (unsigned i = 0; i < 3; ++i) {
+            llvm::Value* vi = builder_.CreateExtractValue(v, i);
+            result = builder_.CreateInsertValue(result, op(vi, scalar), i);
+        }
+        return result;
+    }
+
+    llvm::Value* ArithAdd(llvm::Value* lhs, llvm::Value* rhs, Type t) {
+        if (t == Type::Int) return builder_.CreateAdd(lhs, rhs, "addtmp");
+        if (t == Type::Float) return builder_.CreateFAdd(lhs, rhs, "faddtmp");
+        return Vec3ComponentWise(lhs, rhs, [&](llvm::Value* a, llvm::Value* b) { return builder_.CreateFAdd(a, b); });
+    }
+    llvm::Value* ArithSub(llvm::Value* lhs, llvm::Value* rhs, Type t) {
+        if (t == Type::Int) return builder_.CreateSub(lhs, rhs, "subtmp");
+        if (t == Type::Float) return builder_.CreateFSub(lhs, rhs, "fsubtmp");
+        return Vec3ComponentWise(lhs, rhs, [&](llvm::Value* a, llvm::Value* b) { return builder_.CreateFSub(a, b); });
+    }
+    llvm::Value* ArithMul(llvm::Value* lhs, llvm::Value* rhs, Type t) {
+        if (t == Type::Int) return builder_.CreateMul(lhs, rhs, "multmp");
+        if (t == Type::Float) return builder_.CreateFMul(lhs, rhs, "fmultmp");
+        // vec3 *= float is the only compound-mul combination sema allows.
+        return Vec3ScalarOp(lhs, rhs, [&](llvm::Value* a, llvm::Value* b) { return builder_.CreateFMul(a, b); });
+    }
+    llvm::Value* ArithDiv(llvm::Value* lhs, llvm::Value* rhs, Type t) {
+        if (t == Type::Int) return builder_.CreateSDiv(lhs, rhs, "divtmp");
+        if (t == Type::Float) return builder_.CreateFDiv(lhs, rhs, "fdivtmp");
+        return Vec3ScalarOp(lhs, rhs, [&](llvm::Value* a, llvm::Value* b) { return builder_.CreateFDiv(a, b); });
+    }
+
+    llvm::Value* CodegenBinary(Expr& e) {
+        // Binary::lhs/rhs types were resolved by sema and are identical
+        // to what drove ITS rule selection -- re-derive the operator's
+        // *operand* type from e.lhs->type rather than e.type, since
+        // comparisons (e.type == Bool) would otherwise lose which
+        // arithmetic type they compared.
+        const Type operandType = e.lhs->type;
+        llvm::Value* lhs = CodegenExpr(*e.lhs);
+        llvm::Value* rhs = CodegenExpr(*e.rhs);
+
+        switch (e.binaryOp) {
+            case BinaryOp::Add: return ArithAdd(lhs, rhs, operandType);
+            case BinaryOp::Sub: return ArithSub(lhs, rhs, operandType);
+            case BinaryOp::Mul: return ArithMul(lhs, rhs, operandType);
+            case BinaryOp::Div: return ArithDiv(lhs, rhs, operandType);
+            case BinaryOp::Mod: return builder_.CreateSRem(lhs, rhs, "modtmp"); // int-only per sema.
+            case BinaryOp::Eq: return CodegenCompare(lhs, rhs, operandType, /*negate=*/false);
+            case BinaryOp::Neq: return CodegenCompare(lhs, rhs, operandType, /*negate=*/true);
+            case BinaryOp::Lt:
+                return operandType == Type::Int ? builder_.CreateICmpSLT(lhs, rhs) : builder_.CreateFCmpOLT(lhs, rhs);
+            case BinaryOp::Gt:
+                return operandType == Type::Int ? builder_.CreateICmpSGT(lhs, rhs) : builder_.CreateFCmpOGT(lhs, rhs);
+            case BinaryOp::Le:
+                return operandType == Type::Int ? builder_.CreateICmpSLE(lhs, rhs) : builder_.CreateFCmpOLE(lhs, rhs);
+            case BinaryOp::Ge:
+                return operandType == Type::Int ? builder_.CreateICmpSGE(lhs, rhs) : builder_.CreateFCmpOGE(lhs, rhs);
+            case BinaryOp::And: return builder_.CreateAnd(lhs, rhs, "andtmp");
+            case BinaryOp::Or: return builder_.CreateOr(lhs, rhs, "ortmp");
+        }
+        throw CodegenError("internal error: unhandled binary operator reached codegen");
+    }
+
+    llvm::Value* CodegenCompare(llvm::Value* lhs, llvm::Value* rhs, Type t, bool negate) {
+        llvm::Value* eq = nullptr;
+        switch (t) {
+            case Type::Int:
+            case Type::Bool:
+            case Type::Entity:
+                eq = builder_.CreateICmpEQ(lhs, rhs);
+                break;
+            case Type::Float:
+                eq = builder_.CreateFCmpOEQ(lhs, rhs);
+                break;
+            case Type::Vec3: {
+                llvm::Value* eqX = builder_.CreateFCmpOEQ(builder_.CreateExtractValue(lhs, 0), builder_.CreateExtractValue(rhs, 0));
+                llvm::Value* eqY = builder_.CreateFCmpOEQ(builder_.CreateExtractValue(lhs, 1), builder_.CreateExtractValue(rhs, 1));
+                llvm::Value* eqZ = builder_.CreateFCmpOEQ(builder_.CreateExtractValue(lhs, 2), builder_.CreateExtractValue(rhs, 2));
+                eq = builder_.CreateAnd(builder_.CreateAnd(eqX, eqY), eqZ);
+                break;
+            }
+            default:
+                throw CodegenError("internal error: equality on an unsupported type reached codegen");
+        }
+        return negate ? builder_.CreateNot(eq) : eq;
+    }
+
+    llvm::Value* CodegenUnary(Expr& e) {
+        llvm::Value* operand = CodegenExpr(*e.lhs);
+        if (e.unaryOp == UnaryOp::Not) {
+            return builder_.CreateNot(operand, "nottmp");
+        }
+        // Neg
+        if (e.lhs->type == Type::Int) return builder_.CreateNeg(operand, "negtmp");
+        if (e.lhs->type == Type::Float) return builder_.CreateFNeg(operand, "fnegtmp");
+        return Vec3ComponentWise(operand, operand, [&](llvm::Value* a, llvm::Value*) { return builder_.CreateFNeg(a); });
+    }
+
+    llvm::Function* GetLLVMIntrinsic(llvm::Intrinsic::ID id, llvm::Type* type) {
+        return llvm::Intrinsic::getDeclaration(&module_, id, { type });
+    }
+
+    // The v1 "pure computation" math/vec3 intrinsics -- lowered directly
+    // to LLVM IR (LLVM's own standard intrinsics where one exists, or
+    // composed arithmetic otherwise), with no external call and no ABI
+    // involved at all. Everything else in intrinsics.def (world/entity/
+    // transform/debug) is a genuine engine intrinsic, deferred to GS5's
+    // host-ABI work -- returns nullptr for those (and for atan2, which
+    // has no direct LLVM intrinsic and is deferred alongside them rather
+    // than special-cased here).
+    llvm::Value* CodegenBuiltinIntrinsic(const std::string& name, std::vector<llvm::Value*>& args) {
+        auto callUnaryFloatIntrinsic = [&](llvm::Intrinsic::ID id) {
+            return builder_.CreateCall(GetLLVMIntrinsic(id, builder_.getFloatTy()), args[0]);
+        };
+        auto callBinaryFloatIntrinsic = [&](llvm::Intrinsic::ID id) {
+            return builder_.CreateCall(GetLLVMIntrinsic(id, builder_.getFloatTy()), { args[0], args[1] });
+        };
+
+        if (name == "sqrt") return callUnaryFloatIntrinsic(llvm::Intrinsic::sqrt);
+        if (name == "abs") return callUnaryFloatIntrinsic(llvm::Intrinsic::fabs);
+        if (name == "floor") return callUnaryFloatIntrinsic(llvm::Intrinsic::floor);
+        if (name == "sin") return callUnaryFloatIntrinsic(llvm::Intrinsic::sin);
+        if (name == "cos") return callUnaryFloatIntrinsic(llvm::Intrinsic::cos);
+        if (name == "min") return callBinaryFloatIntrinsic(llvm::Intrinsic::minnum);
+        if (name == "max") return callBinaryFloatIntrinsic(llvm::Intrinsic::maxnum);
+        if (name == "clamp") {
+            llvm::Value* maxed = builder_.CreateCall(GetLLVMIntrinsic(llvm::Intrinsic::maxnum, builder_.getFloatTy()),
+                                                      { args[0], args[1] });
+            return builder_.CreateCall(GetLLVMIntrinsic(llvm::Intrinsic::minnum, builder_.getFloatTy()), { maxed, args[2] });
+        }
+        if (name == "lerp") {
+            // a + (b - a) * t
+            llvm::Value* diff = builder_.CreateFSub(args[1], args[0]);
+            llvm::Value* scaled = builder_.CreateFMul(diff, args[2]);
+            return builder_.CreateFAdd(args[0], scaled);
+        }
+        if (name == "vec3") {
+            llvm::Value* result = llvm::UndefValue::get(vec3Type_);
+            result = builder_.CreateInsertValue(result, args[0], 0);
+            result = builder_.CreateInsertValue(result, args[1], 1);
+            result = builder_.CreateInsertValue(result, args[2], 2);
+            return result;
+        }
+        if (name == "dot") {
+            return Dot(args[0], args[1]);
+        }
+        if (name == "cross") {
+            // (ay*bz - az*by, az*bx - ax*bz, ax*by - ay*bx)
+            llvm::Value* ax = builder_.CreateExtractValue(args[0], 0);
+            llvm::Value* ay = builder_.CreateExtractValue(args[0], 1);
+            llvm::Value* az = builder_.CreateExtractValue(args[0], 2);
+            llvm::Value* bx = builder_.CreateExtractValue(args[1], 0);
+            llvm::Value* by = builder_.CreateExtractValue(args[1], 1);
+            llvm::Value* bz = builder_.CreateExtractValue(args[1], 2);
+            llvm::Value* rx = builder_.CreateFSub(builder_.CreateFMul(ay, bz), builder_.CreateFMul(az, by));
+            llvm::Value* ry = builder_.CreateFSub(builder_.CreateFMul(az, bx), builder_.CreateFMul(ax, bz));
+            llvm::Value* rz = builder_.CreateFSub(builder_.CreateFMul(ax, by), builder_.CreateFMul(ay, bx));
+            llvm::Value* result = llvm::UndefValue::get(vec3Type_);
+            result = builder_.CreateInsertValue(result, rx, 0);
+            result = builder_.CreateInsertValue(result, ry, 1);
+            result = builder_.CreateInsertValue(result, rz, 2);
+            return result;
+        }
+        if (name == "length") {
+            return builder_.CreateCall(GetLLVMIntrinsic(llvm::Intrinsic::sqrt, builder_.getFloatTy()), Dot(args[0], args[0]));
+        }
+        if (name == "normalize") {
+            llvm::Value* len =
+                builder_.CreateCall(GetLLVMIntrinsic(llvm::Intrinsic::sqrt, builder_.getFloatTy()), Dot(args[0], args[0]));
+            return Vec3ScalarOp(args[0], len, [&](llvm::Value* a, llvm::Value* b) { return builder_.CreateFDiv(a, b); });
+        }
+        return nullptr;
+    }
+
+    llvm::Value* Dot(llvm::Value* a, llvm::Value* b) {
+        llvm::Value* ax = builder_.CreateExtractValue(a, 0);
+        llvm::Value* ay = builder_.CreateExtractValue(a, 1);
+        llvm::Value* az = builder_.CreateExtractValue(a, 2);
+        llvm::Value* bx = builder_.CreateExtractValue(b, 0);
+        llvm::Value* by = builder_.CreateExtractValue(b, 1);
+        llvm::Value* bz = builder_.CreateExtractValue(b, 2);
+        llvm::Value* sum = builder_.CreateFMul(ax, bx);
+        sum = builder_.CreateFAdd(sum, builder_.CreateFMul(ay, by));
+        sum = builder_.CreateFAdd(sum, builder_.CreateFMul(az, bz));
+        return sum;
+    }
+
+    llvm::Value* CodegenCall(Expr& e) {
+        const std::string& name = e.lhs->text;
+
+        const auto userFnIt = functions_.find(name);
+        if (userFnIt != functions_.end()) {
+            std::vector<llvm::Value*> args;
+            for (Expr* arg : e.args) {
+                args.push_back(CodegenExpr(*arg));
+            }
+            return builder_.CreateCall(userFnIt->second, args);
+        }
+
+        std::vector<llvm::Value*> args;
+        for (Expr* arg : e.args) {
+            args.push_back(CodegenExpr(*arg));
+        }
+        llvm::Value* result = CodegenBuiltinIntrinsic(name, args);
+        if (result == nullptr) {
+            throw CodegenError("intrinsic '" + name +
+                                "' is an engine intrinsic and isn't implemented until GS5 (this milestone only "
+                                "supports pure computation: user functions plus the math/vec3 intrinsics)");
+        }
+        return result;
+    }
+
+    llvm::LLVMContext& context_;
+    llvm::Module& module_;
+    llvm::IRBuilder<> builder_;
+    llvm::StructType* vec3Type_;
+
+    std::unordered_map<std::string, llvm::Function*> functions_;
+    std::unordered_map<std::string, llvm::GlobalVariable*> globals_;
+    std::vector<std::unordered_map<std::string, llvm::AllocaInst*>> locals_;
+    std::vector<LoopTargets> loopStack_;
+    llvm::Function* currentFunction_ = nullptr;
+};
+
+} // namespace
+
+std::unique_ptr<llvm::Module> BuildModule(llvm::LLVMContext& context, const std::string& moduleName, Program& program,
+                                           std::string& errorOut) {
+    auto module = std::make_unique<llvm::Module>(moduleName, context);
+    try {
+        CodeGenerator generator(context, *module);
+        generator.Build(program);
+    } catch (const CodegenError& err) {
+        errorOut = err.what();
+        return nullptr;
+    }
+    return module;
+}
+
+} // namespace ce::lang::jit
