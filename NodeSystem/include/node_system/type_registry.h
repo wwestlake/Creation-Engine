@@ -11,8 +11,14 @@
 namespace ce::node_system {
 
 // One input or output pin's fixed shape, as promised by a registered
-// node type -- name, type, and (for inputs) the default value an
-// unconnected wire evaluates to.
+// node type -- name, type, and (for inputs) the STARTING default value
+// AddRegisteredNode gives a freshly-constructed instance. A node
+// instance is free to carry a DIFFERENT default afterward (see
+// ValidateAgainstRegistry's own comment) -- that's the actual point of
+// PinDefaultValue existing on a per-pin basis rather than being part of
+// the registry-wide type shape: a Log node's "message" or a
+// GetVariable's "name" (GS9's node catalog) is deliberately a
+// per-instance literal, not a fixed constant every instance shares.
 struct PinSignature {
     std::string name;
     PinTypeDesc type;
@@ -66,13 +72,19 @@ Node* AddRegisteredNode(Graph& graph, const NodeTypeRegistry& registry, const st
                          std::string* errorOut = nullptr);
 
 // Checks every node in `graph` against `registry`: the type name must
-// be registered, and the node's actual pins (name, type, and for inputs
-// the default value, in order) must exactly match the descriptor.
-// Nodes built via AddRegisteredNode always pass trivially; this exists
-// to catch drift -- a node hand-built via the raw AddNode/AddInput/
-// AddOutput API, or loaded from a .celg file saved before a type's
-// registered signature changed. Returns true (with `errorsOut` left
-// empty, if given) iff every node passes.
+// be registered, and the node's actual pins (name and type, in order)
+// must match the descriptor's shape. Deliberately does NOT compare
+// default values -- GS9's node catalog relies on nodes overriding a
+// pin's default after construction (a Log node's literal message, a
+// GetVariable's variable name, an ordinary Compare node's per-instance
+// threshold), which is the entire reason PinDefaultValue lives on the
+// pin instance rather than being baked into the registered shape.
+// Nodes built via AddRegisteredNode always pass trivially (before any
+// such override); this exists to catch actual SHAPE drift -- a node
+// hand-built via the raw AddNode/AddInput/AddOutput API with the wrong
+// pin count/name/type, or loaded from a .celg file saved before a
+// type's registered pin shape changed. Returns true (with `errorsOut`
+// left empty, if given) iff every node's shape matches.
 bool ValidateAgainstRegistry(const Graph& graph, const NodeTypeRegistry& registry,
                               std::vector<std::string>* errorsOut = nullptr);
 

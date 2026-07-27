@@ -1,14 +1,19 @@
 # GS — Game Scripting: CEL (Creation Engine Language)
 
 > **Status** (tracked live in the [Creation Engine Build Plan](https://github.com/users/wwestlake/projects/18) GitHub Project):
-> GS1–GS6 complete · GS7 in progress · GS8–GS11 not started.
+> GS1–GS9 complete (plus GS-Interop, a cross-app scripting milestone inserted after GS8 — see
+> `docs/CROSS_APP_LANGUAGE_DOMAINS.md`) · GS10–GS11 not started.
 > This document is the original milestone plan as approved, kept as-written for historical accuracy — it is not
 > updated after the fact to reflect adaptations made during implementation. Notable real-world deviations from this
 > plan (all judgment calls made during implementation, not scope cuts): GS5 descoped the `IScriptRuntime` abstraction
 > to GS6 (this doc's GS5 section mentions it a milestone early); GS6's verification used `celc --run-simulation` /
 > `CreationEngineServer --script` rather than `--run-world --dump-state` as originally sketched, since the real
-> `Simulation`/`ScriptComponent` path didn't exist until GS6 itself. See `docs/SCRIPTING_ABI.md` for the as-built
-> host ABI reference, which supersedes this plan's ABI section where they differ.
+> `Simulation`/`ScriptComponent` path didn't exist until GS6 itself. GS9's node catalog (OnStart/OnTick/Sequence/
+> Branch/While/Compare/arithmetic/MakeVec3/Get-SetPosition/Spawn/Destroy/Log/variable get-set/CallFunction) landed
+> with deliberate v1 scope limits documented in `Language/include/lang/nodegen/node_catalog.h` (Float-only Compare/
+> arithmetic/variables, literal-only Log messages, CallFunction targets a pre-existing zero-arg void function since
+> GS9 doesn't generate auxiliary functions — that's GS11's reusable-sub-graph scope). See `docs/SCRIPTING_ABI.md`
+> for the as-built host ABI reference, which supersedes this plan's ABI section where they differ.
 
 ## Context
 

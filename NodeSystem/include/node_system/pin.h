@@ -17,6 +17,12 @@ enum class PinKind {
 
 // Data pin value types. Kept intentionally small; grows only when a domain
 // actually needs a new type, not speculatively.
+//
+// GS9: Entity added for the node catalog's OnStart/OnTick "self" output,
+// Spawn's result, and Get/SetPosition's entity input -- CEL's
+// ce::lang::Type::Entity (an opaque i64 handle, no arithmetic, no
+// literal syntax) had no DataType counterpart until a real node needed
+// to carry one across a wire.
 enum class DataType {
     Float,
     Vec2,
@@ -30,6 +36,7 @@ enum class DataType {
     BoneTransform,
     Texture,
     AudioSignal,
+    Entity,
 };
 
 struct PinTypeDesc {

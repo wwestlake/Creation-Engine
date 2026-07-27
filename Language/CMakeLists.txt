@@ -83,6 +83,22 @@ target_compile_definitions(ce_lang_jit PRIVATE ${LLVM_DEFINITIONS} NOMINMAX WIN3
 target_link_libraries(ce_lang_jit PUBLIC ce_lang_frontend engine_core ${CE_LLVM_LIBS})
 target_compile_features(ce_lang_jit PUBLIC cxx_std_20)
 
+# GS9: graph -> CEL source text generation. Deliberately linked against
+# ce_lang_frontend + node_system only -- NOT ce_lang_jit/LLVM (see
+# include/lang/nodegen/graph_to_source.h's own comment) -- so this
+# target can never accidentally depend on the JIT to produce source
+# text; only celc's --run-graph combines nodegen's output with
+# ce_lang_jit to actually execute it.
+add_library(ce_lang_nodegen STATIC
+    include/lang/nodegen/node_catalog.h
+    src/nodegen/node_catalog.cpp
+    include/lang/nodegen/graph_to_source.h
+    src/nodegen/graph_to_source.cpp
+)
+target_include_directories(ce_lang_nodegen PUBLIC include)
+target_link_libraries(ce_lang_nodegen PUBLIC ce_lang_frontend node_system)
+target_compile_features(ce_lang_nodegen PUBLIC cxx_std_20)
+
 # Plain add_executable, deliberately NOT juce_add_console_app: this
 # guarantees at least one full build path where LLVM and JUCE headers
 # never meet in the same translation unit, which is cheap insurance
@@ -92,14 +108,17 @@ add_executable(celc
     tools/celc/main.cpp
     tools/celc/selftest_graph.h
     tools/celc/selftest_graph.cpp
+    tools/celc/nodegen_fixtures.h
+    tools/celc/nodegen_fixtures.cpp
 )
 # node_system: PRIVATE -- celc's own GS8 test code (selftest_graph.cpp)
 # and --check-graph use NodeSystem directly; ce_lang_jit already brings
 # it in transitively via engine_core (both PUBLIC links), so this isn't
 # strictly required for the include path to resolve, but it's the
 # correct explicit dependency for what celc's OWN sources use, not just
-# what happens to ride along.
-target_link_libraries(celc PRIVATE ce_lang_frontend ce_lang_jit node_system)
+# what happens to ride along. ce_lang_nodegen (GS9): --graph-to-source/
+# --run-graph.
+target_link_libraries(celc PRIVATE ce_lang_frontend ce_lang_jit ce_lang_nodegen node_system)
 
 add_test(NAME gs1_llvm_selftest COMMAND celc --selftest-jit)
 add_test(NAME gs8_selftest_graph COMMAND celc --selftest-graph)
@@ -288,4 +307,47 @@ add_test(
             -DTEST_CEL=${CMAKE_CURRENT_SOURCE_DIR}/tests/domain/blocked_world_call.cel
             -DDOMAINS=core,world
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_domain_ok_test.cmake"
+)
+
+# GS9: the flagship verification for graph -> CEL source generation --
+# Language/tests/nodegen/bounce.celg (built programmatically, see
+# Language/tools/celc/nodegen_fixtures.cpp) and bounce.cel (hand-written)
+# describe the SAME behavior; run through --run-graph/--run-simulation
+# respectively for 300 ticks, their output must be byte-identical. See
+# run_nodegen_parity_test.cmake's own comment for why this is the
+# single strongest proof in this milestone.
+add_test(
+    NAME gs9_nodegen_parity_bounce
+    COMMAND ${CMAKE_COMMAND}
+            -DCELC_EXE=$<TARGET_FILE:celc>
+            -DTEST_CELG=${CMAKE_CURRENT_SOURCE_DIR}/tests/nodegen/bounce.celg
+            -DTEST_CEL=${CMAKE_CURRENT_SOURCE_DIR}/tests/nodegen/bounce.cel
+            -DEXPECTED_FILE=${CMAKE_CURRENT_SOURCE_DIR}/tests/nodegen/bounce.expected
+            -DTICKS=300
+            -DDT=0.016666667
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_nodegen_parity_test.cmake"
+)
+
+# GS9: a text-level determinism/coverage check for the catalog types
+# gs9_nodegen_parity_bounce doesn't reach -- see
+# run_graph_to_source_test.cmake's own comment.
+add_test(
+    NAME gs9_graph_to_source_operator_coverage
+    COMMAND ${CMAKE_COMMAND}
+            -DCELC_EXE=$<TARGET_FILE:celc>
+            -DTEST_CELG=${CMAKE_CURRENT_SOURCE_DIR}/tests/nodegen/operator_coverage.celg
+            -DEXPECTED_FILE=${CMAKE_CURRENT_SOURCE_DIR}/tests/nodegen/operator_coverage.expected
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_graph_to_source_test.cmake"
+)
+
+# GS9: a graph with no OnStart/OnTick entry node must be REJECTED by
+# GenerateSource with a clear error, not silently produce empty/partial
+# source -- see run_graph_to_source_error_test.cmake's own comment.
+add_test(
+    NAME gs9_graph_to_source_no_entry
+    COMMAND ${CMAKE_COMMAND}
+            -DCELC_EXE=$<TARGET_FILE:celc>
+            -DTEST_CELG=${CMAKE_CURRENT_SOURCE_DIR}/tests/nodegen/no_entry.celg
+            -DEXPECT_SUBSTRING=no OnStart or OnTick
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_graph_to_source_error_test.cmake"
 )

@@ -46,6 +46,7 @@ std::string DataTypeToString(DataType t) {
         case DataType::BoneTransform: return "bonetransform";
         case DataType::Texture: return "texture";
         case DataType::AudioSignal: return "audiosignal";
+        case DataType::Entity: return "entity";
     }
     return "float";
 }
@@ -56,7 +57,7 @@ std::optional<DataType> DataTypeFromString(const std::string& s) {
         { "vec4", DataType::Vec4 },       { "color", DataType::Color },     { "bool", DataType::Bool },
         { "int", DataType::Int },         { "string", DataType::String },   { "transform", DataType::Transform },
         { "bonetransform", DataType::BoneTransform }, { "texture", DataType::Texture },
-        { "audiosignal", DataType::AudioSignal },
+        { "audiosignal", DataType::AudioSignal }, { "entity", DataType::Entity },
     };
     const auto it = table.find(s);
     return it == table.end() ? std::nullopt : std::optional<DataType>(it->second);

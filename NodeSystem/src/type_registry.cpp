@@ -50,8 +50,10 @@ bool PinsMatchSignature(const std::vector<Pin>& pins, const std::vector<PinSigna
     }
     const std::size_t count = std::min(pins.size(), signatures.size());
     for (std::size_t i = 0; i < count; ++i) {
-        if (pins[i].name != signatures[i].name || !(pins[i].type == signatures[i].type) ||
-            !(pins[i].defaultValue == signatures[i].defaultValue)) {
+        // Name and type only -- NOT defaultValue, which a node instance
+        // is free to override (see PinSignature/ValidateAgainstRegistry's
+        // own comments on why).
+        if (pins[i].name != signatures[i].name || !(pins[i].type == signatures[i].type)) {
             ok = false;
             if (errorsOut) {
                 std::ostringstream msg;
