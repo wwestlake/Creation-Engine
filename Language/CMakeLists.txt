@@ -233,3 +233,14 @@ add_test(
             -DDT=0.016666667
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_simulation_test.cmake"
 )
+
+# GS7: the hard "<1s compile time" requirement, measured (not assumed) --
+# see run_compile_perf_test.cmake.
+add_test(
+    NAME gs7_compile_perf_orbit
+    COMMAND ${CMAKE_COMMAND}
+            -DCELC_EXE=$<TARGET_FILE:celc>
+            -DTEST_CEL=${CMAKE_CURRENT_SOURCE_DIR}/tests/simulation/orbit.cel
+            -DMAX_MS=1000
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_compile_perf_test.cmake"
+)

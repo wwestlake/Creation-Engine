@@ -166,12 +166,23 @@ void ViewportComponent::SeedDemoScene() {
         return;
     }
 
+    // GS7: stages the same placeholder script as a real ScriptCatalog
+    // entry (as if it had been drag-dropped via the Import Hub), so
+    // ScriptPanel's "Attach Script" combo and editor have something real
+    // to show for the demo entity instead of a script the UI can't see
+    // or edit at all.
+    const juce::File demoScriptFile =
+        juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("cel_demo_orbit_script.cel");
+    demoScriptFile.replaceWithText(kDemoOrbitScript);
+    scriptCatalog_.AddFromFile("Orbit Demo", demoScriptFile);
+
     const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
     const auto entity = world_.CreateEntity();
     world_.Registry().emplace<scene::Name>(entity, scene::Name{ "Box" });
     world_.Registry().emplace<scene::Transform>(entity, scene::Transform{});
     world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ asset.mesh, asset.material });
     world_.Registry().emplace<scene::SceneFlags>(entity, scene::SceneFlags{});
+    world_.Registry().emplace<scene::ScriptSource>(entity, scene::ScriptSource{ "Orbit Demo", kDemoOrbitScript });
     demoEntity_ = entity;
 
     // world_.SetScriptRuntime(...) is called by MainComponent's

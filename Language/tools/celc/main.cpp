@@ -1,3 +1,4 @@
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -243,6 +244,38 @@ int RunSimulation(const std::string& path, int ticks, float dt) {
     return 0;
 }
 
+// --measure-compile <file.cel>: times ce::engine::IScriptRuntime::Compile
+// (parse+sema+IR+optimize+JIT, the exact same call ScriptPanel's
+// background CompileJob makes -- Views/ScriptPanel.cpp) end to end on
+// the real CelScriptRuntime, printing milliseconds. This is GS7's <1s
+// compile-time requirement's own verification vehicle
+// (run_compile_perf_test.cmake), measured for real rather than assumed
+// from "it felt fast in the editor."
+int RunMeasureCompile(const std::string& path) {
+    std::ifstream file(path);
+    if (!file) {
+        std::cerr << "celc: cannot open " << path << std::endl;
+        return 1;
+    }
+    std::ostringstream sourceStream;
+    sourceStream << file.rdbuf();
+
+    auto runtime = ce::lang::jit::CreateScriptRuntime();
+    std::string error;
+
+    const auto start = std::chrono::steady_clock::now();
+    auto compiled = runtime->Compile(sourceStream.str(), error);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    const auto elapsedMs = std::chrono::duration<double, std::milli>(elapsed).count();
+
+    if (compiled == nullptr) {
+        std::cerr << "celc: " << error << std::endl;
+        return 1;
+    }
+    std::cout << elapsedMs << std::endl;
+    return 0;
+}
+
 int RunEmitLLVM(const std::string& path) {
     ce::lang::AstArena arena;
     ce::lang::DiagnosticEngine diagnostics;
@@ -331,6 +364,10 @@ int main(int argc, char** argv) {
         return RunEmitLLVM(argv[2]);
     }
 
+    if (argc >= 3 && std::string(argv[1]) == "--measure-compile") {
+        return RunMeasureCompile(argv[2]);
+    }
+
     std::cout << "celc -- Creation Engine Language compiler/test-driver\n"
                  "usage:\n"
                  "  celc --selftest-jit\n"
@@ -339,6 +376,7 @@ int main(int argc, char** argv) {
                  "  celc --run <file.cel> [--entry NAME] [--opt 0-3]\n"
                  "  celc --run-world <file.cel> [--entry NAME] [--ticks N] [--dt D] [--opt 0-3]\n"
                  "  celc --run-simulation <file.cel> [--ticks N] [--dt D]\n"
+                 "  celc --measure-compile <file.cel>\n"
                  "  celc --emit-llvm <file.cel>\n";
     return 1;
 }

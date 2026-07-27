@@ -10,6 +10,7 @@
 #include "Views/ImportPanel.h"
 #include "Views/LightPanel.h"
 #include "Views/PlaceholderPanel.h"
+#include "Views/ScriptPanel.h"
 #include "Views/TransformPanel.h"
 #include "Views/TransportBar.h"
 #include "Views/ViewModeBar.h"
@@ -57,6 +58,11 @@ private:
     juce::Label tickLabel_;
 
     ce::TransformPanel transformPanel_;
+
+    // GS7: declared after viewport_ (like hierarchyPanel_/importPanel_
+    // above) since its constructor needs a fully-constructed
+    // ViewportComponent& (viewport_.Scripts(), the ScriptCatalog).
+    ce::ScriptPanel scriptPanel_;
 
     juce::Label roughnessLabel_ { {}, "Roughness" };
     juce::Slider roughnessSlider_ { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };

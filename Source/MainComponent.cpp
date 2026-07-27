@@ -6,6 +6,7 @@ MainComponent::MainComponent()
     : viewport_(world_),
       hierarchyPanel_(world_, viewport_),
       transformPanel_(world_),
+      scriptPanel_(world_, viewport_),
       importPanel_(world_, viewport_),
       lightPanel_(viewport_) {
     // GS6: the one injection point (see World::SetScriptRuntime's own
@@ -30,7 +31,10 @@ MainComponent::MainComponent()
     viewModeBar_.onModeSelected = [this](ce::WorkspaceMode mode) { SetActiveMode(mode); };
 
     addAndMakeVisible(hierarchyPanel_);
-    hierarchyPanel_.onSelectionChanged = [this](entt::entity entity) { transformPanel_.SetSelectedEntity(entity); };
+    hierarchyPanel_.onSelectionChanged = [this](entt::entity entity) {
+        transformPanel_.SetSelectedEntity(entity);
+        scriptPanel_.SetSelectedEntity(entity);
+    };
     addAndMakeVisible(viewport_);
 
     inspectorTitle_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
@@ -41,6 +45,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(tickLabel_);
 
     addAndMakeVisible(transformPanel_);
+    addAndMakeVisible(scriptPanel_);
 
     roughnessLabel_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
     addAndMakeVisible(roughnessLabel_);
@@ -98,6 +103,9 @@ void MainComponent::resized() {
     transformPanel_.setBounds(inspectorBounds.removeFromTop(ce::TransformPanel::kPreferredHeight));
 
     inspectorBounds.removeFromTop(12);
+    scriptPanel_.setBounds(inspectorBounds.removeFromTop(ce::ScriptPanel::kPreferredHeight));
+
+    inspectorBounds.removeFromTop(12);
     roughnessLabel_.setBounds(inspectorBounds.removeFromTop(18));
     roughnessSlider_.setBounds(inspectorBounds.removeFromTop(24));
     inspectorBounds.removeFromTop(8);
@@ -124,6 +132,7 @@ void MainComponent::SetActiveMode(ce::WorkspaceMode mode) {
     inspectorTitle_.setVisible(showScene);
     tickLabel_.setVisible(showScene);
     transformPanel_.setVisible(showScene);
+    scriptPanel_.setVisible(showScene);
     roughnessLabel_.setVisible(showScene);
     roughnessSlider_.setVisible(showScene);
     metallicLabel_.setVisible(showScene);
@@ -155,4 +164,5 @@ void MainComponent::timerCallback() {
     tickLabel_.setText("tick " + juce::String(world_.CurrentTick()), juce::dontSendNotification);
     hierarchyPanel_.Refresh();
     transformPanel_.Refresh();
+    scriptPanel_.Refresh();
 }

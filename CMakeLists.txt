@@ -109,11 +109,17 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/HierarchyPanel.cpp
     Source/Views/TransformPanel.h
     Source/Views/TransformPanel.cpp
+    Source/Views/ScriptPanel.h
+    Source/Views/ScriptPanel.cpp
+    Source/Views/CelCodeTokeniser.h
+    Source/Views/CelCodeTokeniser.cpp
     Source/Views/ImportPanel.h
     Source/Views/ImportPanel.cpp
     Source/Scene/Components.h
     Source/Scene/AssetCatalog.h
     Source/Scene/AssetCatalog.cpp
+    Source/Scene/ScriptCatalog.h
+    Source/Scene/ScriptCatalog.cpp
     Source/Scene/AnimationSampler.h
     Source/Scene/AnimationSampler.cpp
     Source/Scene/AnimationSlicer.h
@@ -127,6 +133,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Import/Importers/AudioAssetImporter.cpp
     Source/Import/Importers/TextureAssetImporter.h
     Source/Import/Importers/TextureAssetImporter.cpp
+    Source/Import/Importers/ScriptAssetImporter.h
+    Source/Import/Importers/ScriptAssetImporter.cpp
     Source/Audio/AudioCatalog.h
     Source/Audio/AudioCatalog.cpp
     Source/Audio/AudioPreviewPlayer.h

@@ -133,4 +133,21 @@ struct Animator {
     bool loop = true;
 };
 
+// GS7: an entity's own EDITABLE copy of a CEL script's source text --
+// independent of the ScriptCatalog entry it was originally attached
+// from (assetName is kept only for display/reference), the same
+// relationship Transform has to a placed-from asset's original position:
+// seeded from a shared source, then freely mutated per-instance from
+// here on. This is what Views/ScriptPanel.h's juce::CodeEditorComponent
+// actually reads/writes; the compiled, execution-ready result lives
+// separately on ce::engine::ScriptComponent (EngineCore, framework-
+// agnostic, no JUCE types) -- this component is the JUCE-facing source
+// text half of that pair, deliberately kept apart the same way
+// scene::Transform's JUCE conversions stay out of ce::engine::Transform
+// itself.
+struct ScriptSource {
+    juce::String assetName; // which ScriptCatalog entry this started from, for display only.
+    juce::String source;
+};
+
 } // namespace ce::scene
