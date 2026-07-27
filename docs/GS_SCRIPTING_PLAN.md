@@ -1,8 +1,9 @@
 # GS — Game Scripting: CEL (Creation Engine Language)
 
 > **Status** (tracked live in the [Creation Engine Build Plan](https://github.com/users/wwestlake/projects/18) GitHub Project):
-> GS1–GS10 complete (plus GS-Interop, a cross-app scripting milestone inserted after GS8 — see
-> `docs/CROSS_APP_LANGUAGE_DOMAINS.md`) · GS11 not started.
+> **GS1–GS11 complete** (plus GS-Interop, a cross-app scripting milestone inserted after GS8 — see
+> `docs/CROSS_APP_LANGUAGE_DOMAINS.md`). Every milestone in this plan's original scope is done; see this doc's own
+> "explicitly out of scope" section for what was deliberately never built.
 > This document is the original milestone plan as approved, kept as-written for historical accuracy — it is not
 > updated after the fact to reflect adaptations made during implementation. Notable real-world deviations from this
 > plan (all judgment calls made during implementation, not scope cuts): GS5 descoped the `IScriptRuntime` abstraction
@@ -15,8 +16,14 @@
 > GS9 doesn't generate auxiliary functions — that's GS11's reusable-sub-graph scope). GS10's node editor
 > (`Source/Views/NodeEditor/`) is a new `WorkspaceMode::Logic` tab, not the originally-sketched dedicated
 > undo/redo-aware editor mode — undo/redo was explicitly out of scope for GS10 (belongs to a future editor-wide
-> undo effort, per this doc's own "explicitly out of scope" section). See `docs/SCRIPTING_ABI.md` for the as-built
-> host ABI reference, which supersedes this plan's ABI section where they differ.
+> undo effort, per this doc's own "explicitly out of scope" section). GS11's reusable sub-graphs are zero-argument/
+> void only (a SubgraphEntry has no `self`/`dt`, same shape as CallFunction) — typed sub-graph parameters are a
+> natural, additive follow-up, not built. GS11's diagnostic-to-node mapping (`CheckGeneratedSource`) and `--trace`
+> both landed as designed, plus a real UI payoff not explicitly in the original plan text: `NodeGraphComponent` now
+> shows a live red highlight on whichever node a diagnostic maps to, updated on every graph edit (wiring, add/
+> remove, and pin-default edits alike), not just surfaced as a post-compile error message. See
+> `docs/SCRIPTING_ABI.md` for the as-built host ABI reference, which supersedes this plan's ABI section where they
+> differ.
 
 ## Context
 

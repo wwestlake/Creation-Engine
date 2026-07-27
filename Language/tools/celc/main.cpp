@@ -316,19 +316,21 @@ std::unique_ptr<ce::node_system::Graph> LoadGraph(const std::string& path) {
     return graph;
 }
 
-// --graph-to-source <file.celg>: GS9's own headless entry point into
-// ce_lang_nodegen -- loads a graph, generates CEL source text from it
-// against the real v1 node catalog, and prints the result to stdout (or
-// every codegen error to stderr, one per line, on failure). This is
-// what a future "View Generated Code" pane in GS10's node editor will
-// call under the hood.
-int RunGraphToSource(const std::string& path) {
+// --graph-to-source <file.celg> [--trace]: GS9's own headless entry
+// point into ce_lang_nodegen -- loads a graph, generates CEL source text
+// from it against the real v1 node catalog, and prints the result to
+// stdout (or every codegen error to stderr, one per line, on failure).
+// This is what a future "View Generated Code" pane in GS10's node
+// editor calls under the hood. --trace (GS11) inserts a real runtime
+// trace call at the start of every reached node -- see
+// lang/nodegen/graph_to_source.h's own comment.
+int RunGraphToSource(const std::string& path, bool trace) {
     auto graph = LoadGraph(path);
     if (!graph) {
         return 1;
     }
     const auto registry = ce::lang::nodegen::BuildCoreNodeCatalog();
-    const auto result = ce::lang::nodegen::GenerateSource(*graph, registry);
+    const auto result = ce::lang::nodegen::GenerateSource(*graph, registry, { trace });
     if (!result.ok) {
         for (const std::string& err : result.errors) {
             std::cerr << "celc: " << err << std::endl;
@@ -339,23 +341,24 @@ int RunGraphToSource(const std::string& path) {
     return 0;
 }
 
-// --run-graph <file.celg> [--ticks N] [--dt D]: generates source from
-// the graph exactly like --graph-to-source, then runs it through the
-// SAME real production pipeline --run-simulation uses (RunSimulationFromSource)
-// rather than a separate graph-walking interpreter -- see
-// docs/CAPABILITIES.md section 4.1's "compile authored graphs down to
-// fast native execution rather than interpreting them node-by-node."
-// This is GS9's own flagship verification vehicle: run this on a graph
-// and --run-simulation on a hand-written .cel describing the same
-// behavior, and diff the two tools' identical two-line output (see
+// --run-graph <file.celg> [--ticks N] [--dt D] [--trace]: generates
+// source from the graph exactly like --graph-to-source, then runs it
+// through the SAME real production pipeline --run-simulation uses
+// (RunSimulationFromSource) rather than a separate graph-walking
+// interpreter -- see docs/CAPABILITIES.md section 4.1's "compile
+// authored graphs down to fast native execution rather than
+// interpreting them node-by-node." This is GS9's own flagship
+// verification vehicle: run this on a graph and --run-simulation on a
+// hand-written .cel describing the same behavior, and diff the two
+// tools' identical two-line output (see
 // Language/tests/nodegen/run_nodegen_parity_test.cmake).
-int RunRunGraph(const std::string& path, int ticks, float dt) {
+int RunRunGraph(const std::string& path, int ticks, float dt, bool trace) {
     auto graph = LoadGraph(path);
     if (!graph) {
         return 1;
     }
     const auto registry = ce::lang::nodegen::BuildCoreNodeCatalog();
-    const auto result = ce::lang::nodegen::GenerateSource(*graph, registry);
+    const auto result = ce::lang::nodegen::GenerateSource(*graph, registry, { trace });
     if (!result.ok) {
         for (const std::string& err : result.errors) {
             std::cerr << "celc: " << err << std::endl;
@@ -363,6 +366,43 @@ int RunRunGraph(const std::string& path, int ticks, float dt) {
         return 1;
     }
     return RunSimulationFromSource(result.source, ticks, dt);
+}
+
+// --check-graph-diagnostics <file.celg>: GS11's headless entry point
+// into ce::lang::nodegen::CheckGeneratedSource -- generates source from
+// the graph, then runs it through parse+sema (no JIT) and maps every
+// resulting diagnostic back to the node that produced it via the
+// generator's own source map, printing one `node <id>: CEL<code>:
+// <message>` line per diagnostic (or `<no node>: ...` if a diagnostic's
+// line didn't map to any node -- e.g. a file-scope `var` line). Exit 0
+// with "OK" if generation AND checking both come back clean. This is
+// the "a broken node input highlights that specific node, not an
+// opaque error" requirement's own verification vehicle -- see
+// Language/tests/run_graph_diagnostics_test.cmake.
+int RunCheckGraphDiagnostics(const std::string& path) {
+    auto graph = LoadGraph(path);
+    if (!graph) {
+        return 1;
+    }
+    const auto registry = ce::lang::nodegen::BuildCoreNodeCatalog();
+    const auto genResult = ce::lang::nodegen::GenerateSource(*graph, registry);
+    if (!genResult.ok) {
+        for (const std::string& err : genResult.errors) {
+            std::cerr << "celc: " << err << std::endl;
+        }
+        return 1;
+    }
+
+    const auto checkResult = ce::lang::nodegen::CheckGeneratedSource(genResult);
+    for (const auto& diag : checkResult.diagnostics) {
+        std::cout << (diag.nodeId == 0 ? std::string("<no node>") : ("node " + std::to_string(diag.nodeId))) << ": CEL"
+                   << static_cast<int>(diag.code) << ": " << diag.message << std::endl;
+    }
+    if (!checkResult.ok) {
+        return 1;
+    }
+    std::cout << "OK" << std::endl;
+    return 0;
 }
 
 // --measure-compile <file.cel>: times ce::engine::IScriptRuntime::Compile
@@ -435,8 +475,15 @@ int RunDumpNodegenFixture(const std::string& name) {
         graph = ce::lang::tools::BuildBounceGraph();
     } else if (name == "operator-coverage") {
         graph = ce::lang::tools::BuildOperatorCoverageGraph();
+    } else if (name == "subgraph") {
+        graph = ce::lang::tools::BuildSubgraphGraph();
+    } else if (name == "diagnostic-mapping") {
+        graph = ce::lang::tools::BuildDiagnosticMappingGraph();
+    } else if (name == "trace-demo") {
+        graph = ce::lang::tools::BuildTraceDemoGraph();
     } else {
-        std::cerr << "celc: unknown nodegen fixture '" << name << "' (expected 'bounce' or 'operator-coverage')"
+        std::cerr << "celc: unknown nodegen fixture '" << name
+                   << "' (expected 'bounce', 'operator-coverage', 'subgraph', 'diagnostic-mapping', or 'trace-demo')"
                    << std::endl;
         return 1;
     }
@@ -547,21 +594,34 @@ int main(int argc, char** argv) {
     }
 
     if (argc >= 3 && std::string(argv[1]) == "--graph-to-source") {
-        return RunGraphToSource(argv[2]);
+        bool trace = false;
+        for (int i = 3; i < argc; ++i) {
+            if (std::string(argv[i]) == "--trace") {
+                trace = true;
+            }
+        }
+        return RunGraphToSource(argv[2], trace);
     }
 
     if (argc >= 3 && std::string(argv[1]) == "--run-graph") {
         int ticks = 1;
         float dt = 1.0f / 60.0f;
-        for (int i = 3; i + 1 < argc; i += 2) {
+        bool trace = false;
+        for (int i = 3; i < argc; ++i) {
             const std::string flag = argv[i];
-            if (flag == "--ticks") {
-                ticks = std::atoi(argv[i + 1]);
-            } else if (flag == "--dt") {
-                dt = static_cast<float>(std::atof(argv[i + 1]));
+            if (flag == "--trace") {
+                trace = true;
+            } else if (flag == "--ticks" && i + 1 < argc) {
+                ticks = std::atoi(argv[++i]);
+            } else if (flag == "--dt" && i + 1 < argc) {
+                dt = static_cast<float>(std::atof(argv[++i]));
             }
         }
-        return RunRunGraph(argv[2], ticks, dt);
+        return RunRunGraph(argv[2], ticks, dt, trace);
+    }
+
+    if (argc >= 3 && std::string(argv[1]) == "--check-graph-diagnostics") {
+        return RunCheckGraphDiagnostics(argv[2]);
     }
 
     if (argc >= 3 && std::string(argv[1]) == "--emit-llvm") {
@@ -582,9 +642,10 @@ int main(int argc, char** argv) {
                  "  celc --run <file.cel> [--entry NAME] [--opt 0-3]\n"
                  "  celc --run-world <file.cel> [--entry NAME] [--ticks N] [--dt D] [--opt 0-3]\n"
                  "  celc --run-simulation <file.cel> [--ticks N] [--dt D]\n"
-                 "  celc --dump-nodegen-fixture <bounce|operator-coverage>\n"
-                 "  celc --graph-to-source <file.celg>\n"
-                 "  celc --run-graph <file.celg> [--ticks N] [--dt D]\n"
+                 "  celc --dump-nodegen-fixture <bounce|operator-coverage|subgraph|diagnostic-mapping|trace-demo>\n"
+                 "  celc --graph-to-source <file.celg> [--trace]\n"
+                 "  celc --run-graph <file.celg> [--ticks N] [--dt D] [--trace]\n"
+                 "  celc --check-graph-diagnostics <file.celg>\n"
                  "  celc --measure-compile <file.cel>\n"
                  "  celc --emit-llvm <file.cel>\n";
     return 1;

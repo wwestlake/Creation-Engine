@@ -26,8 +26,14 @@
 // - CallFunction supports only a zero-argument, void target function,
 //   referenced by an unconnected String "function" name pin -- it emits
 //   a plain call statement and trusts sema to catch a wrong/missing
-//   name. Generating the *target* function itself from another part of
-//   a graph (reusable sub-graphs) is GS11 scope, not this milestone's.
+//   name. GS11's CallSubgraph (below) is the validated counterpart:
+//   generation itself checks the target actually exists as a
+//   SubgraphEntry in the SAME graph, rather than trusting sema.
+// - SubgraphEntry/CallSubgraph (GS11): a reusable sub-graph is also
+//   zero-argument/void, same as CallFunction -- a SubgraphEntry has no
+//   `self`/`dt` output, so its body cannot reference either. Typed
+//   sub-graph parameters are a natural, additive follow-up, not built
+//   here.
 // - Sequence has a fixed arity of 3 ordered exec outputs
 //   (execOut0/execOut1/execOut2); a variable-arity Sequence needs an
 //   editor affordance to add/remove pins, which belongs to GS10.
@@ -64,6 +70,8 @@ inline constexpr const char* Log = "Log";
 inline constexpr const char* GetVariable = "GetVariable";
 inline constexpr const char* SetVariable = "SetVariable";
 inline constexpr const char* CallFunction = "CallFunction";
+inline constexpr const char* SubgraphEntry = "SubgraphEntry";
+inline constexpr const char* CallSubgraph = "CallSubgraph";
 } // namespace NodeType
 
 namespace PinName {

@@ -9,6 +9,7 @@
 
 #include "engine/script_runtime.h"
 #include "engine/world.h"
+#include "lang/nodegen/graph_to_source.h"
 #include "lang/nodegen/node_catalog.h"
 #include "node_system/graph.h"
 #include "Views/NodeEditor/GeneratedCodeView.h"
@@ -60,6 +61,11 @@ private:
     void LoadGraph();
     void SaveGraph();
     void GenerateAndShowCode();
+    // GS11: applies a CheckGeneratedSource result to statusLabel_ and
+    // the canvas's error-node highlight. Returns true iff clean (no
+    // diagnostics) -- callers use this to decide whether it's worth
+    // proceeding to an actual (expensive) JIT compile.
+    bool ShowCheckResult(const ce::lang::nodegen::CheckSourceResult& checkResult);
     void CompileAndAttach();
 
     engine::World& world_;

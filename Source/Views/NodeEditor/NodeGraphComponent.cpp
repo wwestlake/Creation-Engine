@@ -51,6 +51,7 @@ void NodeGraphComponent::ClearSelection() {
 
 void NodeGraphComponent::GraphReplaced() {
     selectedNode_ = 0;
+    errorNode_ = 0;
     draggingNode_ = false;
     draggingWire_ = false;
     panning_ = false;
@@ -218,6 +219,15 @@ void NodeGraphComponent::DrawNode(juce::Graphics& g, const Node& node) {
 
     g.setColour(selected ? juce::Colours::white : juce::Colour(0xff384354));
     g.drawRoundedRectangle(bounds, 6.0f, selected ? 2.0f : 1.0f);
+
+    // GS11: drawn ADDITIONALLY (a slightly larger, outer red ring), not
+    // instead of the selection outline -- a node can be both selected
+    // AND the current diagnostic's target at once, and both facts stay
+    // visible.
+    if (node.Id() == errorNode_) {
+        g.setColour(juce::Colours::red);
+        g.drawRoundedRectangle(bounds.expanded(2.5f), 7.0f, 2.0f);
+    }
 
     g.setFont(juce::Font(juce::FontOptions(std::max(9.0f, 11.0f * zoom_))));
     const auto& inputs = node.Inputs();

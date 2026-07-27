@@ -348,6 +348,62 @@ add_test(
     COMMAND ${CMAKE_COMMAND}
             -DCELC_EXE=$<TARGET_FILE:celc>
             -DTEST_CELG=${CMAKE_CURRENT_SOURCE_DIR}/tests/nodegen/no_entry.celg
-            -DEXPECT_SUBSTRING=no OnStart or OnTick
+            -DEXPECT_SUBSTRING=no OnStart, OnTick, or SubgraphEntry
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_graph_to_source_error_test.cmake"
+)
+
+# GS11: subgraph.celg (SubgraphEntry("Helper") called twice via two
+# CallSubgraph nodes, built via BuildSubgraphGraph) and subgraph.cel
+# (hand-written) describe the identical behavior -- run for real via
+# --run-graph/--run-simulation, checked against a real final position
+# (2,0,0) that's only correct if Helper genuinely ran exactly twice.
+add_test(
+    NAME gs11_subgraph_parity
+    COMMAND ${CMAKE_COMMAND}
+            -DCELC_EXE=$<TARGET_FILE:celc>
+            -DTEST_CELG=${CMAKE_CURRENT_SOURCE_DIR}/tests/nodegen/subgraph.celg
+            -DTEST_CEL=${CMAKE_CURRENT_SOURCE_DIR}/tests/nodegen/subgraph.cel
+            -DEXPECTED_FILE=${CMAKE_CURRENT_SOURCE_DIR}/tests/nodegen/subgraph.expected
+            -DTICKS=1
+            -DDT=0.016666667
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_nodegen_parity_test.cmake"
+)
+
+# GS11: the flagship "a subgraph called twice emits one func + two call
+# sites" claim, checked as generated TEXT (the parity test above checks
+# it as real behavior).
+add_test(
+    NAME gs11_subgraph_source_shape
+    COMMAND ${CMAKE_COMMAND}
+            -DCELC_EXE=$<TARGET_FILE:celc>
+            -DTEST_CELG=${CMAKE_CURRENT_SOURCE_DIR}/tests/nodegen/subgraph.celg
+            -DEXPECTED_FILE=${CMAKE_CURRENT_SOURCE_DIR}/tests/nodegen/subgraph_source.expected
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_graph_to_source_test.cmake"
+)
+
+# GS11: a CallFunction node naming an undefined function generates
+# cleanly but fails sema -- CheckGeneratedSource must map that failure
+# back to the specific CallFunction node, not just an opaque source
+# line. See run_graph_diagnostics_test.cmake's own comment.
+add_test(
+    NAME gs11_graph_diagnostics_mapping
+    COMMAND ${CMAKE_COMMAND}
+            -DCELC_EXE=$<TARGET_FILE:celc>
+            -DTEST_CELG=${CMAKE_CURRENT_SOURCE_DIR}/tests/nodegen/diagnostic_mapping.celg
+            -DEXPECTED_FILE=${CMAKE_CURRENT_SOURCE_DIR}/tests/nodegen/diagnostic_mapping.expected
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_graph_diagnostics_test.cmake"
+)
+
+# GS11: --trace emits a genuine runtime execution trace (one real
+# log_int call per node actually reached) -- see
+# run_graph_trace_test.cmake's own comment.
+add_test(
+    NAME gs11_graph_trace
+    COMMAND ${CMAKE_COMMAND}
+            -DCELC_EXE=$<TARGET_FILE:celc>
+            -DTEST_CELG=${CMAKE_CURRENT_SOURCE_DIR}/tests/nodegen/trace_demo.celg
+            -DEXPECTED_FILE=${CMAKE_CURRENT_SOURCE_DIR}/tests/nodegen/trace_demo.expected
+            -DTICKS=1
+            -DDT=0.016666667
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_graph_trace_test.cmake"
 )

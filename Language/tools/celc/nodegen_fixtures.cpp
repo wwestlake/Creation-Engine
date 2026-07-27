@@ -244,4 +244,73 @@ std::unique_ptr<Graph> BuildOperatorCoverageGraph() {
     return graphPtr;
 }
 
+std::unique_ptr<Graph> BuildSubgraphGraph() {
+    const NodeTypeRegistry registry = ce::lang::nodegen::BuildCoreNodeCatalog();
+    auto graphPtr = std::make_unique<Graph>("SubgraphDemo");
+    Graph& graph = *graphPtr;
+
+    Node& onStart = AddNode(graph, registry, NodeType::OnStart);
+    Node& helperEntry = AddNode(graph, registry, NodeType::SubgraphEntry);
+    SetDefault(helperEntry, PinName::Name, std::string("Helper"));
+
+    // Helper's own body: counter = counter + 1.0.
+    Node& getCounter = AddNode(graph, registry, NodeType::GetVariable);
+    SetDefault(getCounter, PinName::Name, std::string("counter"));
+    Node& add0 = AddNode(graph, registry, NodeType::Add);
+    SetDefault(add0, PinName::B, 1.0f);
+    Node& setCounter = AddNode(graph, registry, NodeType::SetVariable);
+    SetDefault(setCounter, PinName::Name, std::string("counter"));
+    Wire(graph, helperEntry, PinName::ExecOut, setCounter, PinName::ExecIn);
+    Wire(graph, getCounter, PinName::Value, add0, PinName::A);
+    Wire(graph, add0, PinName::Result, setCounter, PinName::Value);
+
+    // on_start: counter = 0.0; Helper(); Helper(); set_position(self, vec3(counter,0,0)).
+    Node& setCounter0 = AddNode(graph, registry, NodeType::SetVariable);
+    SetDefault(setCounter0, PinName::Name, std::string("counter"));
+    Node& call1 = AddNode(graph, registry, NodeType::CallSubgraph);
+    SetDefault(call1, PinName::Name, std::string("Helper"));
+    Node& call2 = AddNode(graph, registry, NodeType::CallSubgraph);
+    SetDefault(call2, PinName::Name, std::string("Helper"));
+    Node& setPos = AddNode(graph, registry, NodeType::SetPosition);
+    Node& getCounter2 = AddNode(graph, registry, NodeType::GetVariable);
+    SetDefault(getCounter2, PinName::Name, std::string("counter"));
+    Node& makeVec = AddNode(graph, registry, NodeType::MakeVec3);
+
+    Wire(graph, onStart, PinName::ExecOut, setCounter0, PinName::ExecIn);
+    Wire(graph, setCounter0, PinName::ExecOut, call1, PinName::ExecIn);
+    Wire(graph, call1, PinName::ExecOut, call2, PinName::ExecIn);
+    Wire(graph, call2, PinName::ExecOut, setPos, PinName::ExecIn);
+    Wire(graph, onStart, PinName::Self, setPos, PinName::Entity);
+    Wire(graph, getCounter2, PinName::Value, makeVec, PinName::X);
+    Wire(graph, makeVec, PinName::Value, setPos, PinName::Value);
+
+    return graphPtr;
+}
+
+std::unique_ptr<Graph> BuildDiagnosticMappingGraph() {
+    const NodeTypeRegistry registry = ce::lang::nodegen::BuildCoreNodeCatalog();
+    auto graphPtr = std::make_unique<Graph>("DiagnosticMappingDemo");
+    Graph& graph = *graphPtr;
+
+    Node& onStart = AddNode(graph, registry, NodeType::OnStart);
+    Node& call = AddNode(graph, registry, NodeType::CallFunction);
+    SetDefault(call, PinName::Function, std::string("NonexistentHelper"));
+    Wire(graph, onStart, PinName::ExecOut, call, PinName::ExecIn);
+
+    return graphPtr;
+}
+
+std::unique_ptr<Graph> BuildTraceDemoGraph() {
+    const NodeTypeRegistry registry = ce::lang::nodegen::BuildCoreNodeCatalog();
+    auto graphPtr = std::make_unique<Graph>("TraceDemo");
+    Graph& graph = *graphPtr;
+
+    Node& onStart = AddNode(graph, registry, NodeType::OnStart);
+    Node& log = AddNode(graph, registry, NodeType::Log);
+    SetDefault(log, PinName::Message, std::string("trace demo"));
+    Wire(graph, onStart, PinName::ExecOut, log, PinName::ExecIn);
+
+    return graphPtr;
+}
+
 } // namespace ce::lang::tools

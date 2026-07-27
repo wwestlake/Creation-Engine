@@ -43,6 +43,14 @@ public:
     ce::node_system::NodeId SelectedNode() const { return selectedNode_; }
     void ClearSelection();
 
+    // GS11: highlights the node CheckGeneratedSource attributed the
+    // current diagnostic to (a red outline, drawn in addition to --
+    // not instead of -- the normal selection outline), or clears it.
+    // LogicPanel re-derives this after every graph edit, so it always
+    // reflects the LATEST check, not a stale one.
+    void SetErrorNode(ce::node_system::NodeId id) { errorNode_ = id; repaint(); }
+    void ClearErrorNode() { SetErrorNode(0); }
+
     // Re-reads `graph_` from scratch (e.g. after LogicPanel replaces it
     // wholesale via Load) -- resets selection, keeps the current
     // pan/zoom so loading a graph doesn't disorient the view.
@@ -91,6 +99,7 @@ private:
     float zoom_ = 1.0f;
 
     ce::node_system::NodeId selectedNode_ = 0;
+    ce::node_system::NodeId errorNode_ = 0;
 
     bool panning_ = false;
     juce::Point<float> panStartMouse_;

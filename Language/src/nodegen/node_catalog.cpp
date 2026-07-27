@@ -143,6 +143,17 @@ void RegisterUtilityNodes(NodeTypeRegistry& registry) {
     registry.Register(NodeTypeDescriptor{
         NodeType::CallFunction, Domain::Core, /*inputs=*/{ Exec(PinName::ExecIn), StringConfig(PinName::Function) },
         /*outputs=*/{ Exec(PinName::ExecOut) } });
+
+    // GS11: SubgraphEntry has no execIn (it's a root, like OnStart/OnTick)
+    // -- its "name" config pin has no wire counterpart to accept either,
+    // same reasoning as every other config-only String pin.
+    registry.Register(NodeTypeDescriptor{
+        NodeType::SubgraphEntry, Domain::Core, /*inputs=*/{ StringConfig(PinName::Name) },
+        /*outputs=*/{ Exec(PinName::ExecOut) } });
+
+    registry.Register(NodeTypeDescriptor{
+        NodeType::CallSubgraph, Domain::Core, /*inputs=*/{ Exec(PinName::ExecIn), StringConfig(PinName::Name) },
+        /*outputs=*/{ Exec(PinName::ExecOut) } });
 }
 
 } // namespace

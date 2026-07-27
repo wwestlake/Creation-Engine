@@ -102,6 +102,9 @@ void NodeInspector::AddFloatRow(const juce::String& label, PinId pinId, bool isV
         } else {
             p->defaultValue = value;
         }
+        if (onValueChanged) {
+            onValueChanged();
+        }
     };
     editor->onReturnKey = commit;
     editor->onFocusLost = commit;
@@ -135,6 +138,9 @@ void NodeInspector::AddIntRow(const juce::String& label, PinId pinId) {
         Pin* p = n != nullptr ? n->FindPin(pinId) : nullptr;
         if (p != nullptr) {
             p->defaultValue = static_cast<std::int64_t>(rawEditor->getText().getLargeIntValue());
+        }
+        if (onValueChanged) {
+            onValueChanged();
         }
     };
     editor->onReturnKey = commit;
@@ -170,6 +176,9 @@ void NodeInspector::AddBoolRow(const juce::String& label, PinId pinId) {
         if (p != nullptr) {
             p->defaultValue = rawEditor->getToggleState();
         }
+        if (onValueChanged) {
+            onValueChanged();
+        }
     };
     addAndMakeVisible(*editor);
     row.editor = std::move(editor);
@@ -199,6 +208,9 @@ void NodeInspector::AddStringRow(const juce::String& label, PinId pinId) {
         Pin* p = n != nullptr ? n->FindPin(pinId) : nullptr;
         if (p != nullptr) {
             p->defaultValue = rawEditor->getText().toStdString();
+        }
+        if (onValueChanged) {
+            onValueChanged();
         }
     };
     editor->onReturnKey = commit;

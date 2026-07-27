@@ -33,4 +33,27 @@ std::unique_ptr<ce::node_system::Graph> BuildBounceGraph();
 // for the operators BuildBounceGraph doesn't reach.
 std::unique_ptr<ce::node_system::Graph> BuildOperatorCoverageGraph();
 
+// GS11: a SubgraphEntry named "Helper" (increments a global "counter"
+// variable) called TWICE from on_start via two separate CallSubgraph
+// nodes, then on_start reads the final counter into the entity's
+// position -- both the flagship claim ("a subgraph called twice emits
+// one func + two call sites") and real behavioral proof (final position
+// (2,0,0) only if Helper genuinely ran twice, not zero or one times).
+std::unique_ptr<ce::node_system::Graph> BuildSubgraphGraph();
+
+// GS11: OnStart -> CallFunction("NonexistentHelper") -- generates
+// cleanly (CallFunction trusts its target name, unlike CallSubgraph --
+// see node_catalog.h's own comment), but fails ce::lang::AnalyzeProgram
+// with UndefinedFunction. Exists to prove CheckGeneratedSource maps
+// that sema-only failure back to the CallFunction node's id, not just
+// an opaque source line nobody authoring the GRAPH ever saw.
+std::unique_ptr<ce::node_system::Graph> BuildDiagnosticMappingGraph();
+
+// GS11: the smallest possible graph with an observable trace --
+// OnStart -> Log("trace demo"). With --trace, exactly one
+// "trace node <id>" line (for the Log node -- OnStart itself is the
+// entry, never itself passed through the exec-chain walk that emits
+// trace calls) precedes the Log's own "[cel] trace demo" output.
+std::unique_ptr<ce::node_system::Graph> BuildTraceDemoGraph();
+
 } // namespace ce::lang::tools

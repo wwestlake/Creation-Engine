@@ -29,6 +29,14 @@ public:
 
     void SetSelectedNode(ce::node_system::NodeId nodeId);
 
+    // Fired whenever a field commits a new value into a Pin's
+    // defaultValue -- LogicPanel uses this to regenerate the code
+    // preview/error highlight, the same way NodeGraphComponent's
+    // onGraphChanged does for wiring/add/remove. Editing a pin default
+    // changes generated source just as much as a wire does, and without
+    // this callback nothing tells LogicPanel a re-generate is needed.
+    std::function<void()> onValueChanged;
+
     void resized() override;
     void paint(juce::Graphics& g) override;
 

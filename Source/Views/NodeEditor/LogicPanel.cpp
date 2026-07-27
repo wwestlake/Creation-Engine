@@ -65,6 +65,7 @@ LogicPanel::LogicPanel(engine::World& world) : world_(world) {
         GenerateAndShowCode();
     };
     addAndMakeVisible(inspector_);
+    inspector_.onValueChanged = [this] { GenerateAndShowCode(); };
     addAndMakeVisible(codeView_);
 }
 
@@ -142,10 +143,31 @@ void LogicPanel::GenerateAndShowCode() {
         }
         statusLabel_.setText(message, juce::dontSendNotification);
         codeView_.SetText({});
+        graphComponent_.ClearErrorNode();
         return;
     }
     codeView_.SetText(result.source);
-    statusLabel_.setText("Generated OK", juce::dontSendNotification);
+    ShowCheckResult(ce::lang::nodegen::CheckGeneratedSource(result));
+}
+
+// GS11: runs parse+sema (no JIT) on already-generated source and
+// reflects the result in both statusLabel_ and the canvas -- shared by
+// GenerateAndShowCode (so the highlight stays live as the user edits,
+// not just after a failed Compile & Attach) and CompileAndAttach (which
+// also uses this to short-circuit before wasting a JIT compile on
+// source it already knows sema will reject).
+bool LogicPanel::ShowCheckResult(const ce::lang::nodegen::CheckSourceResult& checkResult) {
+    if (checkResult.ok) {
+        graphComponent_.ClearErrorNode();
+        statusLabel_.setText("Generated OK", juce::dontSendNotification);
+        return true;
+    }
+    const auto& first = checkResult.diagnostics.front();
+    graphComponent_.SetErrorNode(first.nodeId);
+    const juce::String where = first.nodeId == 0 ? juce::String("(unmapped): ")
+                                                  : ("node " + juce::String(first.nodeId) + ": ");
+    statusLabel_.setText(where + juce::String(first.message), juce::dontSendNotification);
+    return false;
 }
 
 void LogicPanel::CompileAndAttach() {
@@ -163,6 +185,9 @@ void LogicPanel::CompileAndAttach() {
         return;
     }
     codeView_.SetText(result.source);
+    if (!ShowCheckResult(ce::lang::nodegen::CheckGeneratedSource(result))) {
+        return; // sema already rejects this -- no point spending a JIT compile on it.
+    }
 
     engine::IScriptRuntime* runtime = world_.ScriptRuntime();
     if (runtime == nullptr) {
