@@ -11,6 +11,29 @@ if(NOT DEFINED JUCE_DIR)
     message(FATAL_ERROR "Set JUCE_DIR to your JUCE root directory before configuring (same JUCE checkout Creation Station uses).")
 endif()
 
+enable_testing()
+
+# --- GS: CEL scripting language (LALR parser + LLVM JIT) -----------------
+# LLVM comes from a vcpkg-managed install (see vcpkg.json's pinned
+# builtin-baseline), not the full vcpkg CMake toolchain-file integration
+# -- that would require CMAKE_TOOLCHAIN_FILE to be set on this build
+# directory's very first configure, which AGENTS.md says not to do
+# without asking first. `vcpkg install` run from the repo root (manifest
+# mode, per vcpkg.json) lands packages in vcpkg_installed/<triplet>/ next
+# to the manifest by default -- pointing CMAKE_PREFIX_PATH there is
+# additive and safe to introduce on any reconfigure of the existing
+# build/ directory, and needs no knowledge of where the vcpkg tool
+# itself is checked out.
+option(CE_ENABLE_SCRIPTING "Build the CEL scripting language module (Language/, requires vcpkg LLVM)" ON)
+if(CE_ENABLE_SCRIPTING)
+    set(CE_VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/vcpkg_installed/x64-windows")
+    if(NOT EXISTS "${CE_VCPKG_INSTALLED_DIR}")
+        message(FATAL_ERROR "CE_ENABLE_SCRIPTING is ON but ${CE_VCPKG_INSTALLED_DIR} doesn't exist. Run `vcpkg install --triplet x64-windows` from the repo root first (see README.md's \"Scripting language build\" section), or configure with -DCE_ENABLE_SCRIPTING=OFF to skip the scripting module.")
+    endif()
+    list(APPEND CMAKE_PREFIX_PATH "${CE_VCPKG_INSTALLED_DIR}")
+    add_subdirectory(Language)
+endif()
+
 add_subdirectory("${JUCE_DIR}" juce)
 add_subdirectory(third_party/entt)
 

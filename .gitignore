@@ -18,3 +18,4 @@ _CPack_Packages/
 *.ninja
 *.log
 DerivedData/
+vcpkg_installed/
