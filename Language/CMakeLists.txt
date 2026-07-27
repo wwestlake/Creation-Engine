@@ -88,10 +88,31 @@ target_compile_features(ce_lang_jit PUBLIC cxx_std_20)
 # never meet in the same translation unit, which is cheap insurance
 # against the header-collision risk vcpkg LLVM + JUCE + windows.h
 # carries (min/max macros, _ITERATOR_DEBUG_LEVEL mismatches).
-add_executable(celc tools/celc/main.cpp)
-target_link_libraries(celc PRIVATE ce_lang_frontend ce_lang_jit)
+add_executable(celc
+    tools/celc/main.cpp
+    tools/celc/selftest_graph.h
+    tools/celc/selftest_graph.cpp
+)
+# node_system: PRIVATE -- celc's own GS8 test code (selftest_graph.cpp)
+# and --check-graph use NodeSystem directly; ce_lang_jit already brings
+# it in transitively via engine_core (both PUBLIC links), so this isn't
+# strictly required for the include path to resolve, but it's the
+# correct explicit dependency for what celc's OWN sources use, not just
+# what happens to ride along.
+target_link_libraries(celc PRIVATE ce_lang_frontend ce_lang_jit node_system)
 
 add_test(NAME gs1_llvm_selftest COMMAND celc --selftest-jit)
+add_test(NAME gs8_selftest_graph COMMAND celc --selftest-graph)
+
+# GS8: a committed .celg fixture must load and re-save unchanged -- see
+# run_celg_stability_test.cmake's own comment.
+add_test(
+    NAME gs8_celg_stability_example
+    COMMAND ${CMAKE_COMMAND}
+            -DCELC_EXE=$<TARGET_FILE:celc>
+            -DTEST_CELG=${CMAKE_CURRENT_SOURCE_DIR}/tests/graph/example.celg
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_celg_stability_test.cmake"
+)
 
 # GS2: every Language/tests/parse/*.cel round-tripped through
 # `celc --dump-ast` and diffed against its committed .expected fixture.

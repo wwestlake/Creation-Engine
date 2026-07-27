@@ -17,6 +17,8 @@
 #include "lang/jit/runtime.h"
 #include "lang/jit/script_runtime.h"
 #include "lang/sema.h"
+#include "node_system/celg_serialization.h"
+#include "selftest_graph.h"
 
 namespace {
 
@@ -276,6 +278,33 @@ int RunMeasureCompile(const std::string& path) {
     return 0;
 }
 
+// --check-graph <file.celg>: loads a .celg file and re-serializes it to
+// stdout -- GS8's format-stability regression vehicle. A committed
+// fixture's own text, diffed against this command's output, must be
+// byte-identical (see Language/tests/graph/run_celg_stability_test.cmake);
+// any drift means DeserializeGraph/SerializeGraph stopped round-tripping
+// exactly, which would silently corrupt every already-saved .celg file
+// in the wild once GS10's node editor exists.
+int RunCheckGraph(const std::string& path) {
+    std::ifstream file(path);
+    if (!file) {
+        std::cerr << "celc: cannot open " << path << std::endl;
+        return 1;
+    }
+    std::ostringstream sourceStream;
+    sourceStream << file.rdbuf();
+
+    std::string error;
+    auto graph = ce::node_system::DeserializeGraph(sourceStream.str(), error);
+    if (!graph) {
+        std::cerr << "celc: " << error << std::endl;
+        return 1;
+    }
+
+    std::cout << ce::node_system::SerializeGraph(*graph);
+    return 0;
+}
+
 int RunEmitLLVM(const std::string& path) {
     ce::lang::AstArena arena;
     ce::lang::DiagnosticEngine diagnostics;
@@ -302,6 +331,14 @@ int main(int argc, char** argv) {
         const bool ok = runtime.RunSelfTest();
         std::cout << (ok ? "[celc] selftest-jit: PASS" : "[celc] selftest-jit: FAIL") << std::endl;
         return ok ? 0 : 1;
+    }
+
+    if (argc >= 2 && std::string(argv[1]) == "--selftest-graph") {
+        return ce::lang::tools::RunSelfTestGraph();
+    }
+
+    if (argc >= 3 && std::string(argv[1]) == "--check-graph") {
+        return RunCheckGraph(argv[2]);
     }
 
     if (argc >= 3 && std::string(argv[1]) == "--dump-ast") {
@@ -371,8 +408,10 @@ int main(int argc, char** argv) {
     std::cout << "celc -- Creation Engine Language compiler/test-driver\n"
                  "usage:\n"
                  "  celc --selftest-jit\n"
+                 "  celc --selftest-graph\n"
                  "  celc --dump-ast <file.cel>\n"
                  "  celc --check <file.cel>\n"
+                 "  celc --check-graph <file.celg>\n"
                  "  celc --run <file.cel> [--entry NAME] [--opt 0-3]\n"
                  "  celc --run-world <file.cel> [--entry NAME] [--ticks N] [--dt D] [--opt 0-3]\n"
                  "  celc --run-simulation <file.cel> [--ticks N] [--dt D]\n"

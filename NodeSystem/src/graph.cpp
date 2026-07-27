@@ -14,6 +14,17 @@ Node& Graph::AddNode(std::string typeName, Domain domain) {
     return ref;
 }
 
+Node* Graph::AddNodeWithId(NodeId id, std::string typeName, Domain domain) {
+    if (nodes_.find(id) != nodes_.end()) {
+        return nullptr;
+    }
+    auto node = std::make_unique<Node>(id, std::move(typeName), domain);
+    Node* ref = node.get();
+    nodes_.emplace(id, std::move(node));
+    nextNodeId_ = std::max(nextNodeId_, id + 1);
+    return ref;
+}
+
 bool Graph::RemoveNode(NodeId id) {
     if (nodes_.erase(id) == 0) {
         return false;
@@ -37,10 +48,29 @@ const Node* Graph::FindNode(NodeId id) const {
 
 std::optional<ConnectionId> Graph::Connect(NodeId fromNode, PinId fromPin, NodeId toNode, PinId toPin,
                                             ConnectError* outError) {
+    return ConnectInternal(std::nullopt, fromNode, fromPin, toNode, toPin, outError);
+}
+
+std::optional<ConnectionId> Graph::ConnectWithId(ConnectionId id, NodeId fromNode, PinId fromPin, NodeId toNode,
+                                                  PinId toPin, ConnectError* outError) {
+    return ConnectInternal(id, fromNode, fromPin, toNode, toPin, outError);
+}
+
+std::optional<ConnectionId> Graph::ConnectInternal(std::optional<ConnectionId> explicitId, NodeId fromNode,
+                                                     PinId fromPin, NodeId toNode, PinId toPin,
+                                                     ConnectError* outError) {
     auto setError = [&](ConnectError err) {
         if (outError) *outError = err;
         return std::nullopt;
     };
+
+    if (explicitId.has_value()) {
+        const bool idInUse =
+            std::any_of(connections_.begin(), connections_.end(), [&](const Connection& c) { return c.id == *explicitId; });
+        if (idInUse) {
+            return std::nullopt; // caller (DeserializeGraph) is expected to have already validated this.
+        }
+    }
 
     Node* from = FindNode(fromNode);
     Node* to = FindNode(toNode);
@@ -62,8 +92,11 @@ std::optional<ConnectionId> Graph::Connect(NodeId fromNode, PinId fromPin, NodeI
         return setError(ConnectError::IncompatibleTypes);
     }
 
-    ConnectionId id = nextConnectionId_++;
-    connections_.push_back(Connection{id, fromNode, fromPin, toNode, toPin});
+    ConnectionId id = explicitId.value_or(nextConnectionId_++);
+    if (explicitId.has_value()) {
+        nextConnectionId_ = std::max(nextConnectionId_, id + 1);
+    }
+    connections_.push_back(Connection{ id, fromNode, fromPin, toNode, toPin });
     return id;
 }
 
