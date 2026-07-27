@@ -25,4 +25,30 @@ Type ParseTypeName(const std::string& name) {
     return Type::Unknown;
 }
 
+const char* ToString(IntrinsicDomain domain) {
+    switch (domain) {
+        case IntrinsicDomain::Core: return "core";
+        case IntrinsicDomain::World: return "world";
+    }
+    return "<unknown domain>";
+}
+
+IntrinsicDomainSet IntrinsicDomainSet::All() {
+    IntrinsicDomainSet set;
+    set.mask_ = (1u << static_cast<unsigned>(IntrinsicDomain::Core)) | (1u << static_cast<unsigned>(IntrinsicDomain::World));
+    return set;
+}
+
+IntrinsicDomainSet IntrinsicDomainSet::Only(const std::vector<IntrinsicDomain>& domains) {
+    IntrinsicDomainSet set;
+    for (IntrinsicDomain domain : domains) {
+        set.mask_ |= (1u << static_cast<unsigned>(domain));
+    }
+    return set;
+}
+
+bool IntrinsicDomainSet::Contains(IntrinsicDomain domain) const {
+    return (mask_ & (1u << static_cast<unsigned>(domain))) != 0;
+}
+
 } // namespace ce::lang

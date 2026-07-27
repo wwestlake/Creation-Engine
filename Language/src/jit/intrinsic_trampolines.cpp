@@ -227,4 +227,24 @@ std::vector<AbiSymbol> GetAbiTrampolines() {
     };
 }
 
+std::unordered_map<std::string, IntrinsicDomain> GetAbiSymbolDomains() {
+    std::unordered_map<std::string, IntrinsicDomain> domains;
+// Keyed by cSymbol (not `name`) to match GetAbiTrampolines()'s own key
+// space -- RegisterAbiTrampolines looks up each AbiSymbol::name (which
+// IS the cSymbol) against this map. The pure-IR math/vec3 intrinsics'
+// cSymbol is an inert placeholder (their own name, per intrinsics.def's
+// own comment) and never appears in GetAbiTrampolines()'s real list, so
+// those entries here are simply never queried -- harmless, not a bug.
+#define CEL_INTRINSIC0(name, cSymbol, purity, domain, ret) domains[#cSymbol] = IntrinsicDomain::domain;
+#define CEL_INTRINSIC1(name, cSymbol, purity, domain, ret, p1) domains[#cSymbol] = IntrinsicDomain::domain;
+#define CEL_INTRINSIC2(name, cSymbol, purity, domain, ret, p1, p2) domains[#cSymbol] = IntrinsicDomain::domain;
+#define CEL_INTRINSIC3(name, cSymbol, purity, domain, ret, p1, p2, p3) domains[#cSymbol] = IntrinsicDomain::domain;
+#include "lang/intrinsics.def"
+#undef CEL_INTRINSIC0
+#undef CEL_INTRINSIC1
+#undef CEL_INTRINSIC2
+#undef CEL_INTRINSIC3
+    return domains;
+}
+
 } // namespace ce::lang::jit

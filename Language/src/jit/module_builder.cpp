@@ -54,13 +54,19 @@ struct AbiIntrinsicInfo {
 
 std::unordered_map<std::string, AbiIntrinsicInfo> BuildAbiIntrinsicTable() {
     std::unordered_map<std::string, AbiIntrinsicInfo> table;
-#define CEL_INTRINSIC0(name, cSymbol, purity, ret) \
+// `domain` (GS-Interop) is deliberately unused here: codegen never sees
+// a blocked-domain call in the first place (sema.cpp's CheckCall rejects
+// it before BuildModule ever runs on that program), so this table has
+// no need to know about it -- see the GS-Interop plan's own note on why
+// module_builder.cpp needs no behavior change, just this positional
+// parameter to keep matching intrinsics.def's macro shape.
+#define CEL_INTRINSIC0(name, cSymbol, purity, domain, ret) \
     table[#name] = AbiIntrinsicInfo{ #cSymbol, Purity::purity, Type::ret, {} };
-#define CEL_INTRINSIC1(name, cSymbol, purity, ret, p1) \
+#define CEL_INTRINSIC1(name, cSymbol, purity, domain, ret, p1) \
     table[#name] = AbiIntrinsicInfo{ #cSymbol, Purity::purity, Type::ret, { Type::p1 } };
-#define CEL_INTRINSIC2(name, cSymbol, purity, ret, p1, p2) \
+#define CEL_INTRINSIC2(name, cSymbol, purity, domain, ret, p1, p2) \
     table[#name] = AbiIntrinsicInfo{ #cSymbol, Purity::purity, Type::ret, { Type::p1, Type::p2 } };
-#define CEL_INTRINSIC3(name, cSymbol, purity, ret, p1, p2, p3) \
+#define CEL_INTRINSIC3(name, cSymbol, purity, domain, ret, p1, p2, p3) \
     table[#name] = AbiIntrinsicInfo{ #cSymbol, Purity::purity, Type::ret, { Type::p1, Type::p2, Type::p3 } };
 #include "lang/intrinsics.def"
 #undef CEL_INTRINSIC0

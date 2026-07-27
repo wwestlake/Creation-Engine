@@ -1,7 +1,10 @@
 #pragma once
 
 #include <string>
+#include <unordered_map>
 #include <vector>
+
+#include "lang/type.h"
 
 namespace ce::lang::jit {
 
@@ -24,5 +27,17 @@ struct AbiSymbol {
 // intrinsics never appear here -- GS4 already lowers them directly to
 // LLVM IR with no external call at all.
 std::vector<AbiSymbol> GetAbiTrampolines();
+
+// GS-Interop: which IntrinsicDomain each real ABI symbol belongs to,
+// keyed by cSymbol (the same key GetAbiTrampolines() uses) -- X-macro-
+// built directly off intrinsics.def, unlike GetAbiTrampolines() itself
+// (a hand-written literal, kept in sync with intrinsics.def only by a
+// comment). This is what RegisterAbiTrampolines (abi_registration.cpp)
+// filters against for the JIT-symbol-resolution half of capability
+// gating (sema.cpp's CheckCall is the compile-time half). A cSymbol
+// with no entry here (only "ce_watchdog_tick") is always registered
+// regardless of the caller's allowed domain set -- it's a runtime
+// safety mechanism, not a script capability.
+std::unordered_map<std::string, IntrinsicDomain> GetAbiSymbolDomains();
 
 } // namespace ce::lang::jit

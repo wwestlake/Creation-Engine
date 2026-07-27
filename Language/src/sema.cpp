@@ -59,7 +59,10 @@ BinaryOp CompoundAssignToBinary(AssignOp op) {
 // own "public function, private machinery" shape.
 class Sema {
 public:
-    explicit Sema(DiagnosticEngine& diagnostics) : diagnostics_(diagnostics) { SeedIntrinsics(); }
+    explicit Sema(DiagnosticEngine& diagnostics, IntrinsicDomainSet allowedDomains)
+        : diagnostics_(diagnostics), allowedDomains_(allowedDomains) {
+        SeedIntrinsics();
+    }
 
     bool Analyze(Program& program) {
         // Pass 1: function signatures (purely syntactic -- type NAMES,
@@ -91,15 +94,26 @@ private:
     }
 
     void SeedIntrinsics() {
-// Sema only cares about name/return/param types -- cSymbol and purity
-// are GS5's IR-gen/JIT-registration concerns (module_builder.cpp),
-// deliberately ignored here rather than duplicating a second table.
-#define CEL_INTRINSIC0(name, cSymbol, purity, ret) functions_[#name] = FunctionSignature{ {}, Type::ret };
-#define CEL_INTRINSIC1(name, cSymbol, purity, ret, p1) functions_[#name] = FunctionSignature{ { Type::p1 }, Type::ret };
-#define CEL_INTRINSIC2(name, cSymbol, purity, ret, p1, p2) \
-    functions_[#name] = FunctionSignature{ { Type::p1, Type::p2 }, Type::ret };
-#define CEL_INTRINSIC3(name, cSymbol, purity, ret, p1, p2, p3) \
-    functions_[#name] = FunctionSignature{ { Type::p1, Type::p2, Type::p3 }, Type::ret };
+// Sema only cares about name/return/param types plus (GS-Interop) domain
+// -- cSymbol and purity are GS5's IR-gen/JIT-registration concerns
+// (module_builder.cpp), deliberately ignored here rather than
+// duplicating a second table. Every intrinsic is seeded into
+// functions_/intrinsicNames_ regardless of allowedDomains_ -- a user
+// function still can't shadow a built-in name even in a host that
+// blocks its domain (see CheckCall's separate, later domain check for
+// where a blocked CALL is actually rejected).
+#define CEL_INTRINSIC0(name, cSymbol, purity, domain, ret) \
+    functions_[#name] = FunctionSignature{ {}, Type::ret };  \
+    intrinsicDomains_[#name] = IntrinsicDomain::domain;
+#define CEL_INTRINSIC1(name, cSymbol, purity, domain, ret, p1) \
+    functions_[#name] = FunctionSignature{ { Type::p1 }, Type::ret }; \
+    intrinsicDomains_[#name] = IntrinsicDomain::domain;
+#define CEL_INTRINSIC2(name, cSymbol, purity, domain, ret, p1, p2) \
+    functions_[#name] = FunctionSignature{ { Type::p1, Type::p2 }, Type::ret }; \
+    intrinsicDomains_[#name] = IntrinsicDomain::domain;
+#define CEL_INTRINSIC3(name, cSymbol, purity, domain, ret, p1, p2, p3) \
+    functions_[#name] = FunctionSignature{ { Type::p1, Type::p2, Type::p3 }, Type::ret }; \
+    intrinsicDomains_[#name] = IntrinsicDomain::domain;
 #include "lang/intrinsics.def"
 #undef CEL_INTRINSIC0
 #undef CEL_INTRINSIC1
@@ -594,6 +608,20 @@ private:
         const FunctionSignature& sig = it->second;
         e.lhs->type = Type::Unknown; // the callee identifier itself has no expression type -- v1 has no function values.
 
+        // GS-Interop: a call to a known intrinsic outside this host's
+        // capability profile is rejected here -- compile-time, at the
+        // exact call site -- in addition to the defense-in-depth JIT
+        // symbol-resolution filter (RegisterAbiTrampolines). Reported,
+        // not returned early: still validates arity/argument types below
+        // so a script with both a domain violation and a real type error
+        // sees both, matching every other diagnostic in this function.
+        if (const auto domainIt = intrinsicDomains_.find(e.lhs->text);
+            domainIt != intrinsicDomains_.end() && !allowedDomains_.Contains(domainIt->second)) {
+            Report(DiagCode::IntrinsicNotAvailableInDomain, e.loc,
+                   "intrinsic '" + e.lhs->text + "' is not available in this host's domain profile (requires domain '" +
+                       ToString(domainIt->second) + "')");
+        }
+
         if (e.args.size() != sig.paramTypes.size()) {
             Report(DiagCode::WrongArgumentCount, e.loc,
                    "'" + e.lhs->text + "' expects " + std::to_string(sig.paramTypes.size()) + " argument(s), got " +
@@ -651,14 +679,16 @@ private:
     DiagnosticEngine& diagnostics_;
     std::unordered_map<std::string, FunctionSignature> functions_;
     std::unordered_set<std::string> intrinsicNames_;
+    std::unordered_map<std::string, IntrinsicDomain> intrinsicDomains_; // GS-Interop.
+    IntrinsicDomainSet allowedDomains_ = IntrinsicDomainSet::All();     // GS-Interop.
     std::unordered_map<std::string, Type> globals_;
     std::vector<std::unordered_map<std::string, Type>> scopes_;
 };
 
 } // namespace
 
-bool AnalyzeProgram(Program& program, DiagnosticEngine& diagnostics) {
-    Sema sema(diagnostics);
+bool AnalyzeProgram(Program& program, DiagnosticEngine& diagnostics, IntrinsicDomainSet allowedDomains) {
+    Sema sema(diagnostics, allowedDomains);
     return sema.Analyze(program);
 }
 

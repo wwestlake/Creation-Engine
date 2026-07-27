@@ -82,7 +82,7 @@ bool ValidateLifecycleSignature(ce::lang::Program& program, const std::string& n
 
 class CelScriptRuntime : public ce::engine::IScriptRuntime {
 public:
-    CelScriptRuntime() {
+    explicit CelScriptRuntime(ce::lang::IntrinsicDomainSet allowedDomains) : allowedDomains_(allowedDomains) {
         // Idempotent process-wide LLVM native-target registration --
         // same one-time-guard pattern as Runtime::Runtime() (runtime.cpp),
         // needed here too since a CelScriptRuntime can be constructed
@@ -110,7 +110,7 @@ public:
             errorOut = FormatDiagnostics(diagnostics);
             return nullptr;
         }
-        if (!ce::lang::AnalyzeProgram(*program, diagnostics)) {
+        if (!ce::lang::AnalyzeProgram(*program, diagnostics, allowedDomains_)) {
             errorOut = FormatDiagnostics(diagnostics);
             return nullptr;
         }
@@ -140,7 +140,7 @@ public:
         }
         script->lljit = std::move(*jitOrErr);
 
-        if (auto err = RegisterAbiTrampolines(*script->lljit)) {
+        if (auto err = RegisterAbiTrampolines(*script->lljit, allowedDomains_)) {
             errorOut = llvm::toString(std::move(err));
             return nullptr;
         }
@@ -188,12 +188,14 @@ private:
         diagnostics.PrintAll(out);
         return out.str();
     }
+
+    ce::lang::IntrinsicDomainSet allowedDomains_;
 };
 
 } // namespace
 
-std::shared_ptr<ce::engine::IScriptRuntime> CreateScriptRuntime() {
-    return std::make_shared<CelScriptRuntime>();
+std::shared_ptr<ce::engine::IScriptRuntime> CreateScriptRuntime(ce::lang::IntrinsicDomainSet allowedDomains) {
+    return std::make_shared<CelScriptRuntime>(allowedDomains);
 }
 
 } // namespace ce::lang::jit

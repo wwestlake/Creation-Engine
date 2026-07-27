@@ -265,3 +265,27 @@ add_test(
             -DMAX_MS=1000
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_compile_perf_test.cmake"
 )
+
+# GS-Interop: cross-app intrinsic capability gating -- the same script
+# (calls a World-domain intrinsic) must be REJECTED under a narrower
+# capability profile and must still SUCCEED under the real default
+# (IntrinsicDomainSet::All()) -- see docs/CROSS_APP_LANGUAGE_DOMAINS.md
+# and run_domain_diag_test.cmake/run_domain_ok_test.cmake's own
+# comments for why both halves of this pair matter.
+add_test(
+    NAME gs_interop_domain_blocked
+    COMMAND ${CMAKE_COMMAND}
+            -DCELC_EXE=$<TARGET_FILE:celc>
+            -DTEST_CEL=${CMAKE_CURRENT_SOURCE_DIR}/tests/domain/blocked_world_call.cel
+            -DEXPECT_CODE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/tests/domain/blocked_world_call.expect_code
+            -DDOMAINS=core
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_domain_diag_test.cmake"
+)
+add_test(
+    NAME gs_interop_domain_allowed
+    COMMAND ${CMAKE_COMMAND}
+            -DCELC_EXE=$<TARGET_FILE:celc>
+            -DTEST_CEL=${CMAKE_CURRENT_SOURCE_DIR}/tests/domain/blocked_world_call.cel
+            -DDOMAINS=core,world
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_domain_ok_test.cmake"
+)

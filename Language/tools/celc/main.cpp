@@ -6,6 +6,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "engine/core_components.h"
 #include "engine/script_component.h"
@@ -43,13 +44,49 @@ int RunDumpAst(const std::string& path) {
     return 0;
 }
 
+// GS-Interop: parses a comma-separated domain list ("core,world") into
+// an IntrinsicDomainSet -- celc's own CLI vehicle for exercising the
+// cross-app capability-gating mechanism (see lang/type.h's
+// IntrinsicDomain and docs/CROSS_APP_LANGUAGE_DOMAINS.md) from a real
+// compile, not just from unit-test code. An empty/absent flag means "no
+// restriction," matching IntrinsicDomainSet::All()'s role as the
+// default everywhere else. Prints an error and returns false for an
+// unknown domain name rather than silently ignoring it.
+bool ParseDomainSet(const std::string& csv, ce::lang::IntrinsicDomainSet& outSet) {
+    std::vector<ce::lang::IntrinsicDomain> domains;
+    std::istringstream stream(csv);
+    std::string token;
+    while (std::getline(stream, token, ',')) {
+        if (token == "core") {
+            domains.push_back(ce::lang::IntrinsicDomain::Core);
+        } else if (token == "world") {
+            domains.push_back(ce::lang::IntrinsicDomain::World);
+        } else {
+            std::cerr << "celc: unknown domain '" << token << "' (expected 'core' or 'world')" << std::endl;
+            return false;
+        }
+    }
+    outSet = ce::lang::IntrinsicDomainSet::Only(domains);
+    return true;
+}
+
 // --check: parse + semantic analysis, no codegen (that's GS4). Kept as
 // its own subcommand rather than folded into --dump-ast, since
 // --dump-ast's output is diffed against fixtures written before sema
 // existed -- running sema there too would mean every parse fixture also
 // has to be a well-typed program, which isn't the property those
 // fixtures are testing.
-int RunCheck(const std::string& path) {
+//
+// `domains` (GS-Interop, optional, "" = no restriction/All()) makes the
+// cross-app capability-gating mechanism exercisable from the CLI, e.g.
+// `celc --check script.cel --domains core` to compile as if this were a
+// host with no World access.
+int RunCheck(const std::string& path, const std::string& domains) {
+    ce::lang::IntrinsicDomainSet allowedDomains = ce::lang::IntrinsicDomainSet::All();
+    if (!domains.empty() && !ParseDomainSet(domains, allowedDomains)) {
+        return 1;
+    }
+
     std::ifstream file(path);
     if (!file) {
         std::cerr << "celc: cannot open " << path << std::endl;
@@ -64,7 +101,7 @@ int RunCheck(const std::string& path) {
         return 1;
     }
 
-    const bool ok = ce::lang::AnalyzeProgram(*program, diagnostics);
+    const bool ok = ce::lang::AnalyzeProgram(*program, diagnostics, allowedDomains);
     diagnostics.PrintAll(std::cerr);
     if (!ok) {
         return 1;
@@ -346,7 +383,13 @@ int main(int argc, char** argv) {
     }
 
     if (argc >= 3 && std::string(argv[1]) == "--check") {
-        return RunCheck(argv[2]);
+        std::string domains;
+        for (int i = 3; i + 1 < argc; i += 2) {
+            if (std::string(argv[i]) == "--domains") {
+                domains = argv[i + 1];
+            }
+        }
+        return RunCheck(argv[2], domains);
     }
 
     if (argc >= 3 && std::string(argv[1]) == "--run") {
@@ -410,7 +453,7 @@ int main(int argc, char** argv) {
                  "  celc --selftest-jit\n"
                  "  celc --selftest-graph\n"
                  "  celc --dump-ast <file.cel>\n"
-                 "  celc --check <file.cel>\n"
+                 "  celc --check <file.cel> [--domains core,world]\n"
                  "  celc --check-graph <file.celg>\n"
                  "  celc --run <file.cel> [--entry NAME] [--opt 0-3]\n"
                  "  celc --run-world <file.cel> [--entry NAME] [--ticks N] [--dt D] [--opt 0-3]\n"

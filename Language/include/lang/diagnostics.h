@@ -45,6 +45,7 @@ enum class DiagCode {
     DivisionByZero = 2020,
     NoMemberAccess = 2021,
     UnknownMember = 2022,
+    IntrinsicNotAvailableInDomain = 2023, // GS-Interop: cross-app capability gating -- see lang/type.h's IntrinsicDomain.
 };
 
 struct Diagnostic {
