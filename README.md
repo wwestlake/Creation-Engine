@@ -60,16 +60,22 @@ D:\vcpkg\vcpkg.exe install --triplet x64-windows --x-buildtrees-root="D:\vcpkg-b
 
 This reads `vcpkg.json` (pinned `builtin-baseline` = LLVM 18.1.6) and builds `llvm[core,target-x86,tools]` **from source** — vcpkg has no prebuilt binary cache for this port/feature/triplet combination, so expect a genuinely long build (hours, not minutes) the first time. It only needs to happen once; `VCPKG_DEFAULT_BINARY_CACHE` makes subsequent `vcpkg install` runs (e.g. after a triplet/feature change) reuse what's already built. Run from the repo root (where `vcpkg.json` lives), `vcpkg install` is in **manifest mode** and lands the built packages in `vcpkg_installed/x64-windows/` next to the manifest — that directory is git-ignored, and CMake auto-discovers it (see below), so no extra path variable is needed for this part.
 
-**Then configure CMake as usual** — `JUCE_DIR` plus nothing new:
+**GS2 also needs Bison/Flex** (the LALR(1) grammar for CEL itself), via [WinFlexBison](https://github.com/lexxmark/winflexbison/releases) — not installable through vcpkg (it has no bison/flex ports) and, on this machine, not through Chocolatey either (its default install location needs admin rights this shell doesn't have). Download the release zip and extract it anywhere; no installer needed:
+
+```powershell
+# one-time: download+extract win_flex_bison-<version>.zip to e.g. D:\tools\winflexbison
+```
+
+**Then configure CMake**, pointing at both the WinFlexBison directory and the VS2022 generator:
 
 ```powershell
 $env:JUCE_DIR = "D:\JUCE2\JUCE"
-cmake -S . -B build
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCE_WINFLEXBISON_DIR=D:\tools\winflexbison
 cmake --build build --config Debug
 ctest --test-dir build -C Debug
 ```
 
-This is deliberately **not** the full vcpkg CMake toolchain-file integration (`CMAKE_TOOLCHAIN_FILE`) — that variable is only honored on a build directory's very first configure, and this project's existing `build/` directory is not to be deleted/recreated without asking first (see `AGENTS.md`). Instead, root `CMakeLists.txt` checks for `vcpkg_installed/x64-windows/` next to the manifest and appends it to `CMAKE_PREFIX_PATH` so `find_package(LLVM CONFIG)` can find it — a normal, additive path that works on any reconfigure of the existing build directory, with a clear `FATAL_ERROR` (pointing back to the `vcpkg install` step above) if it's missing. Pass `-DCE_ENABLE_SCRIPTING=OFF` to skip the whole `Language/` module (e.g. on a machine without vcpkg set up yet); the editor/server build and run identically either way until GS6 wires script execution into the tick loop.
+`CE_WINFLEXBISON_DIR` is optional if `bison`/`flex` (or `win_bison`/`win_flex`) are already on `PATH`; otherwise `cmake/CelGrammar.cmake` fails with a clear message pointing back here. LLVM discovery is deliberately **not** the full vcpkg CMake toolchain-file integration (`CMAKE_TOOLCHAIN_FILE`) — that variable is only honored on a build directory's very first configure, and this project's existing `build/` directory is not to be deleted/recreated without asking first (see `AGENTS.md`). Instead, root `CMakeLists.txt` checks for `vcpkg_installed/x64-windows/` next to the manifest and appends it to `CMAKE_PREFIX_PATH` so `find_package(LLVM CONFIG)` can find it — a normal, additive path that works on any reconfigure of the existing build directory, with a clear `FATAL_ERROR` (pointing back to the `vcpkg install` step above) if it's missing. Pass `-DCE_ENABLE_SCRIPTING=OFF` to skip the whole `Language/` module (e.g. on a machine without vcpkg/WinFlexBison set up yet); the editor/server build and run identically either way until GS6 wires script execution into the tick loop.
 
 **Environment notes specific to this machine, recorded so a future session doesn't have to rediscover them:**
 - Build generator is **Visual Studio 17 2022** (MSVC 14.36, Enterprise edition, installed at `D:\Program Files\Microsoft Visual Studio\2022\Enterprise` — **not** the default `C:\Program Files` location, easy to miss when checking for VS installs). The project originally configured against VS2019/v142; GS1 discovered that `vcpkg`'s LLVM build picks its own MSVC toolset independent of the project's generator, landed on VS2022's, and produced object files whose MSVC STL "vectorized algorithm" support symbols (`__std_find_trivial_*` etc.) don't exist in VS2019's runtime — a hard link failure, not a subtle bug. Switching the whole project to match was the fix; see the "Building" section above for the generator flags and how to reconfigure `build/` for the switch.
