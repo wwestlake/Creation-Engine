@@ -91,10 +91,14 @@ private:
     }
 
     void SeedIntrinsics() {
-#define CEL_INTRINSIC0(name, ret) functions_[#name] = FunctionSignature{ {}, Type::ret };
-#define CEL_INTRINSIC1(name, ret, p1) functions_[#name] = FunctionSignature{ { Type::p1 }, Type::ret };
-#define CEL_INTRINSIC2(name, ret, p1, p2) functions_[#name] = FunctionSignature{ { Type::p1, Type::p2 }, Type::ret };
-#define CEL_INTRINSIC3(name, ret, p1, p2, p3) \
+// Sema only cares about name/return/param types -- cSymbol and purity
+// are GS5's IR-gen/JIT-registration concerns (module_builder.cpp),
+// deliberately ignored here rather than duplicating a second table.
+#define CEL_INTRINSIC0(name, cSymbol, purity, ret) functions_[#name] = FunctionSignature{ {}, Type::ret };
+#define CEL_INTRINSIC1(name, cSymbol, purity, ret, p1) functions_[#name] = FunctionSignature{ { Type::p1 }, Type::ret };
+#define CEL_INTRINSIC2(name, cSymbol, purity, ret, p1, p2) \
+    functions_[#name] = FunctionSignature{ { Type::p1, Type::p2 }, Type::ret };
+#define CEL_INTRINSIC3(name, cSymbol, purity, ret, p1, p2, p3) \
     functions_[#name] = FunctionSignature{ { Type::p1, Type::p2, Type::p3 }, Type::ret };
 #include "lang/intrinsics.def"
 #undef CEL_INTRINSIC0

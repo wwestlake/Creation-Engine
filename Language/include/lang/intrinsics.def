@@ -1,63 +1,84 @@
 // CEL v1's intrinsic surface -- the ONE source of truth for every
 // built-in callable function. Consumed by sema (GS3, for signature/type
-// checking) and, from GS5 onward, by IR-gen, JIT symbol registration,
-// and nodegen's auto-derived node palette -- see the GS scripting plan
-// (~/.claude/plans/partitioned-singing-galaxy.md) for how those later
-// consumers extend this same file with ABI/purity columns rather than
-// maintaining a second table that could drift from this one.
+// checking) and, from GS5 onward, by IR-gen/JIT registration (host ABI
+// dispatch + LLVM function attributes) and `celc --dump-intrinsics`
+// (docs/SCRIPTING_ABI.md generation) -- see the GS scripting plan
+// (~/.claude/plans/partitioned-singing-galaxy.md).
 //
 // Deliberately NOT include-guarded: designed to be included multiple
 // times, once per consumer, each defining CEL_INTRINSIC0..3 (arity 0
 // through 3 -- nothing in v1 needs more) before inclusion and #undef-ing
 // them after.
 //
-//   CEL_INTRINSICn(name, returnType, param1Type, ..., paramNType)
+//   CEL_INTRINSICn(name, cSymbol, purity, returnType, param1Type, ..., paramNType)
+//
+// - name: the CEL-visible identifier.
+// - cSymbol: the real extern "C" trampoline symbol
+//   (Language/src/jit/intrinsic_trampolines.cpp) registered via ORC's
+//   absoluteSymbols for genuine host-ABI calls. For the 14 "pure
+//   computation" math/vec3 intrinsics that GS4 already lowers directly
+//   to LLVM IR (no external call at all -- see module_builder.cpp's
+//   CodegenBuiltinIntrinsic), this column is inert/never dereferenced;
+//   it's just set to the intrinsic's own name for a harmless,
+//   documentation-consistent placeholder rather than an empty token.
+// - purity: Pure (no memory access at all -- only true math, e.g.
+//   atan2), ReadsWorld (may read the World/registry but never mutate
+//   it -- gets the LLVM `readonly` attribute), or Mutates (may write --
+//   gets no memory-access attribute at all). Getting this wrong for a
+//   ReadsWorld/Mutates function (e.g. marking get_position as Pure)
+//   would let the optimizer illegally hoist/reorder it above a
+//   set_position call and silently corrupt game behavior -- see
+//   docs/SCRIPTING_ABI.md.
 //
 // Names/types are plain identifiers (Int, Float, Bool, Vec3, Entity,
 // Void, String) -- each consumer's own macro expansion prefixes them
-// with whatever its local Type scope needs.
+// with whatever its local Type/Purity scope needs.
 
-// Math (float)
-CEL_INTRINSIC1(sqrt, Float, Float)
-CEL_INTRINSIC1(abs, Float, Float)
-CEL_INTRINSIC2(min, Float, Float, Float)
-CEL_INTRINSIC2(max, Float, Float, Float)
-CEL_INTRINSIC1(floor, Float, Float)
-CEL_INTRINSIC1(sin, Float, Float)
-CEL_INTRINSIC1(cos, Float, Float)
-CEL_INTRINSIC2(atan2, Float, Float, Float)
-CEL_INTRINSIC3(clamp, Float, Float, Float, Float)
-CEL_INTRINSIC3(lerp, Float, Float, Float, Float)
+// Math (float) -- pure IR, no real ABI call (see cSymbol note above),
+// except atan2, which has no direct LLVM intrinsic and is a real
+// trampoline call.
+CEL_INTRINSIC1(sqrt, sqrt, Pure, Float, Float)
+CEL_INTRINSIC1(abs, abs, Pure, Float, Float)
+CEL_INTRINSIC2(min, min, Pure, Float, Float, Float)
+CEL_INTRINSIC2(max, max, Pure, Float, Float, Float)
+CEL_INTRINSIC1(floor, floor, Pure, Float, Float)
+CEL_INTRINSIC1(sin, sin, Pure, Float, Float)
+CEL_INTRINSIC1(cos, cos, Pure, Float, Float)
+CEL_INTRINSIC2(atan2, ce_atan2, Pure, Float, Float, Float)
+CEL_INTRINSIC3(clamp, clamp, Pure, Float, Float, Float, Float)
+CEL_INTRINSIC3(lerp, lerp, Pure, Float, Float, Float, Float)
 
-// Vec3
-CEL_INTRINSIC3(vec3, Vec3, Float, Float, Float)
-CEL_INTRINSIC2(dot, Float, Vec3, Vec3)
-CEL_INTRINSIC2(cross, Vec3, Vec3, Vec3)
-CEL_INTRINSIC1(length, Float, Vec3)
-CEL_INTRINSIC1(normalize, Vec3, Vec3)
+// Vec3 -- pure IR, no real ABI call.
+CEL_INTRINSIC3(vec3, vec3, Pure, Vec3, Float, Float, Float)
+CEL_INTRINSIC2(dot, dot, Pure, Float, Vec3, Vec3)
+CEL_INTRINSIC2(cross, cross, Pure, Vec3, Vec3, Vec3)
+CEL_INTRINSIC1(length, length, Pure, Float, Vec3)
+CEL_INTRINSIC1(normalize, normalize, Pure, Vec3, Vec3)
 
-// World
-CEL_INTRINSIC0(world_tick, Int)
-CEL_INTRINSIC0(world_time, Float)
+// World -- real ABI, read-only.
+CEL_INTRINSIC0(world_tick, ce_world_tick, ReadsWorld, Int)
+CEL_INTRINSIC0(world_time, ce_world_time, ReadsWorld, Float)
 
-// Entity
-CEL_INTRINSIC0(spawn, Entity)
-CEL_INTRINSIC1(spawn_at, Entity, Vec3)
-CEL_INTRINSIC1(destroy, Void, Entity)
-CEL_INTRINSIC1(is_valid, Bool, Entity)
-CEL_INTRINSIC0(entity_count, Int)
-CEL_INTRINSIC1(find_by_name, Entity, String)
+// Entity -- real ABI.
+CEL_INTRINSIC0(spawn, ce_spawn, Mutates, Entity)
+CEL_INTRINSIC1(spawn_at, ce_spawn_at, Mutates, Entity, Vec3)
+CEL_INTRINSIC1(destroy, ce_destroy, Mutates, Void, Entity)
+CEL_INTRINSIC1(is_valid, ce_is_valid, ReadsWorld, Bool, Entity)
+CEL_INTRINSIC0(entity_count, ce_entity_count, ReadsWorld, Int)
+CEL_INTRINSIC1(find_by_name, ce_find_by_name, ReadsWorld, Entity, String)
 
-// Transform
-CEL_INTRINSIC1(get_position, Vec3, Entity)
-CEL_INTRINSIC2(set_position, Void, Entity, Vec3)
-CEL_INTRINSIC1(get_rotation, Vec3, Entity)
-CEL_INTRINSIC2(set_rotation, Void, Entity, Vec3)
-CEL_INTRINSIC1(get_scale, Vec3, Entity)
-CEL_INTRINSIC2(set_scale, Void, Entity, Vec3)
+// Transform -- real ABI.
+CEL_INTRINSIC1(get_position, ce_get_position, ReadsWorld, Vec3, Entity)
+CEL_INTRINSIC2(set_position, ce_set_position, Mutates, Void, Entity, Vec3)
+CEL_INTRINSIC1(get_rotation, ce_get_rotation, ReadsWorld, Vec3, Entity)
+CEL_INTRINSIC2(set_rotation, ce_set_rotation, Mutates, Void, Entity, Vec3)
+CEL_INTRINSIC1(get_scale, ce_get_scale, ReadsWorld, Vec3, Entity)
+CEL_INTRINSIC2(set_scale, ce_set_scale, Mutates, Void, Entity, Vec3)
 
-// Debug
-CEL_INTRINSIC1(log, Void, String)
-CEL_INTRINSIC2(log_int, Void, String, Int)
-CEL_INTRINSIC2(log_float, Void, String, Float)
-CEL_INTRINSIC2(log_vec3, Void, String, Vec3)
+// Debug -- real ABI; writes to stdout, so Mutates even though it never
+// touches the World itself (purity here is about the JIT-visible memory
+// contract, not specifically "touches World").
+CEL_INTRINSIC1(log, ce_log, Mutates, Void, String)
+CEL_INTRINSIC2(log_int, ce_log_int, Mutates, Void, String, Int)
+CEL_INTRINSIC2(log_float, ce_log_float, Mutates, Void, String, Float)
+CEL_INTRINSIC2(log_vec3, ce_log_vec3, Mutates, Void, String, Vec3)

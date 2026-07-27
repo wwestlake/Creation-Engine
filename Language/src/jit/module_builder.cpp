@@ -32,12 +32,64 @@ struct LoopTargets {
     llvm::BasicBlock* continueTarget;
 };
 
+// Mirrors intrinsics.def's purity column -- drives the LLVM memory-access
+// attribute put on a *declared* (never-defined-in-this-module) ABI
+// function. Getting ReadsWorld/Mutates wrong as Pure would let the
+// optimizer illegally hoist/reorder a call above another that mutates
+// the same World -- see intrinsics.def's own comment.
+enum class Purity { Pure, ReadsWorld, Mutates };
+
+// One real host-ABI intrinsic's shape, as declared in intrinsics.def.
+// Populated once from the X-macro table; empty cSymbol entries are the
+// 14 "pure computation" math/vec3 intrinsics GS4 already lowers
+// directly to LLVM IR (CodegenBuiltinIntrinsic below) -- CodegenCall
+// tries that path FIRST and only consults this table as a fallback, so
+// an empty cSymbol reaching CodegenAbiCall would be an internal error.
+struct AbiIntrinsicInfo {
+    std::string cSymbol;
+    Purity purity;
+    Type returnType;
+    std::vector<Type> paramTypes;
+};
+
+std::unordered_map<std::string, AbiIntrinsicInfo> BuildAbiIntrinsicTable() {
+    std::unordered_map<std::string, AbiIntrinsicInfo> table;
+#define CEL_INTRINSIC0(name, cSymbol, purity, ret) \
+    table[#name] = AbiIntrinsicInfo{ #cSymbol, Purity::purity, Type::ret, {} };
+#define CEL_INTRINSIC1(name, cSymbol, purity, ret, p1) \
+    table[#name] = AbiIntrinsicInfo{ #cSymbol, Purity::purity, Type::ret, { Type::p1 } };
+#define CEL_INTRINSIC2(name, cSymbol, purity, ret, p1, p2) \
+    table[#name] = AbiIntrinsicInfo{ #cSymbol, Purity::purity, Type::ret, { Type::p1, Type::p2 } };
+#define CEL_INTRINSIC3(name, cSymbol, purity, ret, p1, p2, p3) \
+    table[#name] = AbiIntrinsicInfo{ #cSymbol, Purity::purity, Type::ret, { Type::p1, Type::p2, Type::p3 } };
+#include "lang/intrinsics.def"
+#undef CEL_INTRINSIC0
+#undef CEL_INTRINSIC1
+#undef CEL_INTRINSIC2
+#undef CEL_INTRINSIC3
+    return table;
+}
+
+// Every name CodegenBuiltinIntrinsic lowers directly to pure IR -- used
+// to tell "genuinely not an ABI call" apart from "ABI table lookup
+// failed", so a real internal error still throws instead of silently
+// misdispatching.
+bool IsPureIrIntrinsic(const std::string& name) {
+    static const std::unordered_map<std::string, bool> pureNames = {
+        { "sqrt", true },  { "abs", true },     { "min", true },       { "max", true },  { "floor", true },
+        { "sin", true },   { "cos", true },     { "clamp", true },     { "lerp", true }, { "vec3", true },
+        { "dot", true },   { "cross", true },   { "length", true },    { "normalize", true },
+    };
+    return pureNames.count(name) != 0;
+}
+
 class CodeGenerator {
 public:
     CodeGenerator(llvm::LLVMContext& context, llvm::Module& module)
-        : context_(context), module_(module), builder_(context) {
+        : context_(context), module_(module), builder_(context), abiIntrinsics_(BuildAbiIntrinsicTable()) {
         vec3Type_ = llvm::StructType::get(context_, { builder_.getFloatTy(), builder_.getFloatTy(), builder_.getFloatTy() },
                                            /*isPacked=*/false);
+        scriptContextPtrTy_ = builder_.getPtrTy();
     }
 
     void Build(Program& program) {
@@ -82,7 +134,15 @@ private:
                 continue;
             }
             FuncDecl& f = *decl->funcDecl;
+            // Every CEL function's REAL LLVM signature takes an implicit
+            // leading ScriptContext* invisible at the CEL source level
+            // (sema's FunctionSignature never sees it) -- so a script
+            // calling get_position/set_position/... has something to
+            // forward, and so `celc --run-world`'s driver can pass one
+            // real World in without CEL needing a language-level concept
+            // of it at all.
             std::vector<llvm::Type*> paramTypes;
+            paramTypes.push_back(scriptContextPtrTy_);
             for (const Param& p : f.params) {
                 paramTypes.push_back(MapType(ParseTypeName(p.type)));
             }
@@ -165,6 +225,13 @@ private:
 
         PushScope();
         auto argIt = fn->arg_begin();
+        // Argument 0 is always the implicit ScriptContext* DeclareFunctions
+        // prepended -- captured once per function and forwarded to every
+        // call this body makes (user function or intrinsic), never
+        // exposed as a named CEL local.
+        llvm::Argument* ctxArg = &*argIt++;
+        ctxArg->setName("__ctx");
+        currentScriptContextArg_ = ctxArg;
         for (const Param& p : f.params) {
             llvm::Argument* arg = &*argIt++;
             arg->setName(p.name);
@@ -261,6 +328,7 @@ private:
                 builder_.CreateCondBr(cond, bodyBB, afterBB);
 
                 builder_.SetInsertPoint(bodyBB);
+                EmitWatchdogCheck();
                 loopStack_.push_back({ afterBB, condBB });
                 CodegenStmt(*s.body);
                 loopStack_.pop_back();
@@ -287,6 +355,7 @@ private:
                 builder_.CreateCondBr(cond, bodyBB, afterBB);
 
                 builder_.SetInsertPoint(bodyBB);
+                EmitWatchdogCheck();
                 // continue jumps to the step block, not straight back to
                 // the condition, so `continue` still runs the step --
                 // exactly like C's for-loop semantics.
@@ -327,6 +396,37 @@ private:
                 CodegenExpr(*s.expr);
                 return;
         }
+    }
+
+    // The runaway-script watchdog: one call to the real
+    // ce_watchdog_tick(ScriptContext*) trampoline at the top of every
+    // loop iteration (both While and For enter here right after
+    // SetInsertPoint(bodyBB), i.e. every loop back-edge), which
+    // decrements ctx->loopBudget and reports whether to keep going.
+    // Exhausting the budget (or a context already faulted by something
+    // else) makes the CURRENT function return immediately -- a simple,
+    // non-exception-based unwind; there is no meaningful value to
+    // fabricate for a non-void return here, so a zero-initialized one is
+    // used purely to satisfy the verifier; the caller is expected to
+    // check ctx->faulted afterward, not trust the returned value.
+    void EmitWatchdogCheck() {
+        llvm::Function* tickFn = GetOrDeclareAbiFunction("ce_watchdog_tick", builder_.getInt32Ty(),
+                                                          { scriptContextPtrTy_ }, Purity::Mutates);
+        llvm::Value* keepGoing = builder_.CreateCall(tickFn, { currentScriptContextArg_ });
+        llvm::Value* cond = builder_.CreateICmpNE(keepGoing, llvm::ConstantInt::get(builder_.getInt32Ty(), 0));
+
+        auto* okBB = llvm::BasicBlock::Create(context_, "wdok", currentFunction_);
+        auto* abortBB = llvm::BasicBlock::Create(context_, "wdabort", currentFunction_);
+        builder_.CreateCondBr(cond, okBB, abortBB);
+
+        builder_.SetInsertPoint(abortBB);
+        if (currentFunction_->getReturnType()->isVoidTy()) {
+            builder_.CreateRetVoid();
+        } else {
+            builder_.CreateRet(llvm::Constant::getNullValue(currentFunction_->getReturnType()));
+        }
+
+        builder_.SetInsertPoint(okBB);
     }
 
     // After an unconditional branch (break/continue/return), the
@@ -396,8 +496,9 @@ private:
                 return llvm::ConstantInt::get(builder_.getInt1Ty(), e.boolValue ? 1 : 0);
             case ExprKind::StringLiteral:
                 throw CodegenError(
-                    "string literals are only valid as arguments to intrinsics this milestone doesn't implement yet "
-                    "(log/find_by_name/... land in GS5)");
+                    "internal error: string literals are only valid as a direct intrinsic call argument, "
+                    "marshaled by CodegenAbiCall -- one reached general expression codegen, which means sema "
+                    "let a string value flow somewhere it shouldn't have");
             case ExprKind::Identifier: {
                 llvm::Value* ptr = ResolveVariablePointer(e.text);
                 return builder_.CreateLoad(MapType(e.type), ptr, e.text);
@@ -534,10 +635,9 @@ private:
     // to LLVM IR (LLVM's own standard intrinsics where one exists, or
     // composed arithmetic otherwise), with no external call and no ABI
     // involved at all. Everything else in intrinsics.def (world/entity/
-    // transform/debug) is a genuine engine intrinsic, deferred to GS5's
-    // host-ABI work -- returns nullptr for those (and for atan2, which
-    // has no direct LLVM intrinsic and is deferred alongside them rather
-    // than special-cased here).
+    // transform/debug, plus atan2) is a genuine engine intrinsic, handled
+    // by CodegenAbiCall instead -- returns nullptr for those so
+    // CodegenCall knows to fall through.
     llvm::Value* CodegenBuiltinIntrinsic(const std::string& name, std::vector<llvm::Value*>& args) {
         auto callUnaryFloatIntrinsic = [&](llvm::Intrinsic::ID id) {
             return builder_.CreateCall(GetLLVMIntrinsic(id, builder_.getFloatTy()), args[0]);
@@ -615,41 +715,165 @@ private:
         return sum;
     }
 
+    // Declares (once, cached by symbol) an extern function this module
+    // never defines -- resolved at JIT time by the host process's
+    // absoluteSymbols registration (Runtime, via GetAbiTrampolines()).
+    // The purity column drives the one LLVM attribute that matters here:
+    // ReadsWorld gets `readonly` (may read anything, including through
+    // ctx, but never writes), Pure gets `readnone` (touches no memory at
+    // all -- only genuinely true for atan2 and the watchdog... no,
+    // watchdog mutates ctx's budget, so it's Mutates), Mutates gets no
+    // memory-access attribute, since it may freely read and write.
+    llvm::Function* GetOrDeclareAbiFunction(const std::string& cSymbol, llvm::Type* returnType,
+                                             const std::vector<llvm::Type*>& paramTypes, Purity purity) {
+        const auto cached = abiFunctionDecls_.find(cSymbol);
+        if (cached != abiFunctionDecls_.end()) {
+            return cached->second;
+        }
+        auto* fnType = llvm::FunctionType::get(returnType, paramTypes, /*isVarArg=*/false);
+        auto* fn = llvm::Function::Create(fnType, llvm::Function::ExternalLinkage, cSymbol, module_);
+        fn->setDoesNotThrow();
+        switch (purity) {
+            case Purity::Pure: fn->setDoesNotAccessMemory(); break;
+            case Purity::ReadsWorld: fn->setOnlyReadsMemory(); break;
+            case Purity::Mutates: break;
+        }
+        abiFunctionDecls_[cSymbol] = fn;
+        return fn;
+    }
+
+    // Marshals a genuine host-ABI intrinsic call: ScriptContext* always
+    // leads; Vec3 arguments/return cross as float* (an alloca'd
+    // temporary for an argument, a trailing out-param for a return
+    // value, per the ABI's rule 1); String arguments (always a direct
+    // literal -- sema enforces this, see NonLiteralStringArgument) cross
+    // as a (const char*, int64_t length) pair rather than going through
+    // CodegenExpr at all; Bool crosses as i32, per rule 2, widened/
+    // truncated at the boundary.
+    llvm::Value* CodegenAbiCall(const std::string& name, const AbiIntrinsicInfo& info, std::vector<Expr*>& argExprs) {
+        std::vector<llvm::Type*> declParamTypes;
+        std::vector<llvm::Value*> callArgs;
+        declParamTypes.push_back(scriptContextPtrTy_);
+        callArgs.push_back(currentScriptContextArg_);
+
+        for (std::size_t i = 0; i < argExprs.size(); ++i) {
+            const Type paramType = info.paramTypes[i];
+            if (paramType == Type::String) {
+                Expr& argExpr = *argExprs[i];
+                if (argExpr.kind != ExprKind::StringLiteral) {
+                    throw CodegenError("internal error: intrinsic '" + name +
+                                        "' expects a string LITERAL argument (sema should have enforced this)");
+                }
+                llvm::Constant* strPtr = builder_.CreateGlobalStringPtr(argExpr.text);
+                declParamTypes.push_back(builder_.getPtrTy());
+                declParamTypes.push_back(builder_.getInt64Ty());
+                callArgs.push_back(strPtr);
+                callArgs.push_back(llvm::ConstantInt::get(builder_.getInt64Ty(), argExpr.text.size()));
+                continue;
+            }
+
+            llvm::Value* value = CodegenExpr(*argExprs[i]);
+            if (paramType == Type::Vec3) {
+                llvm::AllocaInst* slot = CreateEntryBlockAlloca(currentFunction_, "vec3arg", vec3Type_);
+                builder_.CreateStore(value, slot);
+                declParamTypes.push_back(builder_.getPtrTy());
+                callArgs.push_back(slot);
+            } else if (paramType == Type::Bool) {
+                declParamTypes.push_back(builder_.getInt32Ty());
+                callArgs.push_back(builder_.CreateZExt(value, builder_.getInt32Ty()));
+            } else {
+                declParamTypes.push_back(MapType(paramType));
+                callArgs.push_back(value);
+            }
+        }
+
+        const bool vec3Return = info.returnType == Type::Vec3;
+        llvm::AllocaInst* vec3RetSlot = nullptr;
+        llvm::Type* declaredReturnType;
+        if (vec3Return) {
+            vec3RetSlot = CreateEntryBlockAlloca(currentFunction_, "vec3ret", vec3Type_);
+            declParamTypes.push_back(builder_.getPtrTy());
+            callArgs.push_back(vec3RetSlot);
+            declaredReturnType = builder_.getVoidTy();
+        } else if (info.returnType == Type::Bool) {
+            declaredReturnType = builder_.getInt32Ty();
+        } else {
+            declaredReturnType = MapType(info.returnType);
+        }
+
+        // A Vec3-returning intrinsic writes through its trailing out-param
+        // pointer even when intrinsics.def calls it ReadsWorld/Pure (that
+        // column describes whether it touches the *World*, not whether it
+        // writes its own return slot) -- declaring it `readonly`/`readnone`
+        // anyway would be a lie the optimizer takes literally: at -O2 it
+        // legally treats the store the call was supposed to make as never
+        // having happened and elides it, leaving the destination alloca
+        // uninitialized (this was caught for real: gs5_world_spawn_grid and
+        // gs5_world_orbit_steps both printed "nan" against get_position
+        // before this fix). Force Mutates for the declaration whenever a
+        // vec3 out-param is present, regardless of the table's purity.
+        const Purity declaredPurity = vec3Return ? Purity::Mutates : info.purity;
+        llvm::Function* callee = GetOrDeclareAbiFunction(info.cSymbol, declaredReturnType, declParamTypes, declaredPurity);
+        llvm::Value* call = builder_.CreateCall(callee, callArgs);
+
+        if (vec3Return) {
+            return builder_.CreateLoad(vec3Type_, vec3RetSlot);
+        }
+        if (info.returnType == Type::Bool) {
+            return builder_.CreateTrunc(call, builder_.getInt1Ty());
+        }
+        return call;
+    }
+
     llvm::Value* CodegenCall(Expr& e) {
         const std::string& name = e.lhs->text;
 
         const auto userFnIt = functions_.find(name);
         if (userFnIt != functions_.end()) {
             std::vector<llvm::Value*> args;
+            args.push_back(currentScriptContextArg_);
             for (Expr* arg : e.args) {
                 args.push_back(CodegenExpr(*arg));
             }
             return builder_.CreateCall(userFnIt->second, args);
         }
 
-        std::vector<llvm::Value*> args;
-        for (Expr* arg : e.args) {
-            args.push_back(CodegenExpr(*arg));
+        if (IsPureIrIntrinsic(name)) {
+            std::vector<llvm::Value*> args;
+            for (Expr* arg : e.args) {
+                args.push_back(CodegenExpr(*arg));
+            }
+            llvm::Value* result = CodegenBuiltinIntrinsic(name, args);
+            if (result == nullptr) {
+                throw CodegenError("internal error: '" + name + "' is registered as a pure-IR intrinsic but "
+                                    "CodegenBuiltinIntrinsic didn't handle it");
+            }
+            return result;
         }
-        llvm::Value* result = CodegenBuiltinIntrinsic(name, args);
-        if (result == nullptr) {
-            throw CodegenError("intrinsic '" + name +
-                                "' is an engine intrinsic and isn't implemented until GS5 (this milestone only "
-                                "supports pure computation: user functions plus the math/vec3 intrinsics)");
+
+        const auto abiIt = abiIntrinsics_.find(name);
+        if (abiIt != abiIntrinsics_.end()) {
+            return CodegenAbiCall(name, abiIt->second, e.args);
         }
-        return result;
+
+        throw CodegenError("internal error: unresolved call to '" + name + "' reached codegen (sema should have "
+                            "rejected an unknown function name)");
     }
 
     llvm::LLVMContext& context_;
     llvm::Module& module_;
     llvm::IRBuilder<> builder_;
     llvm::StructType* vec3Type_;
+    llvm::Type* scriptContextPtrTy_;
 
     std::unordered_map<std::string, llvm::Function*> functions_;
     std::unordered_map<std::string, llvm::GlobalVariable*> globals_;
+    std::unordered_map<std::string, AbiIntrinsicInfo> abiIntrinsics_;
+    std::unordered_map<std::string, llvm::Function*> abiFunctionDecls_;
     std::vector<std::unordered_map<std::string, llvm::AllocaInst*>> locals_;
     std::vector<LoopTargets> loopStack_;
     llvm::Function* currentFunction_ = nullptr;
+    llvm::Value* currentScriptContextArg_ = nullptr;
 };
 
 } // namespace

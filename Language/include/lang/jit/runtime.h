@@ -19,6 +19,16 @@ struct ExecResult {
     float floatValue = 0.0f;
     bool boolValue = false;
     std::string errorMessage; // set iff kind == Error.
+
+    // GS5: true if the runaway-script watchdog (or some other runtime
+    // fault) tripped during execution -- `intValue`/`floatValue`/
+    // `boolValue` still hold whatever the entry point returned before
+    // the fault was noticed (the watchdog only stops the CURRENT
+    // function early, see module_builder.cpp's EmitWatchdogCheck), so
+    // callers that care about a fault should check this rather than
+    // trust the returned value blindly.
+    bool faulted = false;
+    std::string faultMessage; // set iff faulted.
 };
 
 // Opaque JIT runtime -- owns an LLVM ORC LLJIT instance internally. No
@@ -56,7 +66,30 @@ public:
     // computation instead). Returns ResultKind::Error with a message on
     // any failure (unresolved entry point, unsupported construct,
     // verification failure, ...).
+    // GS5: every compiled CEL function now takes an implicit leading
+    // ScriptContext* (see module_builder.cpp's DeclareFunctions) -- this
+    // still calls `entryPoint` exactly once, but through a real,
+    // internally-constructed ScriptContext whose `world` pointer is
+    // null. That's safe for any GS4-style pure-computation program
+    // (including ones with loops, since GS5's watchdog check touches
+    // only ctx->faulted/loopBudget, never ctx->world), but a script that
+    // calls a World-touching intrinsic (get_position, spawn, ...) here
+    // dereferences a null World and is undefined behavior -- use
+    // RunWorldProgram for anything that needs a real World.
     ExecResult CompileAndRun(Program& program, const std::string& entryPoint, int optLevel);
+
+    // GS5: like CompileAndRun, but backed by a real, internally
+    // constructed ce::engine::World and ce::engine::ScriptContext that
+    // persist across every tick -- so spawned entities, set_position
+    // calls, and accumulated globals carry over from one call to the
+    // next exactly like a real running script would see. `entryPoint`
+    // (zero-argument, same restriction as CompileAndRun) is called once
+    // per tick, `ticks` times total; each tick, the World's tick counter
+    // is advanced and the context's elapsed-time accumulator increases
+    // by `dt` before the call. Stops early if the watchdog trips.
+    // Returns the LAST tick's result; ExecResult::faulted/faultMessage
+    // report whether the context ended up faulted.
+    ExecResult RunWorldProgram(Program& program, const std::string& entryPoint, int ticks, float dt, int optLevel);
 
     // GS4: compiles `program` to LLVM IR (no optimization, no JIT) and
     // returns its textual form, or an "error: ..." string on failure.

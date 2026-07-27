@@ -107,21 +107,66 @@ int RunExec(const std::string& path, const std::string& entryPoint, int optLevel
     switch (result.kind) {
         case ce::lang::jit::ResultKind::Int:
             std::cout << result.intValue << std::endl;
-            return 0;
+            break;
         case ce::lang::jit::ResultKind::Float:
             std::cout << result.floatValue << std::endl;
-            return 0;
+            break;
         case ce::lang::jit::ResultKind::Bool:
             std::cout << (result.boolValue ? "true" : "false") << std::endl;
-            return 0;
+            break;
         case ce::lang::jit::ResultKind::Void:
             std::cout << "(void)" << std::endl;
-            return 0;
+            break;
         case ce::lang::jit::ResultKind::Error:
             std::cerr << "celc: " << result.errorMessage << std::endl;
             return 1;
     }
-    return 1;
+
+    if (result.faulted) {
+        std::cerr << "celc: script faulted: " << result.faultMessage << std::endl;
+        return 1;
+    }
+    return 0;
+}
+
+// --run-world <file.cel> [--entry NAME] [--ticks N] [--dt D] [--opt N]:
+// like --run, but backed by a real, internally-constructed
+// ce::engine::World/ScriptContext (Runtime::RunWorldProgram) that
+// persists across `ticks` calls to the zero-argument function `NAME`
+// (default "tick") -- so a script that spawns entities or moves them
+// via set_position on one tick still sees that state on the next. This
+// is GS5's headless verification path for World-touching intrinsics
+// (get/set_position, spawn, ...), since celc has no engine editor/server
+// around it.
+int RunWorld(const std::string& path, const std::string& entryPoint, int ticks, float dt, int optLevel) {
+    ce::lang::AstArena arena;
+    ce::lang::DiagnosticEngine diagnostics;
+    ce::lang::Program* program = ParseAndCheck(path, arena, diagnostics);
+    if (program == nullptr) {
+        return 1;
+    }
+
+    ce::lang::jit::Runtime runtime;
+    const ce::lang::jit::ExecResult result = runtime.RunWorldProgram(*program, entryPoint, ticks, dt, optLevel);
+
+    if (result.kind == ce::lang::jit::ResultKind::Error) {
+        std::cerr << "celc: " << result.errorMessage << std::endl;
+        return 1;
+    }
+
+    switch (result.kind) {
+        case ce::lang::jit::ResultKind::Int: std::cout << result.intValue << std::endl; break;
+        case ce::lang::jit::ResultKind::Float: std::cout << result.floatValue << std::endl; break;
+        case ce::lang::jit::ResultKind::Bool: std::cout << (result.boolValue ? "true" : "false") << std::endl; break;
+        case ce::lang::jit::ResultKind::Void: std::cout << "(void)" << std::endl; break;
+        case ce::lang::jit::ResultKind::Error: break; // handled above.
+    }
+
+    if (result.faulted) {
+        std::cerr << "celc: script faulted: " << result.faultMessage << std::endl;
+        return 1;
+    }
+    return 0;
 }
 
 int RunEmitLLVM(const std::string& path) {
@@ -174,6 +219,26 @@ int main(int argc, char** argv) {
         return RunExec(argv[2], entryPoint, optLevel);
     }
 
+    if (argc >= 3 && std::string(argv[1]) == "--run-world") {
+        std::string entryPoint = "tick";
+        int ticks = 1;
+        float dt = 1.0f / 60.0f;
+        int optLevel = 2;
+        for (int i = 3; i + 1 < argc; i += 2) {
+            const std::string flag = argv[i];
+            if (flag == "--entry") {
+                entryPoint = argv[i + 1];
+            } else if (flag == "--ticks") {
+                ticks = std::atoi(argv[i + 1]);
+            } else if (flag == "--dt") {
+                dt = static_cast<float>(std::atof(argv[i + 1]));
+            } else if (flag == "--opt") {
+                optLevel = std::atoi(argv[i + 1]);
+            }
+        }
+        return RunWorld(argv[2], entryPoint, ticks, dt, optLevel);
+    }
+
     if (argc >= 3 && std::string(argv[1]) == "--emit-llvm") {
         return RunEmitLLVM(argv[2]);
     }
@@ -184,6 +249,7 @@ int main(int argc, char** argv) {
                  "  celc --dump-ast <file.cel>\n"
                  "  celc --check <file.cel>\n"
                  "  celc --run <file.cel> [--entry NAME] [--opt 0-3]\n"
+                 "  celc --run-world <file.cel> [--entry NAME] [--ticks N] [--dt D] [--opt 0-3]\n"
                  "  celc --emit-llvm <file.cel>\n";
     return 1;
 }

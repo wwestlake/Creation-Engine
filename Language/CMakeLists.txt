@@ -53,6 +53,8 @@ add_library(ce_lang_jit STATIC
     src/jit/optimizer.cpp
     src/jit/module_builder.h
     src/jit/module_builder.cpp
+    src/jit/intrinsic_trampolines.h
+    src/jit/intrinsic_trampolines.cpp
 )
 
 target_include_directories(ce_lang_jit
@@ -64,7 +66,17 @@ target_compile_definitions(ce_lang_jit PRIVATE ${LLVM_DEFINITIONS} NOMINMAX WIN3
 # since GS4's CompileAndRun takes a Program& directly -- ce_lang_frontend
 # stays LLVM-free either way (see its own comment), this just makes the
 # AST types visible to anything that includes runtime.h.
-target_link_libraries(ce_lang_jit PUBLIC ce_lang_frontend ${CE_LLVM_LIBS})
+#
+# engine_core (GS5): intrinsic_trampolines.cpp/runtime.cpp's
+# RunWorldProgram construct a real ce::engine::World/ScriptContext --
+# EngineCore has no JUCE/LLVM dependency of its own, so linking it here
+# doesn't threaten the LLVM/JUCE header-firewall this module exists to
+# preserve. engine_core's own add_subdirectory() call is later in the
+# root CMakeLists.txt than Language's, but CMake resolves
+# target_link_libraries against the full target graph at generate time,
+# not in add_subdirectory() call order -- the same precedent EngineCore
+# itself already relies on for node_system.
+target_link_libraries(ce_lang_jit PUBLIC ce_lang_frontend engine_core ${CE_LLVM_LIBS})
 target_compile_features(ce_lang_jit PUBLIC cxx_std_20)
 
 # Plain add_executable, deliberately NOT juce_add_console_app: this
@@ -160,3 +172,43 @@ foreach(test_file ${CE_CEL_EXEC_TESTS})
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_exec_test.cmake"
     )
 endforeach()
+
+# GS5: Language/tests/world/*.cel exercise the real host-ABI intrinsics
+# (World/Entity/Transform/Debug) against a genuine, internally-
+# constructed ce::engine::World via `celc --run-world` -- unlike
+# tests/exec/, each fixture needs its own entry point/tick count/dt (see
+# run_world_test.cmake's own comment), so these are explicit add_test()
+# calls rather than a glob+loop.
+add_test(
+    NAME gs5_world_spawn_grid
+    COMMAND ${CMAKE_COMMAND}
+            -DCELC_EXE=$<TARGET_FILE:celc>
+            -DTEST_CEL=${CMAKE_CURRENT_SOURCE_DIR}/tests/world/spawn_grid.cel
+            -DEXPECTED_FILE=${CMAKE_CURRENT_SOURCE_DIR}/tests/world/spawn_grid.expected
+            -DENTRY=main
+            -DTICKS=1
+            -DDT=0.016666667
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_world_test.cmake"
+)
+add_test(
+    NAME gs5_world_orbit_steps
+    COMMAND ${CMAKE_COMMAND}
+            -DCELC_EXE=$<TARGET_FILE:celc>
+            -DTEST_CEL=${CMAKE_CURRENT_SOURCE_DIR}/tests/world/orbit_steps.cel
+            -DEXPECTED_FILE=${CMAKE_CURRENT_SOURCE_DIR}/tests/world/orbit_steps.expected
+            -DENTRY=tick
+            -DTICKS=300
+            -DDT=0.016666667
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_world_test.cmake"
+)
+
+# GS5: a genuinely infinite loop must be stopped by the runaway-script
+# watchdog (CEL9001), not hang the test suite -- see
+# tests/watchdog/infinite_loop.cel and run_watchdog_test.cmake.
+add_test(
+    NAME gs5_watchdog_infinite_loop
+    COMMAND ${CMAKE_COMMAND}
+            -DCELC_EXE=$<TARGET_FILE:celc>
+            -DTEST_CEL=${CMAKE_CURRENT_SOURCE_DIR}/tests/watchdog/infinite_loop.cel
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_watchdog_test.cmake"
+)
