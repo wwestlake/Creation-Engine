@@ -6,6 +6,8 @@ juce::String WorkspaceModeName(WorkspaceMode mode) {
     switch (mode) {
         case WorkspaceMode::Scene:
             return "Scene";
+        case WorkspaceMode::Logic:
+            return "Logic";
         case WorkspaceMode::Materials:
             return "Materials";
         case WorkspaceMode::Assets:

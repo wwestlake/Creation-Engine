@@ -115,6 +115,16 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/CelCodeTokeniser.cpp
     Source/Views/ImportPanel.h
     Source/Views/ImportPanel.cpp
+    Source/Views/NodeEditor/NodeGraphComponent.h
+    Source/Views/NodeEditor/NodeGraphComponent.cpp
+    Source/Views/NodeEditor/NodePalette.h
+    Source/Views/NodeEditor/NodePalette.cpp
+    Source/Views/NodeEditor/NodeInspector.h
+    Source/Views/NodeEditor/NodeInspector.cpp
+    Source/Views/NodeEditor/GeneratedCodeView.h
+    Source/Views/NodeEditor/GeneratedCodeView.cpp
+    Source/Views/NodeEditor/LogicPanel.h
+    Source/Views/NodeEditor/LogicPanel.cpp
     Source/Scene/Components.h
     Source/Scene/AssetCatalog.h
     Source/Scene/AssetCatalog.cpp
@@ -158,6 +168,7 @@ target_link_libraries(CreationEngineEditor PRIVATE
     node_system
     asset_system
     ce_lang_jit
+    ce_lang_nodegen
     juce::juce_gui_extra
     juce::juce_opengl
     juce::juce_audio_basics

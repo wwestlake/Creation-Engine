@@ -8,7 +8,8 @@ MainComponent::MainComponent()
       transformPanel_(world_),
       scriptPanel_(world_, viewport_),
       importPanel_(world_, viewport_),
-      lightPanel_(viewport_) {
+      lightPanel_(viewport_),
+      logicPanel_(world_) {
     // GS6: the one injection point (see World::SetScriptRuntime's own
     // comment) -- must happen before viewport_'s demo scene compiles its
     // placeholder script (SeedDemoScene runs asynchronously on the GL
@@ -34,6 +35,7 @@ MainComponent::MainComponent()
     hierarchyPanel_.onSelectionChanged = [this](entt::entity entity) {
         transformPanel_.SetSelectedEntity(entity);
         scriptPanel_.SetSelectedEntity(entity);
+        logicPanel_.SetSelectedEntity(entity);
     };
     addAndMakeVisible(viewport_);
 
@@ -65,6 +67,7 @@ MainComponent::MainComponent()
 
     addAndMakeVisible(materialsPanel_);
     addAndMakeVisible(importPanel_);
+    addAndMakeVisible(logicPanel_);
     addAndMakeVisible(serverPanel_);
     addAndMakeVisible(settingsPanel_);
 
@@ -119,6 +122,7 @@ void MainComponent::resized() {
 
     materialsPanel_.setBounds(contentArea);
     importPanel_.setBounds(contentArea);
+    logicPanel_.setBounds(contentArea);
     serverPanel_.setBounds(contentArea);
     settingsPanel_.setBounds(contentArea);
 }
@@ -141,6 +145,7 @@ void MainComponent::SetActiveMode(ce::WorkspaceMode mode) {
 
     materialsPanel_.setVisible(mode == ce::WorkspaceMode::Materials);
     importPanel_.setVisible(mode == ce::WorkspaceMode::Assets);
+    logicPanel_.setVisible(mode == ce::WorkspaceMode::Logic);
     serverPanel_.setVisible(mode == ce::WorkspaceMode::Server);
     settingsPanel_.setVisible(mode == ce::WorkspaceMode::Settings);
 }
@@ -165,4 +170,5 @@ void MainComponent::timerCallback() {
     hierarchyPanel_.Refresh();
     transformPanel_.Refresh();
     scriptPanel_.Refresh();
+    logicPanel_.Refresh();
 }

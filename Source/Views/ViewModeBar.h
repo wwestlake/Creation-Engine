@@ -6,7 +6,7 @@
 
 namespace ce {
 
-enum class WorkspaceMode { Scene, Materials, Assets, Server, Settings };
+enum class WorkspaceMode { Scene, Logic, Materials, Assets, Server, Settings };
 
 juce::String WorkspaceModeName(WorkspaceMode mode);
 
@@ -26,7 +26,7 @@ public:
     void resized() override;
 
 private:
-    static constexpr int kModeCount = 5;
+    static constexpr int kModeCount = 6;
 
     WorkspaceMode activeMode_ = WorkspaceMode::Scene;
     juce::Label titleLabel_{ {}, "Creative Modes" };

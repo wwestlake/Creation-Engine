@@ -4,11 +4,11 @@
 
 #include "engine/simulation.h"
 #include "engine/world.h"
-#include "node_system/graph.h"
 #include "Render/ViewportComponent.h"
 #include "Views/HierarchyPanel.h"
 #include "Views/ImportPanel.h"
 #include "Views/LightPanel.h"
+#include "Views/NodeEditor/LogicPanel.h"
 #include "Views/PlaceholderPanel.h"
 #include "Views/ScriptPanel.h"
 #include "Views/TransformPanel.h"
@@ -39,7 +39,6 @@ private:
     void SetPlaying(bool playing);
 
     ce::engine::World world_;
-    ce::node_system::Graph exampleGraph_ { "untitled" };
     bool isPlaying_ = false;
 
     ce::TransportBar transportBar_;
@@ -75,6 +74,12 @@ private:
     // viewport_ (like hierarchyPanel_ above) since its constructor also
     // needs a fully-constructed ViewportComponent&.
     ce::ImportPanel importPanel_;
+
+    // --- Logic mode content ---
+    // GS10: only needs world_ (for ScriptRuntime()/RegistryMutex() at
+    // Compile & Attach time), not viewport_ -- the node graph itself is
+    // authored/edited entirely independent of the 3D scene.
+    ce::LogicPanel logicPanel_;
 
     // --- Other modes: stand-ins until their milestones land ---
     ce::PlaceholderPanel materialsPanel_ { "Materials", "Node-based material editor - coming soon" };
