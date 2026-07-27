@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "lang/source_location.h"
+#include "lang/type.h"
 
 namespace ce::lang {
 
@@ -30,6 +31,11 @@ struct Expr {
     ExprKind kind;
     SourceLocation loc;
 
+    // Set by sema (GS3); Type::Unknown until then (and left Unknown on
+    // any subtree sema gave up on after reporting an error, so codegen
+    // never has to guess whether a type was actually resolved).
+    Type type = Type::Unknown;
+
     int64_t intValue = 0;
     float floatValue = 0.0f;
     bool boolValue = false;
@@ -52,7 +58,8 @@ struct Stmt {
 
     // VarDecl (also reused for a for-loop's init clause).
     std::string name;
-    std::string declaredType; // empty => inferred from initExpr.
+    std::string declaredType; // as spelled in source; empty => inferred from initExpr.
+    Type resolvedType = Type::Unknown; // set by sema: declaredType parsed, or initExpr's inferred type.
     Expr* initExpr = nullptr;
 
     // Assign (also reused for a for-loop's step clause). assignTarget is
@@ -105,7 +112,8 @@ struct FuncDecl {
 
 struct GlobalVarDecl {
     std::string name;
-    std::string declaredType;
+    std::string declaredType; // as spelled in source; empty => inferred from initExpr.
+    Type resolvedType = Type::Unknown; // set by sema: declaredType parsed, or initExpr's inferred type.
     Expr* initExpr = nullptr;
     SourceLocation loc;
 };

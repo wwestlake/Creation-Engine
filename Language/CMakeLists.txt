@@ -11,15 +11,20 @@ ce_add_cel_grammar(CE_CEL_GRAMMAR_SOURCES)
 add_library(ce_lang_frontend STATIC
     include/lang/source_location.h
     include/lang/diagnostics.h
+    include/lang/type.h
     include/lang/ast.h
     include/lang/ast_printer.h
     include/lang/lexer.h
     include/lang/compiler.h
+    include/lang/sema.h
+    include/lang/intrinsics.def
     src/source_location.cpp
     src/diagnostics.cpp
+    src/type.cpp
     src/ast.cpp
     src/ast_printer.cpp
     src/compiler.cpp
+    src/sema.cpp
     ${CE_CEL_GRAMMAR_SOURCES}
 )
 
@@ -98,5 +103,35 @@ foreach(test_file ${CE_CEL_DIAG_TESTS})
                 -DTEST_CEL=${test_file}
                 -DEXPECT_CODE_FILE=${test_dir}/${test_name}.expect_code
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_diag_test.cmake"
+    )
+endforeach()
+
+# GS3: Language/tests/sema/ok/*.cel must type-check cleanly
+# (`celc --check` exits 0); Language/tests/sema/fail/*.cel are paired
+# with *.expect_code the same way tests/diag/ is, but exercised through
+# --check (semantic errors) rather than --dump-ast (syntax errors).
+file(GLOB CE_CEL_SEMA_OK_TESTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/sema/ok/*.cel")
+foreach(test_file ${CE_CEL_SEMA_OK_TESTS})
+    get_filename_component(test_name "${test_file}" NAME_WE)
+    add_test(
+        NAME "gs3_sema_ok_${test_name}"
+        COMMAND ${CMAKE_COMMAND}
+                -DCELC_EXE=$<TARGET_FILE:celc>
+                -DTEST_CEL=${test_file}
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_check_ok_test.cmake"
+    )
+endforeach()
+
+file(GLOB CE_CEL_SEMA_FAIL_TESTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/sema/fail/*.cel")
+foreach(test_file ${CE_CEL_SEMA_FAIL_TESTS})
+    get_filename_component(test_name "${test_file}" NAME_WE)
+    get_filename_component(test_dir "${test_file}" DIRECTORY)
+    add_test(
+        NAME "gs3_sema_fail_${test_name}"
+        COMMAND ${CMAKE_COMMAND}
+                -DCELC_EXE=$<TARGET_FILE:celc>
+                -DTEST_CEL=${test_file}
+                -DEXPECT_CODE_FILE=${test_dir}/${test_name}.expect_code
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_sema_diag_test.cmake"
     )
 endforeach()

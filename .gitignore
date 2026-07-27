@@ -15,6 +15,7 @@ _CPack_Packages/
 *.ilk
 *.cmake
 !/cmake/*.cmake
+!/Language/tests/*.cmake
 *.ninja
 *.log
 DerivedData/

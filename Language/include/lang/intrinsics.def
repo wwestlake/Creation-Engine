@@ -1,0 +1,63 @@
+// CEL v1's intrinsic surface -- the ONE source of truth for every
+// built-in callable function. Consumed by sema (GS3, for signature/type
+// checking) and, from GS5 onward, by IR-gen, JIT symbol registration,
+// and nodegen's auto-derived node palette -- see the GS scripting plan
+// (~/.claude/plans/partitioned-singing-galaxy.md) for how those later
+// consumers extend this same file with ABI/purity columns rather than
+// maintaining a second table that could drift from this one.
+//
+// Deliberately NOT include-guarded: designed to be included multiple
+// times, once per consumer, each defining CEL_INTRINSIC0..3 (arity 0
+// through 3 -- nothing in v1 needs more) before inclusion and #undef-ing
+// them after.
+//
+//   CEL_INTRINSICn(name, returnType, param1Type, ..., paramNType)
+//
+// Names/types are plain identifiers (Int, Float, Bool, Vec3, Entity,
+// Void, String) -- each consumer's own macro expansion prefixes them
+// with whatever its local Type scope needs.
+
+// Math (float)
+CEL_INTRINSIC1(sqrt, Float, Float)
+CEL_INTRINSIC1(abs, Float, Float)
+CEL_INTRINSIC2(min, Float, Float, Float)
+CEL_INTRINSIC2(max, Float, Float, Float)
+CEL_INTRINSIC1(floor, Float, Float)
+CEL_INTRINSIC1(sin, Float, Float)
+CEL_INTRINSIC1(cos, Float, Float)
+CEL_INTRINSIC2(atan2, Float, Float, Float)
+CEL_INTRINSIC3(clamp, Float, Float, Float, Float)
+CEL_INTRINSIC3(lerp, Float, Float, Float, Float)
+
+// Vec3
+CEL_INTRINSIC3(vec3, Vec3, Float, Float, Float)
+CEL_INTRINSIC2(dot, Float, Vec3, Vec3)
+CEL_INTRINSIC2(cross, Vec3, Vec3, Vec3)
+CEL_INTRINSIC1(length, Float, Vec3)
+CEL_INTRINSIC1(normalize, Vec3, Vec3)
+
+// World
+CEL_INTRINSIC0(world_tick, Int)
+CEL_INTRINSIC0(world_time, Float)
+
+// Entity
+CEL_INTRINSIC0(spawn, Entity)
+CEL_INTRINSIC1(spawn_at, Entity, Vec3)
+CEL_INTRINSIC1(destroy, Void, Entity)
+CEL_INTRINSIC1(is_valid, Bool, Entity)
+CEL_INTRINSIC0(entity_count, Int)
+CEL_INTRINSIC1(find_by_name, Entity, String)
+
+// Transform
+CEL_INTRINSIC1(get_position, Vec3, Entity)
+CEL_INTRINSIC2(set_position, Void, Entity, Vec3)
+CEL_INTRINSIC1(get_rotation, Vec3, Entity)
+CEL_INTRINSIC2(set_rotation, Void, Entity, Vec3)
+CEL_INTRINSIC1(get_scale, Vec3, Entity)
+CEL_INTRINSIC2(set_scale, Void, Entity, Vec3)
+
+// Debug
+CEL_INTRINSIC1(log, Void, String)
+CEL_INTRINSIC2(log_int, Void, String, Int)
+CEL_INTRINSIC2(log_float, Void, String, Float)
+CEL_INTRINSIC2(log_vec3, Void, String, Vec3)
