@@ -12,6 +12,7 @@
 
 #include <entt/entt.hpp>
 
+#include "abi_registration.h"
 #include "engine/script_context.h"
 #include "engine/world.h"
 #include "intrinsic_trampolines.h"
@@ -33,24 +34,6 @@ namespace {
 // throw.
 extern "C" int64_t ce_selftest_host_add(int64_t a, int64_t b) noexcept {
     return a + b;
-}
-
-// GS5: registers every real host-ABI trampoline (intrinsic_trampolines.cpp)
-// plus the watchdog tick function into `lljit`'s main JITDylib via
-// absoluteSymbols -- the same explicit-registration mechanism GS1 proved
-// out (see the class comment above ce_selftest_host_add), now driven by
-// a real table instead of one hand-written entry. A CEL program with NO
-// loops and no World-touching intrinsic call at all wouldn't strictly
-// need any of these, but module_builder.cpp's watchdog check means
-// EVERY program with a loop calls ce_watchdog_tick -- so this always
-// runs, for both CompileAndRun and RunWorldProgram.
-llvm::Error RegisterAbiTrampolines(llvm::orc::LLJIT& lljit) {
-    llvm::orc::SymbolMap symbols;
-    for (const ce::lang::jit::AbiSymbol& sym : ce::lang::jit::GetAbiTrampolines()) {
-        symbols[lljit.mangleAndIntern(sym.name)] = { llvm::orc::ExecutorAddr::fromPtr(sym.address),
-                                                      llvm::JITSymbolFlags::Exported | llvm::JITSymbolFlags::Callable };
-    }
-    return lljit.getMainJITDylib().define(llvm::orc::absoluteSymbols(std::move(symbols)));
 }
 
 } // namespace

@@ -1,11 +1,21 @@
 #include "MainComponent.h"
 
+#include "lang/jit/script_runtime.h"
+
 MainComponent::MainComponent()
     : viewport_(world_),
       hierarchyPanel_(world_, viewport_),
       transformPanel_(world_),
       importPanel_(world_, viewport_),
       lightPanel_(viewport_) {
+    // GS6: the one injection point (see World::SetScriptRuntime's own
+    // comment) -- must happen before viewport_'s demo scene compiles its
+    // placeholder script (SeedDemoScene runs asynchronously on the GL
+    // thread via newOpenGLContextCreated, always after this constructor
+    // body has already run on the message thread, so this ordering is
+    // safe without needing an explicit synchronization point here).
+    world_.SetScriptRuntime(ce::lang::jit::CreateScriptRuntime());
+
     addAndMakeVisible(transportBar_);
     transportBar_.onPlay = [this] { SetPlaying(true); };
     transportBar_.onPause = [this] { SetPlaying(false); };
@@ -134,7 +144,13 @@ void MainComponent::SetPlaying(bool playing) {
 
 void MainComponent::timerCallback() {
     if (isPlaying_) {
-        world_.AdvanceTick();
+        // GS6: runs every attached ScriptComponent's on_tick (and
+        // on_start, on an entity's first playing tick) before advancing
+        // World's tick counter -- the same Simulation::Step
+        // CreationEngineServer's main loop calls, so the editor and
+        // server genuinely execute scripts identically. 1/30s matches
+        // this timer's own 30 Hz rate (startTimerHz(30) below).
+        ce::engine::Simulation::Step(world_, 1.0f / 30.0f);
     }
     tickLabel_.setText("tick " + juce::String(world_.CurrentTick()), juce::dontSendNotification);
     hierarchyPanel_.Refresh();

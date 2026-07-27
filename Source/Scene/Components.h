@@ -6,6 +6,8 @@
 #include <entt/entt.hpp>
 #include <JuceHeader.h>
 
+#include "engine/core_components.h"
+#include "engine/math.h"
 #include "Render/Scene/Animation.h"
 #include "Render/Scene/Material.h"
 #include "Render/Scene/Mesh.h"
@@ -22,19 +24,34 @@ struct Name {
     juce::String value;
 };
 
-struct Transform {
-    juce::Vector3D<float> position;
-    juce::Vector3D<float> eulerRotationRadians;
-    juce::Vector3D<float> scale{ 1.0f, 1.0f, 1.0f };
+// GS6: this is now LITERALLY ce::engine::Transform, not a separate
+// JUCE-shaped struct -- before this, the editor (this file) and CEL
+// scripts (Language/src/jit/intrinsic_trampolines.cpp, which has always
+// used ce::engine::Transform) held two completely uncoordinated
+// component types on the same shared ce::engine::World, so an entity
+// moved by a script and one moved by the inspector didn't actually see
+// each other's writes at all. Aliasing to the same type makes them the
+// same entt component pool. juce::Vector3D<float>/juce::Matrix3D<float>
+// conversions now happen only at this JUCE/engine boundary (ToJuceVector3D/
+// ToVec3/ToModelMatrix below), never inside the component itself, since
+// EngineCore stays framework-agnostic.
+using Transform = engine::Transform;
 
-    juce::Matrix3D<float> ToModelMatrix() const {
-        const auto translation = juce::Matrix3D<float>::fromTranslation(position);
-        const auto rotation = juce::Matrix3D<float>::rotation(eulerRotationRadians);
-        const juce::Matrix3D<float> scaling(scale.x, 0.0f, 0.0f, 0.0f, 0.0f, scale.y, 0.0f, 0.0f, 0.0f, 0.0f, scale.z,
-                                             0.0f, 0.0f, 0.0f, 0.0f, 1.0f);
-        return translation * rotation * scaling;
-    }
-};
+inline juce::Vector3D<float> ToJuceVector3D(const engine::Vec3& v) { return { v.x, v.y, v.z }; }
+inline engine::Vec3 ToVec3(const juce::Vector3D<float>& v) { return { v.x, v.y, v.z }; }
+
+// Replaces the old Transform::ToModelMatrix() method -- ce::engine::Transform
+// is a plain framework-agnostic POD with no JUCE-returning methods of its
+// own, so the JUCE-specific matrix composition lives here instead, at
+// the boundary where it's actually needed (ViewportComponent's render
+// loop).
+inline juce::Matrix3D<float> ToModelMatrix(const Transform& t) {
+    const auto translation = juce::Matrix3D<float>::fromTranslation(ToJuceVector3D(t.position));
+    const auto rotation = juce::Matrix3D<float>::rotation(ToJuceVector3D(t.eulerRotationRadians));
+    const juce::Matrix3D<float> scaling(t.scale.x, 0.0f, 0.0f, 0.0f, 0.0f, t.scale.y, 0.0f, 0.0f, 0.0f, 0.0f, t.scale.z,
+                                         0.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+    return translation * rotation * scaling;
+}
 
 // Non-owning references to catalog assets (AssetCatalog.h owns the
 // shared_ptr originals) — several entities can point at the same Mesh/

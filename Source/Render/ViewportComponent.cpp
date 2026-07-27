@@ -5,6 +5,8 @@
 #include <iostream>
 #include <mutex>
 
+#include "engine/script_component.h"
+#include "lang/jit/script_runtime.h"
 #include "Render/Scene/Animation.h"
 #include "Scene/AnimationSampler.h"
 #include "Scene/Components.h"
@@ -29,6 +31,24 @@ void LogGLErrors(const char* where) {
 std::array<float, 9> ExtractUpperLeft3x3(const juce::Matrix3D<float>& m) {
     return { m.mat[0], m.mat[1], m.mat[2], m.mat[4], m.mat[5], m.mat[6], m.mat[8], m.mat[9], m.mat[10] };
 }
+
+// GS6: proves the real Simulation::Step + ScriptComponent + CelScriptRuntime
+// pipeline (already verified headlessly via celc --run-simulation and
+// CreationEngineServer --script, see Language/tests/simulation/) also
+// drives a placed entity's real, shared scene::Transform inside the
+// editor itself. There's no script-asset/authoring UI yet (that's GS7),
+// so this is a hardcoded placeholder for the demo entity only, not a
+// general feature -- identical logic to Language/tests/simulation/orbit.cel.
+constexpr const char* kDemoOrbitScript = R"CEL(
+func on_start(self: entity) {
+    set_position(self, vec3(4.0, 0.0, 0.0));
+}
+
+func on_tick(self: entity, dt: float) {
+    var t: float = world_time();
+    set_position(self, vec3(4.0 * cos(t), 0.0, 4.0 * sin(t)));
+}
+)CEL";
 
 } // namespace
 
@@ -154,6 +174,20 @@ void ViewportComponent::SeedDemoScene() {
     world_.Registry().emplace<scene::SceneFlags>(entity, scene::SceneFlags{});
     demoEntity_ = entity;
 
+    // world_.SetScriptRuntime(...) is called by MainComponent's
+    // constructor before this ever runs (SeedDemoScene fires from
+    // newOpenGLContextCreated, asynchronously on the GL thread, well
+    // after MainComponent's constructor body on the message thread has
+    // already returned) -- see kDemoOrbitScript's own comment above.
+    if (engine::IScriptRuntime* runtime = world_.ScriptRuntime(); runtime != nullptr) {
+        std::string compileError;
+        if (auto compiled = runtime->Compile(kDemoOrbitScript, compileError)) {
+            world_.Registry().emplace<engine::ScriptComponent>(entity, engine::ScriptComponent{ compiled });
+        } else {
+            std::cout << "[scene] demo orbit script failed to compile: " << compileError << std::endl;
+        }
+    }
+
     std::cout << "[scene] seeded demo entity 'Box'" << std::endl;
 }
 
@@ -172,6 +206,15 @@ void ViewportComponent::ResetDemoEntityTransform() {
         return;
     }
     world_.Registry().get<scene::Transform>(demoEntity_) = scene::Transform{};
+
+    // Stop should also let the demo script run its on_start again from a
+    // clean slate on the next Play, not just leave it in whatever
+    // started/faulted state it reached before Stop was pressed.
+    if (auto* script = world_.Registry().try_get<engine::ScriptComponent>(demoEntity_)) {
+        script->started = false;
+        script->faulted = false;
+        script->faultMessage.clear();
+    }
 }
 
 void ViewportComponent::newOpenGLContextCreated() {
@@ -324,7 +367,7 @@ void ViewportComponent::renderOpenGL() {
             continue;
         }
 
-        const auto model = transform.ToModelMatrix();
+        const auto model = scene::ToModelMatrix(transform);
         const auto normalMatrix = ExtractUpperLeft3x3(model);
 
         program->use();

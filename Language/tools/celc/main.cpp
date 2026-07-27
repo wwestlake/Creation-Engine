@@ -1,12 +1,20 @@
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 
+#include "engine/core_components.h"
+#include "engine/script_component.h"
+#include "engine/simulation.h"
+#include "engine/world.h"
 #include "lang/ast_printer.h"
 #include "lang/compiler.h"
 #include "lang/diagnostics.h"
 #include "lang/jit/runtime.h"
+#include "lang/jit/script_runtime.h"
 #include "lang/sema.h"
 
 namespace {
@@ -169,6 +177,72 @@ int RunWorld(const std::string& path, const std::string& entryPoint, int ticks, 
     return 0;
 }
 
+// --run-simulation <file.cel> [--ticks N] [--dt D]: GS6's headless
+// verification path for the REAL production pipeline -- ce::engine::
+// Simulation::Step + ce::engine::ScriptComponent + a real
+// ce::lang::jit::CelScriptRuntime, exactly what CreationEngineEditor and
+// CreationEngineServer use, rather than celc's own --run/--run-world
+// (which call Runtime::CompileAndRun/RunWorldProgram directly and don't
+// exercise Simulation::Step or ScriptComponent at all). The script must
+// define on_start(self: entity) and/or on_tick(self: entity, dt: float)
+// (see docs/SCRIPTING_ABI.md) -- a single entity is spawned and given a
+// ScriptComponent, then Simulation::Step is called `ticks` times.
+// Prints the entity's final Transform.position (raw, full precision) on
+// one line, then a rounded x^2+z^2 checksum on a second line -- the
+// SAME two-line format CreationEngineServer's own --script/--ticks batch
+// mode prints, so a CTest can diff the two tools' output for bit-for-bit
+// parity (see run_simulation_parity_test.cmake) as well as check the
+// checksum against a hand-computed .expected fixture.
+int RunSimulation(const std::string& path, int ticks, float dt) {
+    std::ifstream file(path);
+    if (!file) {
+        std::cerr << "celc: cannot open " << path << std::endl;
+        return 1;
+    }
+    std::ostringstream sourceStream;
+    sourceStream << file.rdbuf();
+    const std::string source = sourceStream.str();
+
+    auto runtime = ce::lang::jit::CreateScriptRuntime();
+    std::string error;
+    auto compiled = runtime->Compile(source, error);
+    if (compiled == nullptr) {
+        std::cerr << "celc: " << error << std::endl;
+        return 1;
+    }
+
+    ce::engine::World world;
+    world.SetScriptRuntime(runtime);
+    const entt::entity entity = world.CreateEntity();
+    world.Registry().emplace<ce::engine::ScriptComponent>(entity, ce::engine::ScriptComponent{ compiled });
+
+    for (int i = 0; i < ticks; ++i) {
+        ce::engine::Simulation::Step(world, dt);
+    }
+
+    bool faulted = false;
+    std::string faultMessage;
+    {
+        std::lock_guard<std::mutex> lock(world.RegistryMutex());
+        if (world.Registry().valid(entity)) {
+            const auto& script = world.Registry().get<ce::engine::ScriptComponent>(entity);
+            faulted = script.faulted;
+            faultMessage = script.faultMessage;
+
+            const auto* transform = world.Registry().try_get<ce::engine::Transform>(entity);
+            const ce::engine::Vec3 p = transform != nullptr ? transform->position : ce::engine::Vec3{};
+            std::cout << std::setprecision(9) << p.x << " " << p.y << " " << p.z << "\n";
+            std::cout << std::floor(p.x * p.x + p.z * p.z + 0.5f) << std::endl;
+        }
+    }
+
+    if (faulted) {
+        std::cerr << "celc: script faulted: " << faultMessage << std::endl;
+        return 1;
+    }
+    return 0;
+}
+
 int RunEmitLLVM(const std::string& path) {
     ce::lang::AstArena arena;
     ce::lang::DiagnosticEngine diagnostics;
@@ -239,6 +313,20 @@ int main(int argc, char** argv) {
         return RunWorld(argv[2], entryPoint, ticks, dt, optLevel);
     }
 
+    if (argc >= 3 && std::string(argv[1]) == "--run-simulation") {
+        int ticks = 1;
+        float dt = 1.0f / 60.0f;
+        for (int i = 3; i + 1 < argc; i += 2) {
+            const std::string flag = argv[i];
+            if (flag == "--ticks") {
+                ticks = std::atoi(argv[i + 1]);
+            } else if (flag == "--dt") {
+                dt = static_cast<float>(std::atof(argv[i + 1]));
+            }
+        }
+        return RunSimulation(argv[2], ticks, dt);
+    }
+
     if (argc >= 3 && std::string(argv[1]) == "--emit-llvm") {
         return RunEmitLLVM(argv[2]);
     }
@@ -250,6 +338,7 @@ int main(int argc, char** argv) {
                  "  celc --check <file.cel>\n"
                  "  celc --run <file.cel> [--entry NAME] [--opt 0-3]\n"
                  "  celc --run-world <file.cel> [--entry NAME] [--ticks N] [--dt D] [--opt 0-3]\n"
+                 "  celc --run-simulation <file.cel> [--ticks N] [--dt D]\n"
                  "  celc --emit-llvm <file.cel>\n";
     return 1;
 }

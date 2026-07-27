@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 
+#include "engine/simulation.h"
 #include "engine/world.h"
 #include "node_system/graph.h"
 #include "Render/ViewportComponent.h"

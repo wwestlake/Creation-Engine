@@ -5,6 +5,7 @@
 # doesn't pull in anything GUI-related.
 add_library(engine_core STATIC
     src/world.cpp
+    src/simulation.cpp
 )
 target_include_directories(engine_core PUBLIC include)
 target_link_libraries(engine_core PUBLIC EnTT::EnTT node_system)

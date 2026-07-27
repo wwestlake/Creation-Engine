@@ -149,6 +149,7 @@ target_link_libraries(CreationEngineEditor PRIVATE
     engine_core
     node_system
     asset_system
+    ce_lang_jit
     juce::juce_gui_extra
     juce::juce_opengl
     juce::juce_audio_basics
@@ -162,7 +163,12 @@ target_link_libraries(CreationEngineEditor PRIVATE
 # --- Dedicated server executable ------------------------------------------
 # Headless build: no rendering, no client-only assets (spec section 6.2).
 # Only juce_core/juce_events for cross-platform utilities (threads, time,
-# argument parsing, logging) — never juce_gui_* or juce_opengl.
+# argument parsing, logging) — never juce_gui_* or juce_opengl. GS6 adds
+# ce_lang_jit (CEL script compilation/execution via Simulation::Step) —
+# that's an LLVM dependency, not a GUI one, so it doesn't violate the
+# "headless" property above; Language's own header firewall (see
+# Language/include/lang/jit/runtime.h) keeps llvm/*.h out of every
+# translation unit outside Language/src/jit/ regardless.
 juce_add_console_app(CreationEngineServer
     PRODUCT_NAME "Creation Engine Server"
     COMPANY_NAME "LagDaemon Software"
@@ -185,9 +191,29 @@ target_compile_definitions(CreationEngineServer PRIVATE
 target_link_libraries(CreationEngineServer PRIVATE
     engine_core
     node_system
+    ce_lang_jit
     juce::juce_core
     juce::juce_events
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags
+)
+
+# GS6: the concrete proof of "the same rule module runs identically
+# client-side or server-side" -- runs the SAME script through celc
+# --run-simulation (Simulation::Step driven directly, no networking) and
+# CreationEngineServer --script/--ticks/--dt (its own headless batch
+# mode, see Server/Source/Main.cpp), and asserts their two-line stdout
+# is byte-for-byte identical. Lives here, not in Language/CMakeLists.txt,
+# since it's the one test that needs both executables and both are only
+# fully defined once the whole top-level configure has run.
+add_test(
+    NAME gs6_simulation_server_parity
+    COMMAND ${CMAKE_COMMAND}
+            -DCELC_EXE=$<TARGET_FILE:celc>
+            -DSERVER_EXE=$<TARGET_FILE:CreationEngineServer>
+            -DTEST_CEL=${CMAKE_CURRENT_SOURCE_DIR}/Language/tests/simulation/orbit.cel
+            -DTICKS=300
+            -DDT=0.016666667
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/Language/tests/run_simulation_parity_test.cmake"
 )

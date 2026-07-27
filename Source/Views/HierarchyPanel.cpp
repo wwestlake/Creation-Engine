@@ -265,7 +265,7 @@ void HierarchyPanel::AddEntity(const juce::String& assetName) {
 
         newEntity = world_.CreateEntity();
         registry.emplace<scene::Name>(newEntity, scene::Name{ assetName + " " + juce::String(nextEntityNumber_++) });
-        registry.emplace<scene::Transform>(newEntity, scene::Transform{ spawnPosition });
+        registry.emplace<scene::Transform>(newEntity, scene::Transform{ scene::ToVec3(spawnPosition) });
         registry.emplace<scene::MeshRenderer>(newEntity, scene::MeshRenderer{ asset.mesh, asset.material });
         registry.emplace<scene::SceneFlags>(newEntity, scene::SceneFlags{});
         registry.emplace<scene::Parent>(newEntity, scene::Parent{ parent });

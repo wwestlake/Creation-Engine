@@ -49,12 +49,16 @@ llvm_map_components_to_libnames(CE_LLVM_LIBS core orcjit native)
 add_library(ce_lang_jit STATIC
     include/lang/jit/runtime.h
     src/jit/runtime.cpp
+    include/lang/jit/script_runtime.h
+    src/jit/script_runtime.cpp
     src/jit/optimizer.h
     src/jit/optimizer.cpp
     src/jit/module_builder.h
     src/jit/module_builder.cpp
     src/jit/intrinsic_trampolines.h
     src/jit/intrinsic_trampolines.cpp
+    src/jit/abi_registration.h
+    src/jit/abi_registration.cpp
 )
 
 target_include_directories(ce_lang_jit
@@ -211,4 +215,21 @@ add_test(
             -DCELC_EXE=$<TARGET_FILE:celc>
             -DTEST_CEL=${CMAKE_CURRENT_SOURCE_DIR}/tests/watchdog/infinite_loop.cel
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_watchdog_test.cmake"
+)
+
+# GS6: `celc --run-simulation` exercises the REAL production pipeline --
+# ce::engine::Simulation::Step + ScriptComponent + CelScriptRuntime --
+# unlike GS5's tests/world/ (which drive Runtime::RunWorldProgram
+# directly). See run_simulation_test.cmake for the two-line output
+# format; the cross-tool (celc vs CreationEngineServer) parity test
+# lives in the root CMakeLists.txt, since it needs both executables.
+add_test(
+    NAME gs6_simulation_orbit
+    COMMAND ${CMAKE_COMMAND}
+            -DCELC_EXE=$<TARGET_FILE:celc>
+            -DTEST_CEL=${CMAKE_CURRENT_SOURCE_DIR}/tests/simulation/orbit.cel
+            -DEXPECTED_FILE=${CMAKE_CURRENT_SOURCE_DIR}/tests/simulation/orbit.expected
+            -DTICKS=300
+            -DDT=0.016666667
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_simulation_test.cmake"
 )
