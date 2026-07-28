@@ -11,6 +11,11 @@ implemented here, the vocabulary the other three apps' `AppLanguagePolicy`
 layers can eventually target instead of the hardcoded string allow-lists
 they carry today.
 
+For the asset/version/project-VFS side of that same cross-app contract,
+see:
+
+- [Cross-App Asset Interop Contract](./CROSS_APP_ASSET_INTEROP.md)
+
 ## What actually exists today
 
 CEL's intrinsics (`Language/include/lang/intrinsics.def`) are tagged
