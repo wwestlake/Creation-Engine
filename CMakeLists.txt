@@ -28,6 +28,9 @@ option(CE_ENABLE_SCRIPTING "Build the CEL scripting language module (Language/, 
 if(CE_ENABLE_SCRIPTING)
     set(CE_VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/vcpkg_installed/x64-windows")
     if(NOT EXISTS "${CE_VCPKG_INSTALLED_DIR}")
+        set(CE_VCPKG_INSTALLED_DIR "D:/000 Creation Engine/vcpkg_installed/x64-windows")
+    endif()
+    if(NOT EXISTS "${CE_VCPKG_INSTALLED_DIR}")
         message(FATAL_ERROR "CE_ENABLE_SCRIPTING is ON but ${CE_VCPKG_INSTALLED_DIR} doesn't exist. Run `vcpkg install --triplet x64-windows` from the repo root first (see README.md's \"Scripting language build\" section), or configure with -DCE_ENABLE_SCRIPTING=OFF to skip the scripting module.")
     endif()
     list(APPEND CMAKE_PREFIX_PATH "${CE_VCPKG_INSTALLED_DIR}")
@@ -35,11 +38,20 @@ if(CE_ENABLE_SCRIPTING)
 endif()
 
 add_subdirectory("${JUCE_DIR}" juce)
-add_subdirectory(third_party/entt)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/entt/CMakeLists.txt")
+    add_subdirectory(third_party/entt)
+elseif(EXISTS "D:/000 Creation Engine/third_party/entt/CMakeLists.txt")
+    add_subdirectory("D:/000 Creation Engine/third_party/entt" EnttExternal)
+else()
+    message(FATAL_ERROR "Could not find the entt dependency for Creation Engine.")
+endif()
 
 # --- Shared, framework-agnostic libraries --------------------------------
 add_subdirectory(NodeSystem)
 add_subdirectory(EngineCore)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/AssetSystem" CreationSuiteSharedAssetSystem)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/Services" CreationSuiteSharedServices)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/UI" CreationSuiteSharedUI)
 
 # --- Shared, juce_core-only libraries -------------------------------------
 # Not framework-agnostic like the two above (needs juce::juce_core for
@@ -167,6 +179,8 @@ target_link_libraries(CreationEngineEditor PRIVATE
     engine_core
     node_system
     asset_system
+    creation_suite_ui
+    creation_suite_ui_assets
     ce_lang_jit
     ce_lang_nodegen
     juce::juce_gui_extra

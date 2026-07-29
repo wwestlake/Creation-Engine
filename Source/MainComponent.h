@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <creation/ui/CreationSuiteHeaderBar.h>
 
 #include "engine/simulation.h"
 #include "engine/world.h"
@@ -12,7 +13,6 @@
 #include "Views/PlaceholderPanel.h"
 #include "Views/ScriptPanel.h"
 #include "Views/TransformPanel.h"
-#include "Views/TransportBar.h"
 #include "Views/ViewModeBar.h"
 
 // The editor and the runtime are the same executable in different modes
@@ -41,7 +41,7 @@ private:
     ce::engine::World world_;
     bool isPlaying_ = false;
 
-    ce::TransportBar transportBar_;
+    CreationSuiteHeaderBar headerBar_;
     ce::ViewModeBar viewModeBar_;
     ce::WorkspaceMode activeMode_ = ce::WorkspaceMode::Scene;
 

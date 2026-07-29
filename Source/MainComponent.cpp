@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 
 #include "lang/jit/script_runtime.h"
+#include <creation/ui/CreationSuiteLogos.h>
 
 MainComponent::MainComponent()
     : viewport_(world_),
@@ -18,15 +19,26 @@ MainComponent::MainComponent()
     // safe without needing an explicit synchronization point here).
     world_.SetScriptRuntime(ce::lang::jit::CreateScriptRuntime());
 
-    addAndMakeVisible(transportBar_);
-    transportBar_.onPlay = [this] { SetPlaying(true); };
-    transportBar_.onPause = [this] { SetPlaying(false); };
-    transportBar_.onStop = [this] {
+    headerBar_.setAppTitle("Creation Engine");
+    headerBar_.setLogoImage(creation::ui::getSuiteLogoImage(creation::ui::SuiteLogoId::engine));
+    headerBar_.setProjectLabel("Project: Untitled Engine");
+    headerBar_.audioButton.setButtonText("Engine");
+    headerBar_.tourButton.setButtonText("Tools");
+    headerBar_.setTransportButtonVisible(CreationSuiteHeaderBar::TransportButtonSlot::rewind, false);
+    headerBar_.setTransportButtonVisible(CreationSuiteHeaderBar::TransportButtonSlot::fastForward, false);
+    headerBar_.setTransportButtonVisible(CreationSuiteHeaderBar::TransportButtonSlot::record, false);
+    headerBar_.setTransportButtonVisible(CreationSuiteHeaderBar::TransportButtonSlot::loop, false);
+    headerBar_.setTransportButtonVisible(CreationSuiteHeaderBar::TransportButtonSlot::click, false);
+    addAndMakeVisible(headerBar_);
+    headerBar_.onPlay = [this] { SetPlaying(true); };
+    headerBar_.onPause = [this] { SetPlaying(false); };
+    headerBar_.onStop = [this] {
         SetPlaying(false);
         world_.ResetTick();
         viewport_.ResetDemoEntityTransform();
-        transportBar_.SetStatusText("Stopped");
+        headerBar_.setStatusText("Stopped");
     };
+    headerBar_.setStatusText("Editing");
 
     addAndMakeVisible(viewModeBar_);
     viewModeBar_.onModeSelected = [this](ce::WorkspaceMode mode) { SetActiveMode(mode); };
@@ -89,7 +101,7 @@ void MainComponent::paint(juce::Graphics& g) {
 void MainComponent::resized() {
     auto bounds = getLocalBounds();
 
-    transportBar_.setBounds(bounds.removeFromTop(92));
+    headerBar_.setBounds(bounds.removeFromTop(96));
     viewModeBar_.setBounds(bounds.removeFromTop(56));
 
     const auto contentArea = bounds;
@@ -152,8 +164,8 @@ void MainComponent::SetActiveMode(ce::WorkspaceMode mode) {
 
 void MainComponent::SetPlaying(bool playing) {
     isPlaying_ = playing;
-    transportBar_.SetPlaying(isPlaying_);
-    transportBar_.SetStatusText(isPlaying_ ? "Playing" : "Editing");
+    headerBar_.setPlaybackVisualState(isPlaying_, false);
+    headerBar_.setStatusText(isPlaying_ ? "Playing" : "Editing");
 }
 
 void MainComponent::timerCallback() {

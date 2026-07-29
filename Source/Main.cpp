@@ -1,7 +1,7 @@
 #include <JuceHeader.h>
 
-#include "Branding.h"
 #include "MainComponent.h"
+#include <creation/ui/CreationSuiteLogos.h>
 
 class CreationEngineApplication final : public juce::JUCEApplication {
 public:
@@ -23,11 +23,11 @@ private:
         explicit MainWindow(const juce::String& name)
             : DocumentWindow(name,
                               juce::Desktop::getInstance().getDefaultLookAndFeel().findColour(
-                                  juce::ResizableWindow::backgroundColourId),
+                                   juce::ResizableWindow::backgroundColourId),
                               DocumentWindow::allButtons) {
             setUsingNativeTitleBar(true);
             setResizable(true, true);
-            setIcon(ce::branding::CreateLogoImage(64));
+            setIcon(creation::ui::getSuiteLogoImage(creation::ui::SuiteLogoId::engine));
             setContentOwned(new MainComponent(), true);
             centreWithSize(1400, 900);
             setVisible(true);
