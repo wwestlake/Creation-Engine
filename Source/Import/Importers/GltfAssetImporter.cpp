@@ -1,9 +1,13 @@
 #include "Import/Importers/GltfAssetImporter.h"
 
+#include <mutex>
+
 #include "Render/Import/GltfLoader.h"
 #include "Render/ViewportComponent.h"
 #include "Scene/AnimationSlicer.h"
 #include "Scene/AssetCatalog.h"
+#include "Scene/AssetPlacement.h"
+#include "Scene/Components.h"
 
 namespace ce::import {
 
@@ -66,8 +70,8 @@ void ApplyAnimationImportOptions(LoadedModel& model, const AnimationImportOption
 } // namespace
 
 ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportContext& context) {
-    if (context.catalog == nullptr || context.viewport == nullptr) {
-        return ImportResult::Failed("glTF import needs a live asset catalog and viewport.");
+    if (context.catalog == nullptr || context.viewport == nullptr || context.world == nullptr) {
+        return ImportResult::Failed("glTF import needs a live world, asset catalog, and viewport.");
     }
 
     LoadedModel model;
@@ -89,7 +93,19 @@ ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportConte
     if (!added) {
         return ImportResult::Failed("Failed to build GPU resources for " + sourceFile.getFileName() + ".");
     }
-    return ImportResult::Ok(assetName + " imported -- available in the \"+ Add\" menu." + animationNote);
+
+    // Drop the model straight into the scene rather than only staging it
+    // in the catalog for a manual "+ Add" follow-up -- a dragged-in file
+    // should show up, same expectation as every other creative tool's
+    // import flow. The catalog entry still exists afterward for placing
+    // additional copies via "+ Add".
+    const auto asset = context.catalog->Find(assetName);
+    {
+        std::lock_guard<std::mutex> lock(context.world->RegistryMutex());
+        scene::PlaceAssetEntity(*context.world, asset, assetName, scene::ToVec3(context.viewport->SpawnPosition()));
+    }
+
+    return ImportResult::Ok(assetName + " imported and placed in the scene." + animationNote);
 }
 
 } // namespace ce::import
