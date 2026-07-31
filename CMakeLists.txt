@@ -58,7 +58,6 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/UI" CreationSuiteShar
 # juce::ZipFile), but still no GUI/rendering dependency, so a future
 # server-side asset loader could link this without pulling in anything
 # beyond what CreationEngineServer already links.
-add_subdirectory(AssetSystem)
 
 # --- Client / editor executable ------------------------------------------
 # Per spec section 1, the editor and the runtime are the same binary in
@@ -138,6 +137,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/NodeEditor/LogicPanel.h
     Source/Views/NodeEditor/LogicPanel.cpp
     Source/Scene/Components.h
+    Source/Scene/EngineSceneSerializer.h
+    Source/Scene/EngineSceneSerializer.cpp
     Source/Scene/AssetCatalog.h
     Source/Scene/AssetCatalog.cpp
     Source/Scene/ScriptCatalog.h
@@ -178,7 +179,7 @@ target_compile_definitions(CreationEngineEditor PRIVATE
 target_link_libraries(CreationEngineEditor PRIVATE
     engine_core
     node_system
-    asset_system
+    creation_suite_asset_system
     creation_suite_ui
     creation_suite_ui_assets
     ce_lang_jit

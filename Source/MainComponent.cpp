@@ -2,6 +2,7 @@
 
 #include "lang/jit/script_runtime.h"
 #include <creation/ui/CreationSuiteLogos.h>
+#include "Scene/EngineSceneSerializer.h"
 
 MainComponent::MainComponent()
     : viewport_(world_),
@@ -11,12 +12,9 @@ MainComponent::MainComponent()
       importPanel_(world_, viewport_),
       lightPanel_(viewport_),
       logicPanel_(world_) {
-    // GS6: the one injection point (see World::SetScriptRuntime's own
-    // comment) -- must happen before viewport_'s demo scene compiles its
-    // placeholder script (SeedDemoScene runs asynchronously on the GL
-    // thread via newOpenGLContextCreated, always after this constructor
-    // body has already run on the message thread, so this ordering is
-    // safe without needing an explicit synchronization point here).
+    juce::String suiteErr;
+    suiteSettings_ = suiteSettingsStore_.load(suiteErr);
+
     world_.SetScriptRuntime(ce::lang::jit::CreateScriptRuntime());
 
     headerBar_.setAppTitle("Creation Engine");
@@ -29,6 +27,24 @@ MainComponent::MainComponent()
     headerBar_.setTransportButtonVisible(CreationSuiteHeaderBar::TransportButtonSlot::record, false);
     headerBar_.setTransportButtonVisible(CreationSuiteHeaderBar::TransportButtonSlot::loop, false);
     headerBar_.setTransportButtonVisible(CreationSuiteHeaderBar::TransportButtonSlot::click, false);
+    suiteShellController_.attach(headerBar_,
+                                 {
+                                     "Creation Engine",
+                                     creation::assets::SuiteAppDomain::engine,
+                                     juce::Colour(0xff15181d)
+                                 },
+                                 [this](const juce::String& status)
+                                 {
+                                     headerBar_.setStatusText(status);
+                                 });
+    suiteShellController_.onProjectOpenRequested = [this](const juce::File& file)
+    {
+        openProject(file);
+    };
+    headerBar_.onProjectMenuRequested = [this]
+    {
+        suiteShellController_.showProjectBrowser();
+    };
     addAndMakeVisible(headerBar_);
     headerBar_.onPlay = [this] { SetPlaying(true); };
     headerBar_.onPause = [this] { SetPlaying(false); };
@@ -183,4 +199,180 @@ void MainComponent::timerCallback() {
     transformPanel_.Refresh();
     scriptPanel_.Refresh();
     logicPanel_.Refresh();
+}
+
+void MainComponent::createNewProject()
+{
+    auto* prompt = new juce::AlertWindow("Create New Engine Project",
+                                         "Enter a name for your new Creation Engine project container:",
+                                         juce::MessageBoxIconType::QuestionIcon);
+    prompt->addTextEditor("projectName", "");
+    prompt->addButton("Create Project", 1);
+    prompt->addButton("Cancel", 0);
+
+    auto options = juce::Component::SafePointer<MainComponent>(this);
+    prompt->enterModalState(true, juce::ModalCallbackFunction::create([options, prompt](int result) mutable
+    {
+        std::unique_ptr<juce::AlertWindow> dialog(prompt);
+        if (result != 1 || options == nullptr)
+            return;
+
+        auto name = dialog->getTextEditorContents("projectName").trim();
+        if (name.isEmpty())
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Project Error", "Project name cannot be empty.");
+            return;
+        }
+
+        juce::String err;
+        if (! creation::assets::ProjectWorkspaceService::createProject(options->suiteSettings_, creation::assets::SuiteAppDomain::engine, name, "1.0.0", "1.0.0", options->projectSession_, err))
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Project Error", err);
+            return;
+        }
+
+        options->headerBar_.setProjectLabel("Project: " + options->projectSession_.getManifest().projectName);
+        options->saveSessionToDisk(true);
+        options->saveAppSettings();
+        options->headerBar_.setStatusText("Created project: " + options->projectSession_.getContainerFile().getFileName());
+    }), true);
+}
+
+void MainComponent::openProject(const juce::File& containerFile)
+{
+    juce::String err;
+    if (! creation::assets::ProjectWorkspaceService::openProject(containerFile, projectSession_, err))
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Project Error", err);
+        return;
+    }
+
+    headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName);
+    loadSessionFromDisk();
+    saveAppSettings();
+}
+
+void MainComponent::saveSessionToDisk(bool userInitiated)
+{
+    if (! projectSession_.isValid())
+    {
+        if (userInitiated)
+            headerBar_.setStatusText("No active project session to save.");
+        return;
+    }
+
+    float roughness = static_cast<float>(roughnessSlider_.getValue());
+    float metallic = static_cast<float>(metallicSlider_.getValue());
+    auto state = ce::scene::EngineSceneSerializer::serializeScene(world_, roughness, metallic);
+
+    if (auto xml = state.createXml())
+    {
+        auto xmlString = xml->toString();
+        juce::MemoryBlock xmlBlock(xmlString.toRawUTF8(), xmlString.getNumBytesAsUTF8());
+        projectSession_.writeEntry("session.xml", xmlBlock);
+    }
+
+    juce::String commitError;
+    if (! projectSession_.commit(commitError))
+    {
+        headerBar_.setStatusText("Project save failed: " + commitError);
+        return;
+    }
+
+    if (userInitiated)
+        headerBar_.setStatusText("Project saved: " + projectSession_.getContainerFile().getFileName());
+}
+
+void MainComponent::loadSessionFromDisk()
+{
+    if (! projectSession_.isValid())
+        return;
+
+    juce::MemoryBlock sessionData;
+    if (projectSession_.readEntry("session.xml", sessionData))
+    {
+        auto xmlString = juce::String::createStringFromData(sessionData.getData(), (int) sessionData.getSize());
+        if (auto xml = juce::XmlDocument::parse(xmlString))
+        {
+            auto state = juce::ValueTree::fromXml(*xml);
+            float roughness = 0.5f, metallic = 0.0f;
+            if (ce::scene::EngineSceneSerializer::restoreScene(world_, state, roughness, metallic))
+            {
+                roughnessSlider_.setValue(roughness, juce::dontSendNotification);
+                metallicSlider_.setValue(metallic, juce::dontSendNotification);
+                viewport_.SetRoughness(roughness);
+                viewport_.SetMetallic(metallic);
+                hierarchyPanel_.Refresh();
+                transformPanel_.Refresh();
+                scriptPanel_.Refresh();
+                logicPanel_.Refresh();
+            }
+        }
+    }
+}
+
+bool MainComponent::ensureProjectSessionActive(juce::String& errorMessage)
+{
+    if (projectSession_.isValid())
+        return true;
+
+    auto settingsFile = getAppSettingsFile();
+    if (settingsFile.existsAsFile())
+    {
+        if (auto xml = juce::XmlDocument::parse(settingsFile))
+        {
+            auto settings = juce::ValueTree::fromXml(*xml);
+            auto lastPath = settings.getProperty("lastOpenedProjectContainer").toString();
+            if (lastPath.isNotEmpty())
+            {
+                juce::File lastContainer(lastPath);
+                if (lastContainer.existsAsFile())
+                {
+                    if (creation::assets::ProjectWorkspaceService::openProject(lastContainer, projectSession_, errorMessage))
+                    {
+                        headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName);
+                        loadSessionFromDisk();
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    auto availableProjects = creation::assets::ProjectContainerService::listProjects(
+        suiteSettings_, creation::assets::SuiteAppDomain::engine, errorMessage);
+
+    if (! availableProjects.isEmpty())
+    {
+        if (creation::assets::ProjectWorkspaceService::openProject(availableProjects.getFirst().containerFile, projectSession_, errorMessage))
+        {
+            headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName);
+            loadSessionFromDisk();
+            return true;
+        }
+    }
+
+    createNewProject();
+    return false;
+}
+
+juce::File MainComponent::getAppSettingsFile() const
+{
+    return suiteSettingsStore_.getSuiteConfigDirectory().getChildFile("creation-engine-settings.xml");
+}
+
+void MainComponent::saveAppSettings()
+{
+    juce::ValueTree state("CreationEngineSettings");
+    if (projectSession_.isValid())
+        state.setProperty("lastOpenedProjectContainer", projectSession_.getContainerFile().getFullPathName(), nullptr);
+
+    auto settingsFile = getAppSettingsFile();
+    settingsFile.getParentDirectory().createDirectory();
+    if (auto xml = state.createXml())
+        xml->writeTo(settingsFile);
+}
+
+void MainComponent::loadAppSettings()
+{
 }
