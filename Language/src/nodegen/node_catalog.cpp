@@ -117,6 +117,18 @@ void RegisterWorldNodes(NodeTypeRegistry& registry) {
         /*inputs=*/{ Exec(PinName::ExecIn), Entity(PinName::Entity), Vec3(PinName::Value) },
         /*outputs=*/{ Exec(PinName::ExecOut) } });
 
+    // Runtime color multiplier over an entity's Material (see
+    // ce::engine::Tint's own doc comment) -- same shape as GetPosition/
+    // SetPosition, just backed by get_color/set_color instead.
+    registry.Register(NodeTypeDescriptor{
+        NodeType::GetColor, Domain::Core, /*inputs=*/{ Entity(PinName::Entity) },
+        /*outputs=*/{ Vec3(PinName::Value) } });
+
+    registry.Register(NodeTypeDescriptor{
+        NodeType::SetColor, Domain::Core,
+        /*inputs=*/{ Exec(PinName::ExecIn), Entity(PinName::Entity), Vec3(PinName::Value) },
+        /*outputs=*/{ Exec(PinName::ExecOut) } });
+
     registry.Register(NodeTypeDescriptor{
         NodeType::Spawn, Domain::Core, /*inputs=*/{ Exec(PinName::ExecIn), Vec3(PinName::Position) },
         /*outputs=*/{ Exec(PinName::ExecOut), Entity(PinName::Entity) } });

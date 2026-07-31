@@ -83,6 +83,13 @@ CEL_INTRINSIC2(set_rotation, ce_set_rotation, Mutates, World, Void, Entity, Vec3
 CEL_INTRINSIC1(get_scale, ce_get_scale, ReadsWorld, World, Vec3, Entity)
 CEL_INTRINSIC2(set_scale, ce_set_scale, Mutates, World, Void, Entity, Vec3)
 
+// Color -- real ABI. Domain World. Reads/writes ce::engine::Tint, a
+// per-entity runtime multiplier over whatever Material the entity's
+// MeshRenderer references -- never the shared Material asset itself
+// (see Tint's own doc comment in core_components.h for why).
+CEL_INTRINSIC1(get_color, ce_get_color, ReadsWorld, World, Vec3, Entity)
+CEL_INTRINSIC2(set_color, ce_set_color, Mutates, World, Void, Entity, Vec3)
+
 // Debug -- real ABI; writes to stdout, so Mutates even though it never
 // touches the World itself (purity here is about the JIT-visible memory
 // contract, not specifically "touches World"). Domain Core: logging is

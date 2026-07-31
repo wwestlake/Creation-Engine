@@ -5,6 +5,7 @@
 #include <iostream>
 #include <mutex>
 
+#include "engine/core_components.h"
 #include "engine/script_component.h"
 #include "lang/jit/script_runtime.h"
 #include "Render/Scene/Animation.h"
@@ -63,48 +64,6 @@ ViewportComponent::ViewportComponent(engine::World& world) : world_(world), free
 
 ViewportComponent::~ViewportComponent() {
     openGLContext_.detach();
-}
-
-void ViewportComponent::SetRoughness(float value) {
-    const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
-    auto view = world_.Registry().view<scene::MeshRenderer>();
-    for (auto entity : view) {
-        if (auto& material = view.get<scene::MeshRenderer>(entity).material) {
-            material->roughness = value;
-        }
-    }
-}
-
-void ViewportComponent::SetMetallic(float value) {
-    const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
-    auto view = world_.Registry().view<scene::MeshRenderer>();
-    for (auto entity : view) {
-        if (auto& material = view.get<scene::MeshRenderer>(entity).material) {
-            material->metallic = value;
-        }
-    }
-}
-
-float ViewportComponent::Roughness() const {
-    const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
-    auto view = world_.Registry().view<const scene::MeshRenderer>();
-    for (auto entity : view) {
-        if (const auto& material = view.get<const scene::MeshRenderer>(entity).material) {
-            return material->roughness;
-        }
-    }
-    return 0.4f;
-}
-
-float ViewportComponent::Metallic() const {
-    const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
-    auto view = world_.Registry().view<const scene::MeshRenderer>();
-    for (auto entity : view) {
-        if (const auto& material = view.get<const scene::MeshRenderer>(entity).material) {
-            return material->metallic;
-        }
-    }
-    return 0.2f;
 }
 
 DirectionalLight ViewportComponent::GetSunLight() const {
@@ -388,7 +347,15 @@ void ViewportComponent::renderOpenGL() {
         program->setUniformMat3("uNormalMatrix", normalMatrix.data(), 1, GL_FALSE);
         program->setUniform("uCameraPos", cameraPos.x, cameraPos.y, cameraPos.z);
 
-        renderer.material->ApplyUniforms(*program);
+        // A script/node graph's set_color intrinsic writes engine::Tint,
+        // never the shared Material's own albedo (see Material::
+        // ApplyUniforms's own comment) -- absent means "no override,"
+        // same missing-component convention as SceneFlags/ScriptSource.
+        juce::Vector3D<float> tint{ 1.0f, 1.0f, 1.0f };
+        if (const auto* runtimeTint = world_.Registry().try_get<const engine::Tint>(entity)) {
+            tint = { runtimeTint->color.x, runtimeTint->color.y, runtimeTint->color.z };
+        }
+        renderer.material->ApplyUniforms(*program, tint);
 
         program->setUniform("uSunLight.direction", sunLightSnapshot.direction.x, sunLightSnapshot.direction.y,
                              sunLightSnapshot.direction.z);
