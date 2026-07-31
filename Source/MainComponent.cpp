@@ -243,9 +243,7 @@ void MainComponent::saveSessionToDisk(bool userInitiated)
         return;
     }
 
-    float roughness = static_cast<float>(roughnessSlider_.getValue());
-    float metallic = static_cast<float>(metallicSlider_.getValue());
-    auto state = ce::scene::EngineSceneSerializer::serializeScene(world_, roughness, metallic);
+    auto state = ce::scene::EngineSceneSerializer::serializeScene(world_);
 
     if (auto xml = state.createXml())
     {
@@ -277,17 +275,13 @@ void MainComponent::loadSessionFromDisk()
         if (auto xml = juce::XmlDocument::parse(xmlString))
         {
             auto state = juce::ValueTree::fromXml(*xml);
-            float roughness = 0.5f, metallic = 0.0f;
-            if (ce::scene::EngineSceneSerializer::restoreScene(world_, state, roughness, metallic))
+            if (ce::scene::EngineSceneSerializer::restoreScene(world_, state))
             {
-                roughnessSlider_.setValue(roughness, juce::dontSendNotification);
-                metallicSlider_.setValue(metallic, juce::dontSendNotification);
-                viewport_.SetRoughness(roughness);
-                viewport_.SetMetallic(metallic);
                 hierarchyPanel_.Refresh();
                 transformPanel_.Refresh();
                 scriptPanel_.Refresh();
                 logicPanel_.Refresh();
+                pbrMaterialPanel_.Refresh();
             }
         }
     }

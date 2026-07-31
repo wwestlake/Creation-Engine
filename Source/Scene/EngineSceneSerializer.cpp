@@ -2,17 +2,12 @@
 
 namespace ce::scene
 {
-juce::ValueTree EngineSceneSerializer::serializeScene(ce::engine::World& world,
-                                                     float roughness,
-                                                     float metallic)
+juce::ValueTree EngineSceneSerializer::serializeScene(ce::engine::World& world)
 {
     std::lock_guard<std::mutex> lock(world.RegistryMutex());
     auto& reg = world.Registry();
 
     juce::ValueTree root("CreationEngineScene");
-    root.setProperty("roughness", roughness, nullptr);
-    root.setProperty("metallic", metallic, nullptr);
-
     juce::ValueTree entitiesNode("Entities");
 
     for (auto entity : reg.storage<entt::entity>())
@@ -53,6 +48,20 @@ juce::ValueTree EngineSceneSerializer::serializeScene(ce::engine::World& world,
             entityNode.addChild(tNode, -1, nullptr);
         }
 
+        if (auto* meshRenderer = reg.try_get<MeshRenderer>(entity))
+        {
+            if (meshRenderer->material != nullptr)
+            {
+                juce::ValueTree mNode("Material");
+                mNode.setProperty("albedoR", meshRenderer->material->albedo.x, nullptr);
+                mNode.setProperty("albedoG", meshRenderer->material->albedo.y, nullptr);
+                mNode.setProperty("albedoB", meshRenderer->material->albedo.z, nullptr);
+                mNode.setProperty("metallic", meshRenderer->material->metallic, nullptr);
+                mNode.setProperty("roughness", meshRenderer->material->roughness, nullptr);
+                entityNode.addChild(mNode, -1, nullptr);
+            }
+        }
+
         if (auto* script = reg.try_get<ScriptSource>(entity))
         {
             juce::ValueTree sNode("ScriptSource");
@@ -68,16 +77,10 @@ juce::ValueTree EngineSceneSerializer::serializeScene(ce::engine::World& world,
     return root;
 }
 
-bool EngineSceneSerializer::restoreScene(ce::engine::World& world,
-                                        const juce::ValueTree& state,
-                                        float& outRoughness,
-                                        float& outMetallic)
+bool EngineSceneSerializer::restoreScene(ce::engine::World& world, const juce::ValueTree& state)
 {
     if (! state.hasType("CreationEngineScene"))
         return false;
-
-    outRoughness = static_cast<float>(state.getProperty("roughness", 0.5f));
-    outMetallic = static_cast<float>(state.getProperty("metallic", 0.0f));
 
     std::lock_guard<std::mutex> lock(world.RegistryMutex());
     auto& reg = world.Registry();
@@ -89,7 +92,6 @@ bool EngineSceneSerializer::restoreScene(ce::engine::World& world,
 
     std::map<int64_t, entt::entity> idMap;
 
-    // First pass: Create entities and store in ID map
     for (const auto entityNode : entitiesNode)
     {
         if (! entityNode.hasType("Entity"))
@@ -128,6 +130,21 @@ bool EngineSceneSerializer::restoreScene(ce::engine::World& world,
             reg.emplace<Transform>(entity, t);
         }
 
+        auto mNode = entityNode.getChildWithName("Material");
+        if (mNode.isValid())
+        {
+            auto mat = std::make_shared<Material>();
+            mat->albedo.x = static_cast<float>(mNode.getProperty("albedoR", 0.7));
+            mat->albedo.y = static_cast<float>(mNode.getProperty("albedoG", 0.15));
+            mat->albedo.z = static_cast<float>(mNode.getProperty("albedoB", 0.15));
+            mat->metallic = static_cast<float>(mNode.getProperty("metallic", 0.2));
+            mat->roughness = static_cast<float>(mNode.getProperty("roughness", 0.4));
+
+            MeshRenderer mr;
+            mr.material = mat;
+            reg.emplace<MeshRenderer>(entity, mr);
+        }
+
         auto sNode = entityNode.getChildWithName("ScriptSource");
         if (sNode.isValid())
         {
@@ -138,7 +155,6 @@ bool EngineSceneSerializer::restoreScene(ce::engine::World& world,
         }
     }
 
-    // Second pass: Restore parents
     for (const auto entityNode : entitiesNode)
     {
         if (! entityNode.hasType("Entity"))

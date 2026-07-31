@@ -11,13 +11,7 @@ namespace ce::scene
 class EngineSceneSerializer final
 {
 public:
-    static juce::ValueTree serializeScene(ce::engine::World& world,
-                                          float roughness,
-                                          float metallic);
-
-    static bool restoreScene(ce::engine::World& world,
-                             const juce::ValueTree& state,
-                             float& outRoughness,
-                             float& outMetallic);
+    static juce::ValueTree serializeScene(ce::engine::World& world);
+    static bool restoreScene(ce::engine::World& world, const juce::ValueTree& state);
 };
 }
