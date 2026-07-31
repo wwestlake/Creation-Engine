@@ -8,6 +8,7 @@ MainComponent::MainComponent()
       hierarchyPanel_(world_, viewport_),
       transformPanel_(world_),
       scriptPanel_(world_, viewport_),
+      pbrMaterialPanel_(world_),
       importPanel_(world_, viewport_),
       lightPanel_(viewport_),
       logicPanel_(world_) {
@@ -47,6 +48,7 @@ MainComponent::MainComponent()
     hierarchyPanel_.onSelectionChanged = [this](entt::entity entity) {
         transformPanel_.SetSelectedEntity(entity);
         scriptPanel_.SetSelectedEntity(entity);
+        pbrMaterialPanel_.SetSelectedEntity(entity);
         logicPanel_.SetSelectedEntity(entity);
     };
     addAndMakeVisible(viewport_);
@@ -60,21 +62,7 @@ MainComponent::MainComponent()
 
     addAndMakeVisible(transformPanel_);
     addAndMakeVisible(scriptPanel_);
-
-    roughnessLabel_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
-    addAndMakeVisible(roughnessLabel_);
-    roughnessSlider_.setRange(0.05, 1.0);
-    roughnessSlider_.setValue(viewport_.Roughness(), juce::dontSendNotification);
-    roughnessSlider_.onValueChange = [this] { viewport_.SetRoughness(static_cast<float>(roughnessSlider_.getValue())); };
-    addAndMakeVisible(roughnessSlider_);
-
-    metallicLabel_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
-    addAndMakeVisible(metallicLabel_);
-    metallicSlider_.setRange(0.0, 1.0);
-    metallicSlider_.setValue(viewport_.Metallic(), juce::dontSendNotification);
-    metallicSlider_.onValueChange = [this] { viewport_.SetMetallic(static_cast<float>(metallicSlider_.getValue())); };
-    addAndMakeVisible(metallicSlider_);
-
+    addAndMakeVisible(pbrMaterialPanel_);
     addAndMakeVisible(lightPanel_);
 
     addAndMakeVisible(materialsPanel_);
@@ -121,11 +109,7 @@ void MainComponent::resized() {
     scriptPanel_.setBounds(inspectorBounds.removeFromTop(ce::ScriptPanel::kPreferredHeight));
 
     inspectorBounds.removeFromTop(12);
-    roughnessLabel_.setBounds(inspectorBounds.removeFromTop(18));
-    roughnessSlider_.setBounds(inspectorBounds.removeFromTop(24));
-    inspectorBounds.removeFromTop(8);
-    metallicLabel_.setBounds(inspectorBounds.removeFromTop(18));
-    metallicSlider_.setBounds(inspectorBounds.removeFromTop(24));
+    pbrMaterialPanel_.setBounds(inspectorBounds.removeFromTop(ce::MaterialsPanel::kPreferredHeight));
 
     inspectorBounds.removeFromTop(16);
     lightPanel_.setBounds(inspectorBounds.removeFromTop(lightPanel_.PreferredHeight()));
@@ -149,10 +133,7 @@ void MainComponent::SetActiveMode(ce::WorkspaceMode mode) {
     tickLabel_.setVisible(showScene);
     transformPanel_.setVisible(showScene);
     scriptPanel_.setVisible(showScene);
-    roughnessLabel_.setVisible(showScene);
-    roughnessSlider_.setVisible(showScene);
-    metallicLabel_.setVisible(showScene);
-    metallicSlider_.setVisible(showScene);
+    pbrMaterialPanel_.setVisible(showScene);
     lightPanel_.setVisible(showScene);
 
     materialsPanel_.setVisible(mode == ce::WorkspaceMode::Materials);
@@ -182,5 +163,6 @@ void MainComponent::timerCallback() {
     hierarchyPanel_.Refresh();
     transformPanel_.Refresh();
     scriptPanel_.Refresh();
+    pbrMaterialPanel_.Refresh();
     logicPanel_.Refresh();
 }

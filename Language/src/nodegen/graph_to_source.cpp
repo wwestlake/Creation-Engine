@@ -245,6 +245,11 @@ private:
                                       EmitExpr(node, PinName::Value) + ");";
             return comment + trace + Indent(indent) + stmt + "\n" + EmitNext(node, PinName::ExecOut, indent);
         }
+        if (type == NodeType::SetColor) {
+            const std::string stmt = "set_color(" + EmitExpr(node, PinName::Entity) + ", " +
+                                      EmitExpr(node, PinName::Value) + ");";
+            return comment + trace + Indent(indent) + stmt + "\n" + EmitNext(node, PinName::ExecOut, indent);
+        }
         if (type == NodeType::Destroy) {
             const std::string stmt = "destroy(" + EmitExpr(node, PinName::Entity) + ");";
             return comment + trace + Indent(indent) + stmt + "\n" + EmitNext(node, PinName::ExecOut, indent);
@@ -446,6 +451,7 @@ private:
         if (type == NodeType::CompareEq) return "(" + EmitExpr(source, PinName::A) + " == " + EmitExpr(source, PinName::B) + ")";
         if (type == NodeType::CompareNeq) return "(" + EmitExpr(source, PinName::A) + " != " + EmitExpr(source, PinName::B) + ")";
         if (type == NodeType::GetPosition) return "get_position(" + EmitExpr(source, PinName::Entity) + ")";
+        if (type == NodeType::GetColor) return "get_color(" + EmitExpr(source, PinName::Entity) + ")";
         if (type == NodeType::GetVariable) return ConfigName(source, PinName::Name);
         if (type == NodeType::Spawn) {
             const auto it = materialized_.find({ source.Id(), outPin.id });

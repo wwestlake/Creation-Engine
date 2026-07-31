@@ -24,8 +24,8 @@ juce::OpenGLShaderProgram* Material::Resolve(ShaderComposer& composer, const juc
     return cachedProgram_;
 }
 
-void Material::ApplyUniforms(juce::OpenGLShaderProgram& program) const {
-    program.setUniform("uAlbedo", albedo.x, albedo.y, albedo.z);
+void Material::ApplyUniforms(juce::OpenGLShaderProgram& program, juce::Vector3D<float> tint) const {
+    program.setUniform("uAlbedo", albedo.x * tint.x, albedo.y * tint.y, albedo.z * tint.z);
     program.setUniform("uMetallic", metallic);
     program.setUniform("uRoughness", roughness);
 

@@ -121,6 +121,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/HierarchyPanel.cpp
     Source/Views/TransformPanel.h
     Source/Views/TransformPanel.cpp
+    Source/Views/MaterialsPanel.h
+    Source/Views/MaterialsPanel.cpp
     Source/Views/ScriptPanel.h
     Source/Views/ScriptPanel.cpp
     Source/Views/CelCodeTokeniser.h

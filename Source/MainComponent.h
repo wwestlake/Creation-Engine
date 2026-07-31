@@ -9,6 +9,7 @@
 #include "Views/HierarchyPanel.h"
 #include "Views/ImportPanel.h"
 #include "Views/LightPanel.h"
+#include "Views/MaterialsPanel.h"
 #include "Views/NodeEditor/LogicPanel.h"
 #include "Views/PlaceholderPanel.h"
 #include "Views/ScriptPanel.h"
@@ -63,10 +64,11 @@ private:
     // ViewportComponent& (viewport_.Scripts(), the ScriptCatalog).
     ce::ScriptPanel scriptPanel_;
 
-    juce::Label roughnessLabel_ { {}, "Roughness" };
-    juce::Slider roughnessSlider_ { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
-    juce::Label metallicLabel_ { {}, "Metallic" };
-    juce::Slider metallicSlider_ { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+    // Selection-driven per-entity PBR editor (albedo/metallic/roughness),
+    // replacing the old viewport-global roughness/metallic slider pair.
+    // Not to be confused with materialsPanel_ below (the WorkspaceMode::
+    // Materials tab's future node-based material editor).
+    ce::MaterialsPanel pbrMaterialPanel_;
 
     ce::LightPanel lightPanel_;
 

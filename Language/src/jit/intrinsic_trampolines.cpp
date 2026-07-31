@@ -63,6 +63,15 @@ Transform& GetOrCreateTransform(ScriptContext* ctx, entt::entity e) {
     return ctx->world->Registry().get_or_emplace<Transform>(e);
 }
 
+// Mirrors GetOrCreateTransform: an entity has no meaningful color
+// override until a script actually calls set_color, so get_color on an
+// entity that's never been touched lazily emplaces the {1,1,1} identity
+// default (see ce::engine::Tint's own doc comment) rather than requiring
+// every entity to carry one up front.
+ce::engine::Tint& GetOrCreateTint(ScriptContext* ctx, entt::entity e) {
+    return ctx->world->Registry().get_or_emplace<ce::engine::Tint>(e);
+}
+
 } // namespace
 
 extern "C" {
@@ -157,6 +166,16 @@ void ce_set_scale(ScriptContext* ctx, uint64_t entity, const float* xyz) noexcep
     GetOrCreateTransform(ctx, ToEntity(entity)).scale = LoadVec3(xyz);
 }
 
+// --- Color -------------------------------------------------------------
+
+void ce_get_color(ScriptContext* ctx, uint64_t entity, float* outXyz) noexcept {
+    StoreVec3(outXyz, GetOrCreateTint(ctx, ToEntity(entity)).color);
+}
+
+void ce_set_color(ScriptContext* ctx, uint64_t entity, const float* xyz) noexcept {
+    GetOrCreateTint(ctx, ToEntity(entity)).color = LoadVec3(xyz);
+}
+
 // --- Debug -----------------------------------------------------------
 
 void ce_log(ScriptContext*, const char* msg, int64_t msgLen) noexcept {
@@ -219,6 +238,8 @@ std::vector<AbiSymbol> GetAbiTrampolines() {
         { "ce_set_rotation", reinterpret_cast<void*>(&ce_set_rotation) },
         { "ce_get_scale", reinterpret_cast<void*>(&ce_get_scale) },
         { "ce_set_scale", reinterpret_cast<void*>(&ce_set_scale) },
+        { "ce_get_color", reinterpret_cast<void*>(&ce_get_color) },
+        { "ce_set_color", reinterpret_cast<void*>(&ce_set_color) },
         { "ce_log", reinterpret_cast<void*>(&ce_log) },
         { "ce_log_int", reinterpret_cast<void*>(&ce_log_int) },
         { "ce_log_float", reinterpret_cast<void*>(&ce_log_float) },
