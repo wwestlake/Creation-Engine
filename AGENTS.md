@@ -71,7 +71,7 @@ Only one actor (the User) acts as the primary integrator.
 From now on, agents MUST NOT merge feature branches directly into `main` or `master`.
 
 - All feature work must be committed and pushed to a named agent branch (`gemini/...`, `claude/...`, `codex/...`).
-- To land changes into `main`/`master`, the agent must create a GitHub Pull Request (`gh pr create` or output the PR creation link) and assign it for user review.
+- To land changes into `main`/`master`, the agent MUST create the GitHub Pull Request (`gh pr create`) and output the exact PR link (`https://github.com/.../pull/<N>`) for user review.
 - The user will personally review, approve, and merge the Pull Request on GitHub.
 
 The integrator is the only one who should:
