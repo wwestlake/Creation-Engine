@@ -105,6 +105,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Render/Shaders/ShaderComposer.cpp
     Source/Render/Import/GltfLoader.h
     Source/Render/Import/GltfLoader.cpp
+    Source/Render/Import/ObjLoader.h
+    Source/Render/Import/ObjLoader.cpp
     Source/Render/Scene/Light.h
     Source/Views/LightPanel.h
     Source/Views/LightPanel.cpp
@@ -143,6 +145,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Scene/EngineSceneSerializer.cpp
     Source/Scene/AssetCatalog.h
     Source/Scene/AssetCatalog.cpp
+    Source/Scene/AssetPlacement.h
+    Source/Scene/AssetPlacement.cpp
     Source/Scene/ScriptCatalog.h
     Source/Scene/ScriptCatalog.cpp
     Source/Scene/AnimationSampler.h
@@ -154,6 +158,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Import/ImporterRegistry.cpp
     Source/Import/Importers/GltfAssetImporter.h
     Source/Import/Importers/GltfAssetImporter.cpp
+    Source/Import/Importers/ObjAssetImporter.h
+    Source/Import/Importers/ObjAssetImporter.cpp
     Source/Import/Importers/AudioAssetImporter.h
     Source/Import/Importers/AudioAssetImporter.cpp
     Source/Import/Importers/TextureAssetImporter.h

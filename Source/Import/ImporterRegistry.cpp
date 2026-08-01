@@ -2,6 +2,7 @@
 
 #include "Import/Importers/AudioAssetImporter.h"
 #include "Import/Importers/GltfAssetImporter.h"
+#include "Import/Importers/ObjAssetImporter.h"
 #include "Import/Importers/ScriptAssetImporter.h"
 #include "Import/Importers/TextureAssetImporter.h"
 
@@ -25,6 +26,7 @@ AssetImporter* ImporterRegistry::FindFor(const juce::File& file) const {
 
 void ImporterRegistry::RegisterBuiltins() {
     Register(std::make_unique<GltfAssetImporter>());
+    Register(std::make_unique<ObjAssetImporter>());
     Register(std::make_unique<AudioAssetImporter>());
     Register(std::make_unique<TextureAssetImporter>());
     Register(std::make_unique<ScriptAssetImporter>());
