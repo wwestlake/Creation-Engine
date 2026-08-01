@@ -64,11 +64,19 @@ Before committing anything, check `git rev-parse --abbrev-ref HEAD`. Branch name
 
 ## Integration Rule
 
-Only one actor should act as the integrator at a time.
+Only one actor (the User) acts as the primary integrator.
+
+### Pull Request Review Rule
+
+From now on, agents MUST NOT merge feature branches directly into `main` or `master`.
+
+- All feature work must be committed and pushed to a named agent branch (`gemini/...`, `claude/...`, `codex/...`).
+- To land changes into `main`/`master`, the agent must create a GitHub Pull Request (`gh pr create` or output the PR creation link) and assign it for user review.
+- The user will personally review, approve, and merge the Pull Request on GitHub.
 
 The integrator is the only one who should:
 
-- merge branches
+- merge branches into `main`/`master`
 - resolve conflicts
 - update umbrella-repo submodule pointers
 - declare work fully landed
