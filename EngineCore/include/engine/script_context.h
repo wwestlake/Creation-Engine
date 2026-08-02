@@ -1,9 +1,7 @@
 #pragma once
 
-#include <cstdint>
-#include <string>
-
 #include "engine/world.h"
+#include "lang/jit/script_context.h"
 
 namespace ce::engine {
 
@@ -13,9 +11,17 @@ namespace ce::engine {
 // multiple concurrent compilations) stay independent and reentrant.
 // Callers are expected to hold `world->RegistryMutex()` for the whole
 // duration any compiled CEL code runs against a given context --
-// intrinsics (Language/src/jit/intrinsic_trampolines.cpp) never lock it
+// intrinsics (Language/src/jit/world_intrinsics.cpp) never lock it
 // themselves, per the ABI's rule 6.
-struct ScriptContext {
+//
+// Derives from the shared, host-agnostic ce::lang::jit::ScriptContext
+// (loopBudget/faulted/faultMessage) rather than duplicating those
+// fields -- shared/CEL's Core trampolines are compiled once against the
+// base type and take `ce::lang::jit::ScriptContext*`, but every call
+// site in Engine passes a `ce::engine::ScriptContext*`, which converts
+// implicitly and safely since World/elapsedTime are appended after the
+// inherited base, never inserted before it.
+struct ScriptContext : ce::lang::jit::ScriptContext {
     World* world = nullptr;
 
     // Elapsed simulation time (seconds), advanced by the host driver
@@ -24,16 +30,6 @@ struct ScriptContext {
     // here rather than on World itself since World's own Tick counter is
     // an integer with no fixed real-world time unit attached to it.
     float elapsedTime = 0.0f;
-
-    // The runaway-script watchdog: decremented once per loop iteration
-    // executed by any compiled CEL code using this context (a check
-    // inserted at every while/for loop back-edge by IR-gen). When it
-    // reaches zero the running script faults with CEL9001 instead of
-    // hanging the caller. Not a security sandbox -- just a guard
-    // against an accidental infinite loop; see docs/SCRIPTING_ABI.md.
-    int64_t loopBudget = 10'000'000;
-    bool faulted = false;
-    std::string faultMessage;
 };
 
 } // namespace ce::engine

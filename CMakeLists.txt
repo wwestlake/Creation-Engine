@@ -34,6 +34,21 @@ if(CE_ENABLE_SCRIPTING)
         message(FATAL_ERROR "CE_ENABLE_SCRIPTING is ON but ${CE_VCPKG_INSTALLED_DIR} doesn't exist. Run `vcpkg install --triplet x64-windows` from the repo root first (see README.md's \"Scripting language build\" section), or configure with -DCE_ENABLE_SCRIPTING=OFF to skip the scripting module.")
     endif()
     list(APPEND CMAKE_PREFIX_PATH "${CE_VCPKG_INSTALLED_DIR}")
+
+    # Suite-level CEL: shared/NodeSystem and shared/CEL are the authoritative
+    # source for the frontend/JIT/nodegen (creation_suite_cel_frontend/jit/nodegen,
+    # aliased to ce_lang_frontend/ce_lang_jit/ce_lang_nodegen) -- added here,
+    # before Language/, since Language/CMakeLists.txt calls
+    # target_include_directories() on these targets directly, which requires
+    # them to already exist at that point (unlike target_link_libraries,
+    # which CMake resolves lazily against the full target graph).
+    if(NOT TARGET node_system)
+        add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/NodeSystem" CreationSuiteSharedNodeSystem)
+    endif()
+    if(NOT TARGET ce_lang_frontend)
+        add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/CEL" CreationSuiteSharedCel)
+    endif()
+
     add_subdirectory(Language)
 endif()
 
@@ -47,7 +62,13 @@ else()
 endif()
 
 # --- Shared, framework-agnostic libraries --------------------------------
-add_subdirectory(NodeSystem)
+# NodeSystem now comes from shared/NodeSystem (added above, before
+# Language/, when CE_ENABLE_SCRIPTING is on). If scripting is disabled,
+# fall back to Engine's own local copy so NodeSystem-dependent code
+# (HierarchyPanel, node editor UI) still has a target to link.
+if(NOT TARGET node_system)
+    add_subdirectory(NodeSystem)
+endif()
 add_subdirectory(EngineCore)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/AssetSystem" CreationSuiteSharedAssetSystem)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/Services" CreationSuiteSharedServices)
@@ -182,6 +203,7 @@ target_link_libraries(CreationEngineEditor PRIVATE
     creation_suite_ui
     creation_suite_ui_assets
     ce_lang_jit
+    ce_engine_lang_world
     ce_lang_nodegen
     juce::juce_gui_extra
     juce::juce_opengl
@@ -225,6 +247,7 @@ target_link_libraries(CreationEngineServer PRIVATE
     engine_core
     node_system
     ce_lang_jit
+    ce_engine_lang_world
     juce::juce_core
     juce::juce_events
     juce::juce_recommended_config_flags

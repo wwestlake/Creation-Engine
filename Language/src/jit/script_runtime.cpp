@@ -14,6 +14,7 @@
 #include "lang/ast.h"
 #include "lang/compiler.h"
 #include "lang/diagnostics.h"
+#include "lang/jit/world_intrinsics.h"
 #include "lang/sema.h"
 #include "module_builder.h"
 #include "optimizer.h"
@@ -140,7 +141,7 @@ public:
         }
         script->lljit = std::move(*jitOrErr);
 
-        if (auto err = RegisterAbiTrampolines(*script->lljit, allowedDomains_)) {
+        if (auto err = RegisterAbiTrampolines(*script->lljit, allowedDomains_, GetWorldAbiTrampolines())) {
             errorOut = llvm::toString(std::move(err));
             return nullptr;
         }

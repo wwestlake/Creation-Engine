@@ -18,6 +18,7 @@
 #include "lang/diagnostics.h"
 #include "lang/jit/runtime.h"
 #include "lang/jit/script_runtime.h"
+#include "lang/jit/world_runtime.h"
 #include "lang/nodegen/graph_to_source.h"
 #include "lang/nodegen/node_catalog.h"
 #include "lang/sema.h"
@@ -198,8 +199,8 @@ int RunWorld(const std::string& path, const std::string& entryPoint, int ticks, 
         return 1;
     }
 
-    ce::lang::jit::Runtime runtime;
-    const ce::lang::jit::ExecResult result = runtime.RunWorldProgram(*program, entryPoint, ticks, dt, optLevel);
+    const ce::lang::jit::ExecResult result =
+        ce::lang::jit::RunWorldProgram(*program, entryPoint, ticks, dt, optLevel);
 
     if (result.kind == ce::lang::jit::ResultKind::Error) {
         std::cerr << "celc: " << result.errorMessage << std::endl;

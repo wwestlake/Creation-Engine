@@ -1,103 +1,48 @@
-# GS1 built the minimal LLVM-JIT skeleton (ce_lang_jit + celc). GS2 adds
-# ce_lang_frontend: the LALR(1) grammar (Bison/Flex-generated), AST, and
-# diagnostics -- deliberately ZERO llvm/*.h includes, so it can be
-# reused later (e.g. by nodegen) without dragging LLVM along. ce_lang_jit
-# remains the ONLY target that ever includes an llvm/*.h header (see
-# include/lang/jit/runtime.h's own comment).
-include("${CMAKE_SOURCE_DIR}/cmake/CelGrammar.cmake")
-
-ce_add_cel_grammar(CE_CEL_GRAMMAR_SOURCES)
-
-add_library(ce_lang_frontend STATIC
-    include/lang/source_location.h
-    include/lang/diagnostics.h
-    include/lang/type.h
-    include/lang/ast.h
-    include/lang/ast_printer.h
-    include/lang/lexer.h
-    include/lang/compiler.h
-    include/lang/sema.h
-    include/lang/intrinsics.def
-    src/source_location.cpp
-    src/diagnostics.cpp
-    src/type.cpp
-    src/ast.cpp
-    src/ast_printer.cpp
-    src/compiler.cpp
-    src/sema.cpp
-    ${CE_CEL_GRAMMAR_SOURCES}
-)
-
-target_include_directories(ce_lang_frontend
-    PUBLIC include
-    PRIVATE "${CE_CEL_GRAMMAR_GEN_DIR}" "${CE_FLEXLEXER_INCLUDE_DIR}"
-)
-target_compile_features(ce_lang_frontend PUBLIC cxx_std_20)
-# Bison/Flex-generated code trips a handful of benign MSVC warnings
-# (unreferenced formal parameters, signed/unsigned mismatches in the
-# generated scanner/parser tables) that aren't worth suppressing
-# line-by-line in code this project doesn't hand-author -- scoped to
-# just the generated sources, not the whole target, so hand-written
-# Language/ code still gets full warnings.
-set_source_files_properties(${CE_CEL_GRAMMAR_SOURCES} PROPERTIES COMPILE_OPTIONS "/W0")
+# CEL's frontend/JIT/nodegen (ce_lang_frontend, ce_lang_jit, ce_lang_nodegen
+# aliases) now come from shared/CEL (add_subdirectory'd by the root
+# CMakeLists.txt before this file) -- Engine no longer owns a local copy
+# of the grammar, AST, sema, or JIT runtime. What's left here is
+# Engine-specific: the full (Core+World) intrinsics.def override, the
+# World-domain trampolines/runtime (ce_engine_lang_world), and celc.
+#
+# BEFORE PRIVATE: makes THIS directory's include/ win over shared/CEL's
+# own include/ when compiling shared/CEL's own sources (sema.cpp,
+# module_builder.cpp, intrinsic_trampolines.cpp) as part of Engine's
+# build -- so those files see Engine's full intrinsics.def (Core+World)
+# via the exact same quoted #include "lang/intrinsics.def" shared/CEL
+# itself uses, with zero code changes to shared/CEL required.
+target_include_directories(creation_suite_cel_frontend BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(creation_suite_cel_jit BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 find_package(LLVM CONFIG REQUIRED)
 message(STATUS "Language: found LLVM ${LLVM_PACKAGE_VERSION} at ${LLVM_DIR}")
 
 llvm_map_components_to_libnames(CE_LLVM_LIBS core orcjit native)
 
-add_library(ce_lang_jit STATIC
-    include/lang/jit/runtime.h
-    src/jit/runtime.cpp
+# Engine's own extension: World-domain trampolines (world_intrinsics),
+# the free-function RunWorldProgram (world_runtime), and the real
+# production script-runtime CelScriptRuntime (script_runtime) -- all of
+# it EngineCore/EnTT-coupled, which is exactly why none of it lives in
+# shared/CEL. Needs its own LLVM include/definitions since world_runtime.cpp
+# and script_runtime.cpp directly include llvm/*.h, and its own private
+# include path into shared/CEL's src/jit/ for module_builder.h/optimizer.h/
+# abi_registration.h -- private (non-public) headers of creation_suite_cel_jit
+# that this target's .cpp files still need direct access to.
+add_library(ce_engine_lang_world STATIC
+    include/lang/jit/world_intrinsics.h
+    src/jit/world_intrinsics.cpp
+    include/lang/jit/world_runtime.h
+    src/jit/world_runtime.cpp
     include/lang/jit/script_runtime.h
     src/jit/script_runtime.cpp
-    src/jit/optimizer.h
-    src/jit/optimizer.cpp
-    src/jit/module_builder.h
-    src/jit/module_builder.cpp
-    src/jit/intrinsic_trampolines.h
-    src/jit/intrinsic_trampolines.cpp
-    src/jit/abi_registration.h
-    src/jit/abi_registration.cpp
 )
-
-target_include_directories(ce_lang_jit
+target_include_directories(ce_engine_lang_world
     PUBLIC include
-    PRIVATE ${LLVM_INCLUDE_DIRS}
+    PRIVATE ${LLVM_INCLUDE_DIRS} "${CMAKE_CURRENT_SOURCE_DIR}/../../../shared/CEL/src/jit"
 )
-target_compile_definitions(ce_lang_jit PRIVATE ${LLVM_DEFINITIONS} NOMINMAX WIN32_LEAN_AND_MEAN)
-# PUBLIC: runtime.h (a public header of this target) includes lang/ast.h
-# since GS4's CompileAndRun takes a Program& directly -- ce_lang_frontend
-# stays LLVM-free either way (see its own comment), this just makes the
-# AST types visible to anything that includes runtime.h.
-#
-# engine_core (GS5): intrinsic_trampolines.cpp/runtime.cpp's
-# RunWorldProgram construct a real ce::engine::World/ScriptContext --
-# EngineCore has no JUCE/LLVM dependency of its own, so linking it here
-# doesn't threaten the LLVM/JUCE header-firewall this module exists to
-# preserve. engine_core's own add_subdirectory() call is later in the
-# root CMakeLists.txt than Language's, but CMake resolves
-# target_link_libraries against the full target graph at generate time,
-# not in add_subdirectory() call order -- the same precedent EngineCore
-# itself already relies on for node_system.
-target_link_libraries(ce_lang_jit PUBLIC ce_lang_frontend engine_core ${CE_LLVM_LIBS})
-target_compile_features(ce_lang_jit PUBLIC cxx_std_20)
-
-# GS9: graph -> CEL source text generation. Deliberately linked against
-# ce_lang_frontend + node_system only -- NOT ce_lang_jit/LLVM (see
-# include/lang/nodegen/graph_to_source.h's own comment) -- so this
-# target can never accidentally depend on the JIT to produce source
-# text; only celc's --run-graph combines nodegen's output with
-# ce_lang_jit to actually execute it.
-add_library(ce_lang_nodegen STATIC
-    include/lang/nodegen/node_catalog.h
-    src/nodegen/node_catalog.cpp
-    include/lang/nodegen/graph_to_source.h
-    src/nodegen/graph_to_source.cpp
-)
-target_include_directories(ce_lang_nodegen PUBLIC include)
-target_link_libraries(ce_lang_nodegen PUBLIC ce_lang_frontend node_system)
-target_compile_features(ce_lang_nodegen PUBLIC cxx_std_20)
+target_compile_definitions(ce_engine_lang_world PRIVATE ${LLVM_DEFINITIONS} NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(ce_engine_lang_world PUBLIC ce_lang_frontend ce_lang_jit engine_core ${CE_LLVM_LIBS})
+target_compile_features(ce_engine_lang_world PUBLIC cxx_std_20)
 
 # Plain add_executable, deliberately NOT juce_add_console_app: this
 # guarantees at least one full build path where LLVM and JUCE headers
@@ -117,8 +62,8 @@ add_executable(celc
 # strictly required for the include path to resolve, but it's the
 # correct explicit dependency for what celc's OWN sources use, not just
 # what happens to ride along. ce_lang_nodegen (GS9): --graph-to-source/
-# --run-graph.
-target_link_libraries(celc PRIVATE ce_lang_frontend ce_lang_jit ce_lang_nodegen node_system)
+# --run-graph. ce_engine_lang_world: --run-world/--run-simulation.
+target_link_libraries(celc PRIVATE ce_lang_frontend ce_lang_jit ce_engine_lang_world ce_lang_nodegen node_system)
 
 add_test(NAME gs1_llvm_selftest COMMAND celc --selftest-jit)
 add_test(NAME gs8_selftest_graph COMMAND celc --selftest-graph)
