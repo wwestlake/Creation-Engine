@@ -79,6 +79,31 @@ CEL_INTRINSIC2(dot4, dot4, Pure, Core, Float, Vec4, Vec4)
 CEL_INTRINSIC1(length4, length4, Pure, Core, Float, Vec4)
 CEL_INTRINSIC1(normalize4, normalize4, Pure, Core, Vec4, Vec4)
 
+// Mat2/Mat3/Mat4 -- pure IR, no real ABI call. Domain Core. Column-major
+// storage (matching juce::Matrix3D<float>/cgltf_node_transform_local's
+// convention already used elsewhere in Creation Engine -- see
+// AnimationSampler.cpp's ComposeTRS). Arithmetic (+, -, scalar *,
+// matrix * matrix, matrix * vector, ==, unary -) goes through the
+// ordinary operators, same as vecN -- only construction (identity,
+// from-columns) and transpose need named intrinsics here, since there's
+// no operator syntax for them. A flat-explicit-component-list
+// constructor (mat4(16 floats)) was deliberately NOT added -- it would
+// need CEL_INTRINSIC9/CEL_INTRINSIC16 macro arities added just for this,
+// for a call-site ergonomics net loss (16 positional floats is exactly
+// the kind of easy-to-transpose-by-accident interface this milestone
+// should avoid); from-columns is both sufficient and safer.
+CEL_INTRINSIC0(mat2_identity, mat2_identity, Pure, Core, Mat2)
+CEL_INTRINSIC2(mat2_from_columns, mat2_from_columns, Pure, Core, Mat2, Vec2, Vec2)
+CEL_INTRINSIC1(transpose2, transpose2, Pure, Core, Mat2, Mat2)
+
+CEL_INTRINSIC0(mat3_identity, mat3_identity, Pure, Core, Mat3)
+CEL_INTRINSIC3(mat3_from_columns, mat3_from_columns, Pure, Core, Mat3, Vec3, Vec3, Vec3)
+CEL_INTRINSIC1(transpose3, transpose3, Pure, Core, Mat3, Mat3)
+
+CEL_INTRINSIC0(mat4_identity, mat4_identity, Pure, Core, Mat4)
+CEL_INTRINSIC4(mat4_from_columns, mat4_from_columns, Pure, Core, Mat4, Vec4, Vec4, Vec4, Vec4)
+CEL_INTRINSIC1(transpose4, transpose4, Pure, Core, Mat4, Mat4)
+
 // World -- real ABI, read-only. Domain World: only a host whose
 // capability profile includes World (Creation Engine's own gameplay
 // use, today) may call these.
