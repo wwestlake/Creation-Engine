@@ -180,6 +180,17 @@ add_test(
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_world_test.cmake"
 )
 add_test(
+    NAME gs_world_color_roundtrip
+    COMMAND ${CMAKE_COMMAND}
+            -DCELC_EXE=$<TARGET_FILE:celc>
+            -DTEST_CEL=${CMAKE_CURRENT_SOURCE_DIR}/tests/world/color_roundtrip.cel
+            -DEXPECTED_FILE=${CMAKE_CURRENT_SOURCE_DIR}/tests/world/color_roundtrip.expected
+            -DENTRY=main
+            -DTICKS=1
+            -DDT=0.016666667
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_world_test.cmake"
+)
+add_test(
     NAME gs5_world_orbit_steps
     COMMAND ${CMAKE_COMMAND}
             -DCELC_EXE=$<TARGET_FILE:celc>

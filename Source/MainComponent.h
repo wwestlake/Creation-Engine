@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 #include <creation/ui/CreationSuiteHeaderBar.h>
+#include <creation/ui/SuiteShellController.h>
 
 #include "engine/simulation.h"
 #include "engine/world.h"
@@ -9,11 +10,16 @@
 #include "Views/HierarchyPanel.h"
 #include "Views/ImportPanel.h"
 #include "Views/LightPanel.h"
+#include "Views/MaterialsPanel.h"
 #include "Views/NodeEditor/LogicPanel.h"
 #include "Views/PlaceholderPanel.h"
 #include "Views/ScriptPanel.h"
 #include "Views/TransformPanel.h"
 #include "Views/ViewModeBar.h"
+
+#include <creation/assets/ProjectSession.h>
+#include <creation/assets/ProjectWorkspaceService.h>
+#include <creation/suite/SuiteSettings.h>
 
 // The editor and the runtime are the same executable in different modes
 // (capabilities spec, section 1). The top-level shell (TransportBar +
@@ -38,10 +44,25 @@ private:
     void SetActiveMode(ce::WorkspaceMode mode);
     void SetPlaying(bool playing);
 
+    void createNewProject();
+    void openProject(const juce::File& containerFile);
+    void saveSessionToDisk(bool userInitiated = false);
+    void loadSessionFromDisk();
+    bool ensureProjectSessionActive(juce::String& errorMessage);
+    juce::File getAppSettingsFile() const;
+    void saveAppSettings();
+    void loadAppSettings();
+
+    creation::suite::SuiteSettings suiteSettings_;
+    creation::suite::SuiteSettingsStore suiteSettingsStore_;
+    creation::assets::ProjectSession projectSession_;
+    bool projectDirty_ = false;
+
     ce::engine::World world_;
     bool isPlaying_ = false;
 
     CreationSuiteHeaderBar headerBar_;
+    creation::ui::SuiteShellController suiteShellController_;
     ce::ViewModeBar viewModeBar_;
     ce::WorkspaceMode activeMode_ = ce::WorkspaceMode::Scene;
 
@@ -63,10 +84,11 @@ private:
     // ViewportComponent& (viewport_.Scripts(), the ScriptCatalog).
     ce::ScriptPanel scriptPanel_;
 
-    juce::Label roughnessLabel_ { {}, "Roughness" };
-    juce::Slider roughnessSlider_ { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
-    juce::Label metallicLabel_ { {}, "Metallic" };
-    juce::Slider metallicSlider_ { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+    // Selection-driven per-entity PBR editor (albedo/metallic/roughness),
+    // replacing the old viewport-global roughness/metallic slider pair.
+    // Not to be confused with materialsPanel_ below (the WorkspaceMode::
+    // Materials tab's future node-based material editor).
+    ce::MaterialsPanel pbrMaterialPanel_;
 
     ce::LightPanel lightPanel_;
 

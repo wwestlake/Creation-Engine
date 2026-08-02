@@ -64,11 +64,6 @@ public:
     void resized() override {}
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override;
 
-    void SetRoughness(float value);
-    void SetMetallic(float value);
-    float Roughness() const;
-    float Metallic() const;
-
     DirectionalLight GetSunLight() const;
     void SetSunLight(const DirectionalLight& light);
 
