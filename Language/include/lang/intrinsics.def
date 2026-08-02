@@ -6,9 +6,9 @@
 // (~/.claude/plans/partitioned-singing-galaxy.md).
 //
 // Deliberately NOT include-guarded: designed to be included multiple
-// times, once per consumer, each defining CEL_INTRINSIC0..3 (arity 0
-// through 3 -- nothing in v1 needs more) before inclusion and #undef-ing
-// them after.
+// times, once per consumer, each defining CEL_INTRINSIC0..4 (arity 0
+// through 4 -- vec4's constructor is the one arity-4 intrinsic, added
+// for CEL-M1) before inclusion and #undef-ing them after.
 //
 //   CEL_INTRINSICn(name, cSymbol, purity, domain, returnType, param1Type, ..., paramNType)
 //
@@ -54,12 +54,30 @@ CEL_INTRINSIC2(atan2, ce_atan2, Pure, Core, Float, Float, Float)
 CEL_INTRINSIC3(clamp, clamp, Pure, Core, Float, Float, Float, Float)
 CEL_INTRINSIC3(lerp, lerp, Pure, Core, Float, Float, Float, Float)
 
-// Vec3 -- pure IR, no real ABI call. Domain Core.
+// Vec2/Vec3/Vec4 -- pure IR, no real ABI call. Domain Core. dot/length/
+// normalize are size-suffixed (dot2/length2/normalize2, dot4/length4/
+// normalize4) rather than overloaded, since CEL has no function
+// overloading yet (sema.cpp's function table is a flat name->signature
+// map) -- see module_builder.cpp's CodegenBuiltinIntrinsic for why.
+// cross is Vec3-only; there is no 2D or 4D cross product in the
+// mathematical sense this operation means (2D "cross" degenerates to a
+// scalar, 4D has no single well-defined analogue), so it isn't
+// generalized here.
+CEL_INTRINSIC2(vec2, vec2, Pure, Core, Vec2, Float, Float)
+CEL_INTRINSIC2(dot2, dot2, Pure, Core, Float, Vec2, Vec2)
+CEL_INTRINSIC1(length2, length2, Pure, Core, Float, Vec2)
+CEL_INTRINSIC1(normalize2, normalize2, Pure, Core, Vec2, Vec2)
+
 CEL_INTRINSIC3(vec3, vec3, Pure, Core, Vec3, Float, Float, Float)
 CEL_INTRINSIC2(dot, dot, Pure, Core, Float, Vec3, Vec3)
 CEL_INTRINSIC2(cross, cross, Pure, Core, Vec3, Vec3, Vec3)
 CEL_INTRINSIC1(length, length, Pure, Core, Float, Vec3)
 CEL_INTRINSIC1(normalize, normalize, Pure, Core, Vec3, Vec3)
+
+CEL_INTRINSIC4(vec4, vec4, Pure, Core, Vec4, Float, Float, Float, Float)
+CEL_INTRINSIC2(dot4, dot4, Pure, Core, Float, Vec4, Vec4)
+CEL_INTRINSIC1(length4, length4, Pure, Core, Float, Vec4)
+CEL_INTRINSIC1(normalize4, normalize4, Pure, Core, Vec4, Vec4)
 
 // World -- real ABI, read-only. Domain World: only a host whose
 // capability profile includes World (Creation Engine's own gameplay
