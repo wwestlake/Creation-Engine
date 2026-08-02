@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "Scene/AssetPlacement.h"
 #include "Scene/Components.h"
 
 namespace ce {
@@ -263,29 +264,14 @@ void HierarchyPanel::AddEntity(const juce::String& assetName) {
             parent = selectedEntity_;
         }
 
-        newEntity = world_.CreateEntity();
-        registry.emplace<scene::Name>(newEntity, scene::Name{ assetName + " " + juce::String(nextEntityNumber_++) });
-        registry.emplace<scene::Transform>(newEntity, scene::Transform{ scene::ToVec3(spawnPosition) });
-        registry.emplace<scene::MeshRenderer>(newEntity, scene::MeshRenderer{ asset.mesh, asset.material });
-        registry.emplace<scene::SceneFlags>(newEntity, scene::SceneFlags{});
-        registry.emplace<scene::Parent>(newEntity, scene::Parent{ parent });
-        if (asset.skeleton != nullptr) {
-            // Copied, not shared -- this entity owns an independent
-            // joint hierarchy from here on, which is what AI5/AI6's
-            // per-instance animation playback and pose editing actually
-            // want, unlike Mesh/Material where sharing GPU resources
-            // across instances is the whole point.
-            registry.emplace<scene::Skeleton>(newEntity, *asset.skeleton);
-        }
-        if (asset.animationClips != nullptr && !asset.animationClips->empty()) {
-            // clips itself is shared (asset-level clip data), activeClip
-            // defaults to the first clip so a freshly-placed animated
-            // asset has something to preview immediately -- playing
-            // starts false, matching TransportBar's own "starts paused"
-            // convention.
-            registry.emplace<scene::Animator>(newEntity,
-                                               scene::Animator{ asset.animationClips, 0, 0.0f, false, true });
-        }
+        // See Scene/AssetPlacement.h for the shared component list this
+        // now builds (also used by importers that auto-place a dropped
+        // model) -- the animator's "starts paused, first clip active"
+        // choice lives there so a freshly-placed animated asset has
+        // something to preview immediately regardless of which caller
+        // placed it.
+        newEntity = scene::PlaceAssetEntity(world_, asset, assetName + " " + juce::String(nextEntityNumber_++),
+                                             scene::ToVec3(spawnPosition), parent);
     }
 
     // Select before Refresh(), not after: Refresh()'s rebuild re-selects
