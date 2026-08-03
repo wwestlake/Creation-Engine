@@ -7,7 +7,9 @@
 
 #include "engine/core_components.h"
 #include "engine/script_component.h"
+#if CE_ENABLE_SCRIPTING
 #include "lang/jit/script_runtime.h"
+#endif
 #include "Render/Scene/Animation.h"
 #include "Scene/AnimationSampler.h"
 #include "Scene/Components.h"

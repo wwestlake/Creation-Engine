@@ -1,6 +1,8 @@
 #include "MainComponent.h"
 
+#if CE_ENABLE_SCRIPTING
 #include "lang/jit/script_runtime.h"
+#endif
 #include <creation/ui/CreationSuiteLogos.h>
 #include "Scene/EngineSceneSerializer.h"
 
@@ -16,7 +18,9 @@ MainComponent::MainComponent()
     juce::String suiteErr;
     suiteSettings_ = suiteSettingsStore_.load(suiteErr);
 
+#if CE_ENABLE_SCRIPTING
     world_.SetScriptRuntime(ce::lang::jit::CreateScriptRuntime());
+#endif
 
     headerBar_.setAppTitle("Creation Engine");
     headerBar_.setLogoImage(creation::ui::getSuiteLogoImage(creation::ui::SuiteLogoId::engine));

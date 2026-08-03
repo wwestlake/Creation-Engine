@@ -81,6 +81,17 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/UI" CreationSuiteShar
 # server-side asset loader could link this without pulling in anything
 # beyond what CreationEngineServer already links.
 
+# ce_lang_jit/ce_engine_lang_world/ce_lang_nodegen only exist when
+# CE_ENABLE_SCRIPTING is on (they come from shared/CEL + Language/, both
+# skipped above otherwise) -- linking them unconditionally fails at link
+# time (not configure time, since target_link_libraries doesn't validate
+# target existence until generate) with a plain "cannot open input file"
+# once scripting is disabled.
+set(CE_SCRIPTING_LINK_LIBS "")
+if(CE_ENABLE_SCRIPTING)
+    set(CE_SCRIPTING_LINK_LIBS ce_lang_jit ce_engine_lang_world ce_lang_nodegen)
+endif()
+
 # --- Client / editor executable ------------------------------------------
 # Per spec section 1, the editor and the runtime are the same binary in
 # different modes — not a separate desktop app talking to the game over a
@@ -214,6 +225,7 @@ target_compile_definitions(CreationEngineEditor PRIVATE
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:CreationEngineEditor,JUCE_VERSION>"
     CE_SHADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Source/Render/Shaders"
     CE_ASSET_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
+    CE_ENABLE_SCRIPTING=$<BOOL:${CE_ENABLE_SCRIPTING}>
 )
 
 target_link_libraries(CreationEngineEditor PRIVATE
@@ -222,9 +234,7 @@ target_link_libraries(CreationEngineEditor PRIVATE
     creation_suite_asset_system
     creation_suite_ui
     creation_suite_ui_assets
-    ce_lang_jit
-    ce_engine_lang_world
-    ce_lang_nodegen
+    ${CE_SCRIPTING_LINK_LIBS}
     juce::juce_gui_extra
     juce::juce_opengl
     juce::juce_audio_basics
