@@ -320,3 +320,23 @@ if(TARGET celc AND TARGET CreationEngineServer)
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/Language/tests/run_simulation_parity_test.cmake"
     )
 endif()
+
+install(TARGETS CreationEngineEditor
+    RUNTIME DESTINATION .
+    RESOURCE DESTINATION .
+)
+install(FILES README.md LICENSE DESTINATION .)
+
+set(CPACK_PACKAGE_NAME "Creation Engine")
+set(CPACK_PACKAGE_VENDOR "LagDaemon Software")
+set(CPACK_PACKAGE_CONTACT "LagDaemon Software")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Creation Engine")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_FILE_NAME "creation-engine-${CPACK_PACKAGE_VERSION}-win64")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "Creation Engine")
+set(CPACK_GENERATOR "ZIP;WIX")
+set(CPACK_WIX_PROGRAM_MENU_FOLDER "Creation Engine")
+set(CPACK_PACKAGE_EXECUTABLES "Creation Engine" "Creation Engine")
+set(CPACK_CREATE_DESKTOP_LINKS "Creation Engine")
+
+include(CPack)

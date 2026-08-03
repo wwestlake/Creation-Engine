@@ -110,19 +110,23 @@ jobs:
         run: |
           cmake --build build --config Release --target CreationEngineEditor
 
-      - name: Stage release zip
+      - name: Install MSI packaging tools
         shell: pwsh
         run: |
-          # No install()/CPack packaging is wired up for this app yet -- this
-          # zips the raw JUCE build output directly rather than a proper
-          # installer layout. Good enough to prove the release pipeline
-          # end-to-end; revisit once the app is further along.
-          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          choco install wixtoolset --no-progress -y
 
-          $artefactsDir = "build\CreationEngineEditor_artefacts\Release"
-          $exe = Get-ChildItem $artefactsDir -Recurse -File | Where-Object { $_.Extension -eq '.exe' } | Select-Object -First 1
+      - name: Stage release assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $installRoot = Join-Path $PWD "artifacts\stage\creation-engine"
+          New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
+
+          cmake --install build --config Release --prefix $installRoot
+
+          $exe = Get-ChildItem $installRoot -Recurse -File | Where-Object { $_.Extension -eq '.exe' } | Select-Object -First 1
           if (-not $exe) {
-            throw "Could not find the built Creation Engine executable in $artefactsDir."
+            throw "Could not find the packaged Creation Engine executable."
           }
 
           $zipName = Join-Path $PWD ("artifacts\{0}.zip" -f "${{ steps.classify.outputs.tag }}")
@@ -130,7 +134,43 @@ jobs:
             Remove-Item $zipName -Force
           }
 
-          Compress-Archive -Path (Join-Path $artefactsDir "*") -DestinationPath $zipName -Force
+          Compress-Archive -Path (Join-Path $installRoot "*") -DestinationPath $zipName -Force
+
+      - name: Build MSI installer
+        shell: pwsh
+        run: |
+          $wixBins = @(
+            "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin",
+            "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin"
+          )
+
+          foreach ($wixBin in $wixBins) {
+            if (Test-Path $wixBin) {
+              $env:PATH = "$wixBin;$env:PATH"
+            }
+          }
+
+          $cpack = "${env:ProgramFiles}\CMake\bin\cpack.exe"
+          if (-not (Test-Path $cpack)) {
+            $cpack = "cpack"
+          }
+
+          & $cpack -C Release -G WIX --config build\CPackConfig.cmake
+          if ($LASTEXITCODE -ne 0) {
+            throw "MSI packaging failed."
+          }
+
+          $msi = Get-ChildItem $PWD -Recurse -File -Filter *.msi | Select-Object -First 1
+          if (-not $msi) {
+            throw "Could not find the packaged Creation Engine MSI."
+          }
+
+          $msiName = Join-Path $PWD ("artifacts\{0}.msi" -f "${{ steps.classify.outputs.tag }}")
+          if (Test-Path $msiName) {
+            Remove-Item $msiName -Force
+          }
+
+          Move-Item -Path $msi.FullName -Destination $msiName -Force
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
