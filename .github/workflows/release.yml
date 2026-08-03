@@ -1,0 +1,135 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "creation-engine-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # third_party/entt is a submodule -- without this it's an empty
+          # directory in CI and the CMakeLists.txt EXISTS check for it fails,
+          # falling through to its FATAL_ERROR branch.
+          submodules: true
+
+      - name: Checkout shared Creation Suite code
+        # Engine's CMakeLists.txt resolves shared/ paths as ../../shared
+        # relative to itself, matching its layout as an apps/CreationEngine
+        # submodule inside the Creation-Suite umbrella repo. A standalone
+        # checkout of this repo alone has no such sibling, so shared/ is
+        # fetched separately here, alongside the app repo's own checkout.
+        uses: actions/checkout@v4
+        with:
+          repository: wwestlake/Creation-Suite
+          path: creation-suite-shared
+
+      - name: Fetch JUCE
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch 7.0.12 https://github.com/juce-framework/JUCE.git "$env:RUNNER_TEMP\JUCE"
+
+      - name: Classify release
+        id: classify
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+
+          if ($tag -notmatch '^creation-engine-v(?<version>\d+\.\d+\.\d+)(?:-(?<channel>[0-9A-Za-z.-]+))?$') {
+            throw "Tag '$tag' must start with creation-engine-v."
+          }
+
+          $versionText = $Matches.version
+          $explicitChannel = $Matches.channel
+          $channel = "stable"
+          $prerelease = "false"
+
+          if ($explicitChannel) {
+            $channel = $explicitChannel
+            $prerelease = "true"
+          }
+          else {
+            $parts = $versionText.Split('.')
+            $major = [int]$parts[0]
+            $minor = [int]$parts[1]
+
+            if ($major -eq 0 -and $minor -lt 5) {
+              $channel = "alpha"
+              $prerelease = "true"
+            }
+            elseif ($major -eq 0 -and $minor -ge 5) {
+              $channel = "beta"
+              $prerelease = "true"
+            }
+          }
+
+          $suffix = ""
+          if ($channel -ne "stable") {
+            $suffix = " ($channel)"
+          }
+
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "tag=$tag"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$versionText"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "channel=$channel"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "prerelease=$prerelease"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "suffix=$suffix"
+
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          # CE_ENABLE_SCRIPTING=OFF: the CEL scripting module needs a
+          # vcpkg-managed LLVM install (see vcpkg.json). Standing instruction
+          # is to never trigger an LLVM build without asking first, and CI
+          # has no pre-existing vcpkg_installed/ to point at -- so scripting
+          # is disabled for this build rather than running `vcpkg install`
+          # (which would compile LLVM from source). The app builds and runs
+          # fine without it; this only drops the CEL language host layer.
+          cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DJUCE_DIR="$env:RUNNER_TEMP\JUCE" -DCE_ENABLE_SCRIPTING=OFF "-DCREATION_ENGINE_VERSION=${{ steps.classify.outputs.version }}" "-DCREATION_SUITE_SHARED_DIR=$env:GITHUB_WORKSPACE\creation-suite-shared\shared"
+
+      - name: Build app
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --target CreationEngineEditor
+
+      - name: Stage release zip
+        shell: pwsh
+        run: |
+          # No install()/CPack packaging is wired up for this app yet -- this
+          # zips the raw JUCE build output directly rather than a proper
+          # installer layout. Good enough to prove the release pipeline
+          # end-to-end; revisit once the app is further along.
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+
+          $artefactsDir = "build\CreationEngineEditor_artefacts\Release"
+          $exe = Get-ChildItem $artefactsDir -Recurse -File | Where-Object { $_.Extension -eq '.exe' } | Select-Object -First 1
+          if (-not $exe) {
+            throw "Could not find the built Creation Engine executable in $artefactsDir."
+          }
+
+          $zipName = Join-Path $PWD ("artifacts\{0}.zip" -f "${{ steps.classify.outputs.tag }}")
+          if (Test-Path $zipName) {
+            Remove-Item $zipName -Force
+          }
+
+          Compress-Archive -Path (Join-Path $artefactsDir "*") -DestinationPath $zipName -Force
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-creation-engine
+          path: artifacts/*
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Creation Engine ${{ steps.classify.outputs.version }}${{ steps.classify.outputs.suffix }}
+          prerelease: ${{ steps.classify.outputs.prerelease }}
+          files: artifacts/*
