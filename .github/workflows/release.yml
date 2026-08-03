@@ -11,26 +11,36 @@ permissions:
 jobs:
   build-release:
     runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps/CreationEngine
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          # third_party/entt is a submodule -- without this it's an empty
-          # directory in CI and the CMakeLists.txt EXISTS check for it fails,
-          # falling through to its FATAL_ERROR branch.
-          submodules: true
-
-      - name: Checkout shared Creation Suite code
-        # Engine's CMakeLists.txt resolves shared/ paths as ../../shared
-        # relative to itself, matching its layout as an apps/CreationEngine
-        # submodule inside the Creation-Suite umbrella repo. A standalone
-        # checkout of this repo alone has no such sibling, so shared/ is
-        # fetched separately here, alongside the app repo's own checkout.
+      # Engine's own CMake resolves every shared/ path (VFS, AssetSystem,
+      # Services, UI) as ../../shared relative to itself -- its real layout
+      # as an apps/CreationEngine submodule inside the Creation-Suite
+      # umbrella repo. Rather than overriding each of those relative paths
+      # individually (fragile -- Engine's add_subdirectory calls are
+      # hardcoded relative paths, not CACHE-variable-driven like the other
+      # apps, so a variable override would have been a silent no-op here),
+      # CI just reproduces the real nesting: check out the umbrella first
+      # for its shared/ tree, then check out this app's own tagged commit
+      # into apps/CreationEngine, overwriting the umbrella's empty
+      # submodule placeholder. Every relative path then resolves exactly
+      # as it does in a real Creation-Suite checkout.
+      - name: Checkout Creation Suite umbrella (for shared/)
         uses: actions/checkout@v4
         with:
           repository: wwestlake/Creation-Suite
-          path: creation-suite-shared
+
+      - name: Checkout this app at the release tag
+        uses: actions/checkout@v4
+        with:
+          path: apps/CreationEngine
+          # third_party/entt is a submodule of THIS repo -- without this
+          # it's an empty directory in CI and the CMakeLists.txt EXISTS
+          # check for it fails, falling through to its FATAL_ERROR branch.
+          submodules: true
 
       - name: Fetch JUCE
         shell: pwsh
@@ -92,7 +102,7 @@ jobs:
           # is disabled for this build rather than running `vcpkg install`
           # (which would compile LLVM from source). The app builds and runs
           # fine without it; this only drops the CEL language host layer.
-          cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DJUCE_DIR="$env:RUNNER_TEMP\JUCE" -DCE_ENABLE_SCRIPTING=OFF "-DCREATION_ENGINE_VERSION=${{ steps.classify.outputs.version }}" "-DCREATION_SUITE_SHARED_DIR=$env:GITHUB_WORKSPACE\creation-suite-shared\shared"
+          cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DJUCE_DIR="$env:RUNNER_TEMP\JUCE" -DCE_ENABLE_SCRIPTING=OFF "-DCREATION_ENGINE_VERSION=${{ steps.classify.outputs.version }}"
 
       - name: Build app
         shell: pwsh
@@ -125,11 +135,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-creation-engine
-          path: artifacts/*
+          path: apps/CreationEngine/artifacts/*
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           name: Creation Engine ${{ steps.classify.outputs.version }}${{ steps.classify.outputs.suffix }}
           prerelease: ${{ steps.classify.outputs.prerelease }}
-          files: artifacts/*
+          files: apps/CreationEngine/artifacts/*
