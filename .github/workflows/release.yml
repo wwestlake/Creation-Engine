@@ -75,6 +75,28 @@ jobs:
             throw "vcpkg_installed\x64-windows missing after extraction."
           }
 
+      - name: Satisfy LLVM's baked-in DIA SDK path
+        shell: pwsh
+        run: |
+          # The vcpkg-built LLVM's own exported CMake config (LLVMDebugInfoPDB)
+          # hardcodes an absolute path to diaguids.lib from whatever machine
+          # built it -- here, a non-standard D:-drive VS install. The runner
+          # has its own real VS install (almost certainly on C:) with the
+          # same file; this just copies it to the exact path LLVM's config
+          # expects, rather than rebuilding or reinstalling anything.
+          $expected = "D:\Program Files\Microsoft Visual Studio\2022\Enterprise\DIA SDK\lib\amd64\diaguids.lib"
+          if (Test-Path $expected) {
+            Write-Host "Already present at expected path."
+          } else {
+            $found = Get-ChildItem -Path "C:\Program Files*\Microsoft Visual Studio" -Recurse -Filter "diaguids.lib" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $found) {
+              throw "Could not find diaguids.lib anywhere on this runner."
+            }
+            New-Item -ItemType Directory -Force -Path (Split-Path $expected) | Out-Null
+            Copy-Item -Path $found.FullName -Destination $expected -Force
+            Write-Host "Copied $($found.FullName) -> $expected"
+          }
+
       - name: Install WinFlexBison (prebuilt binary, no compile)
         shell: pwsh
         run: |
