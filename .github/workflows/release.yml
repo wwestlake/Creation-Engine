@@ -48,6 +48,26 @@ jobs:
         run: |
           git clone --depth 1 --branch 8.0.7 https://github.com/juce-framework/JUCE.git "$env:RUNNER_TEMP\JUCE"
 
+      - name: Install LLVM via vcpkg (S3-backed binary cache)
+        shell: pwsh
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-2
+          # x-aws binary caching keyed on the exact port+triplet+compiler
+          # hash -- shared across every app's pipeline and local dev
+          # machines that point at this same bucket, not just this repo.
+          # First build populates the cache (~45-90 min for LLVM from
+          # source); every later build, in any of the 6 apps, downloads
+          # it in a couple minutes instead of rebuilding.
+          VCPKG_BINARY_SOURCES: "clear;x-aws,s3://creation-suite-build-cache/vcpkg-cache/,readwrite"
+        run: |
+          $vcpkgExe = if ($env:VCPKG_ROOT) { Join-Path $env:VCPKG_ROOT "vcpkg.exe" } else { "C:\vcpkg\vcpkg.exe" }
+          & $vcpkgExe install --triplet x64-windows
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg install failed."
+          }
+
       - name: Classify release
         id: classify
         shell: pwsh
@@ -96,14 +116,11 @@ jobs:
       - name: Configure CMake
         shell: pwsh
         run: |
-          # CE_ENABLE_SCRIPTING=OFF: the CEL scripting module needs a
-          # vcpkg-managed LLVM install (see vcpkg.json). Standing instruction
-          # is to never trigger an LLVM build without asking first, and CI
-          # has no pre-existing vcpkg_installed/ to point at -- so scripting
-          # is disabled for this build rather than running `vcpkg install`
-          # (which would compile LLVM from source). The app builds and runs
-          # fine without it; this only drops the CEL language host layer.
-          cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DJUCE_DIR="$env:RUNNER_TEMP\JUCE" -DCE_ENABLE_SCRIPTING=OFF "-DCREATION_ENGINE_VERSION=${{ steps.classify.outputs.version }}"
+          # CE_ENABLE_SCRIPTING defaults to ON. The vcpkg step above just
+          # installed LLVM (from the S3 cache after the first run), so
+          # scripting stays on for real -- CEL is meant to be in every
+          # app, not disabled to dodge an LLVM build.
+          cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DJUCE_DIR="$env:RUNNER_TEMP\JUCE" "-DCREATION_ENGINE_VERSION=${{ steps.classify.outputs.version }}"
 
       - name: Build app
         shell: pwsh
