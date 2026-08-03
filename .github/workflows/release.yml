@@ -46,7 +46,7 @@ jobs:
       - name: Fetch JUCE
         shell: pwsh
         run: |
-          git clone --depth 1 --branch 7.0.12 https://github.com/juce-framework/JUCE.git "$env:RUNNER_TEMP\JUCE"
+          git clone --depth 1 --branch 8.0.7 https://github.com/juce-framework/JUCE.git "$env:RUNNER_TEMP\JUCE"
 
       - name: Classify release
         id: classify
