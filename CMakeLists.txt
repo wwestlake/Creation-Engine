@@ -293,13 +293,20 @@ target_link_libraries(CreationEngineServer PRIVATE
 # is byte-for-byte identical. Lives here, not in Language/CMakeLists.txt,
 # since it's the one test that needs both executables and both are only
 # fully defined once the whole top-level configure has run.
-add_test(
-    NAME gs6_simulation_server_parity
-    COMMAND ${CMAKE_COMMAND}
-            -DCELC_EXE=$<TARGET_FILE:celc>
-            -DSERVER_EXE=$<TARGET_FILE:CreationEngineServer>
-            -DTEST_CEL=${CMAKE_CURRENT_SOURCE_DIR}/Language/tests/simulation/orbit.cel
-            -DTICKS=300
-            -DDT=0.016666667
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/Language/tests/run_simulation_parity_test.cmake"
-)
+# celc only exists when CE_ENABLE_SCRIPTING is on (see the vcpkg-LLVM
+# gate near the top of this file) -- guard this test's registration so
+# a scripting-disabled configure (e.g. release CI, which never triggers
+# an LLVM build) doesn't fail at generate time referencing a target
+# that was never defined.
+if(TARGET celc AND TARGET CreationEngineServer)
+    add_test(
+        NAME gs6_simulation_server_parity
+        COMMAND ${CMAKE_COMMAND}
+                -DCELC_EXE=$<TARGET_FILE:celc>
+                -DSERVER_EXE=$<TARGET_FILE:CreationEngineServer>
+                -DTEST_CEL=${CMAKE_CURRENT_SOURCE_DIR}/Language/tests/simulation/orbit.cel
+                -DTICKS=300
+                -DDT=0.016666667
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/Language/tests/run_simulation_parity_test.cmake"
+    )
+endif()
