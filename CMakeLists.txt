@@ -70,6 +70,7 @@ if(NOT TARGET node_system)
     add_subdirectory(NodeSystem)
 endif()
 add_subdirectory(EngineCore)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/VFS" CreationSuiteSharedVFS)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/AssetSystem" CreationSuiteSharedAssetSystem)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/Services" CreationSuiteSharedServices)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/UI" CreationSuiteSharedUI)
@@ -90,6 +91,16 @@ juce_add_gui_app(CreationEngineEditor
     BUNDLE_ID "com.lagdaemon.creationengine"
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/icon.png"
     ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/icon.png"
+)
+
+# Mirrors the built executable into the workspace-level shared bin
+# directory (D:\CreationSuite-Workspaces\claude-<config>-bin) so it's
+# reachable at a stable path without needing OS symlink privileges.
+# Every suite agent does this for its own repo -- see AGENTS.md.
+add_custom_command(TARGET CreationEngineEditor POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/claude-$<LOWER_CASE:$<CONFIG>>-bin"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineEditor>" "D:/CreationSuite-Workspaces/claude-$<LOWER_CASE:$<CONFIG>>-bin/"
+    COMMENT "Copying CreationEngineEditor to the shared claude bin directory"
 )
 
 juce_generate_juce_header(CreationEngineEditor)
@@ -237,6 +248,16 @@ juce_add_console_app(CreationEngineServer
     PRODUCT_NAME "Creation Engine Server"
     COMPANY_NAME "LagDaemon Software"
     BUNDLE_ID "com.lagdaemon.creationengine.server"
+)
+
+# Mirrors the built executable into the workspace-level shared bin
+# directory (D:\CreationSuite-Workspaces\claude-<config>-bin) so it's
+# reachable at a stable path without needing OS symlink privileges.
+# Every suite agent does this for its own repo -- see AGENTS.md.
+add_custom_command(TARGET CreationEngineServer POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/claude-$<LOWER_CASE:$<CONFIG>>-bin"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineServer>" "D:/CreationSuite-Workspaces/claude-$<LOWER_CASE:$<CONFIG>>-bin/"
+    COMMENT "Copying CreationEngineServer to the shared claude bin directory"
 )
 
 juce_generate_juce_header(CreationEngineServer)
