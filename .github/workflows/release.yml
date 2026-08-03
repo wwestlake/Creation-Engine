@@ -75,6 +75,25 @@ jobs:
             throw "vcpkg_installed\x64-windows missing after extraction."
           }
 
+      - name: Install WinFlexBison (prebuilt binary, no compile)
+        shell: pwsh
+        run: |
+          # shared/CEL's grammar generation needs win_bison.exe/win_flex.exe.
+          # WinFlexBison ships prebuilt Windows binaries on its GitHub
+          # releases -- this downloads and extracts one, it does not build
+          # anything from source.
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/lexxmark/winflexbison/releases/latest"
+          $asset = $release.assets | Where-Object { $_.name -like "*win_flex_bison*.zip" } | Select-Object -First 1
+          if (-not $asset) {
+            throw "Could not find a WinFlexBison release zip asset."
+          }
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$env:RUNNER_TEMP\winflexbison.zip"
+          New-Item -ItemType Directory -Force -Path "C:\tools\winflexbison" | Out-Null
+          Expand-Archive -Path "$env:RUNNER_TEMP\winflexbison.zip" -DestinationPath "C:\tools\winflexbison" -Force
+          if (-not (Test-Path "C:\tools\winflexbison\win_bison.exe")) {
+            throw "win_bison.exe missing after WinFlexBison extraction."
+          }
+
       - name: Classify release
         id: classify
         shell: pwsh
