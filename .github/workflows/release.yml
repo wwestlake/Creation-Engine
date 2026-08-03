@@ -48,24 +48,31 @@ jobs:
         run: |
           git clone --depth 1 --branch 8.0.7 https://github.com/juce-framework/JUCE.git "$env:RUNNER_TEMP\JUCE"
 
-      - name: Install LLVM via vcpkg (S3-backed binary cache)
+      - name: Restore prebuilt LLVM from S3 (no build, ever)
         shell: pwsh
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: us-east-2
-          # x-aws binary caching keyed on the exact port+triplet+compiler
-          # hash -- shared across every app's pipeline and local dev
-          # machines that point at this same bucket, not just this repo.
-          # First build populates the cache (~45-90 min for LLVM from
-          # source); every later build, in any of the 6 apps, downloads
-          # it in a couple minutes instead of rebuilding.
-          VCPKG_BINARY_SOURCES: "clear;x-aws,s3://creation-suite-build-cache/vcpkg-cache/,readwrite"
         run: |
-          $vcpkgExe = if ($env:VCPKG_ROOT) { Join-Path $env:VCPKG_ROOT "vcpkg.exe" } else { "C:\vcpkg\vcpkg.exe" }
-          & $vcpkgExe install --triplet x64-windows
+          # This is a real, already-built LLVM (vcpkg's x64-windows triplet,
+          # matching vcpkg.json's pinned baseline) pushed once to S3 from a
+          # dev machine that already had it. This step downloads and
+          # extracts it as-is -- it never invokes vcpkg/cl.exe to compile
+          # anything. If vcpkg.json's LLVM pin ever changes, the new build
+          # needs to be pushed to this same S3 path from a machine that
+          # built it, not compiled here.
+          aws s3 cp s3://creation-suite-build-cache/vcpkg-cache/llvm-vcpkg-x64-windows.tar "$env:RUNNER_TEMP\llvm.tar"
           if ($LASTEXITCODE -ne 0) {
-            throw "vcpkg install failed."
+            throw "Failed to download the prebuilt LLVM archive from S3."
+          }
+          tar -xf "$env:RUNNER_TEMP\llvm.tar"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to extract the prebuilt LLVM archive."
+          }
+          Remove-Item "$env:RUNNER_TEMP\llvm.tar" -Force
+          if (-not (Test-Path "vcpkg_installed\x64-windows")) {
+            throw "vcpkg_installed\x64-windows missing after extraction."
           }
 
       - name: Classify release
