@@ -121,9 +121,9 @@ This registry does not, by itself:
 - Extract `Language/` into its own repo or shared library. Per the
   rollout doc: "Do not try to force all four apps onto one giant repo
   or one giant runtime immediately."
-- Touch Creation Station's Patina compiler stack, or decide whether
-  Patina becomes a CEL host dialect — still explicitly undecided in
-  Station's own doc.
+- Touch Creation Station's language integration. Station's own bespoke
+  Patina compiler stack has already been removed (Station now consumes
+  the shared CEL frontend directly) — no host-dialect decision remains.
 - Build a "CoreLib" (shared math/allocators/threading/serialization/
   logging) — a distinct, later concern.
 - Add a string↔`IntrinsicDomain` conversion function inside CEL. No
