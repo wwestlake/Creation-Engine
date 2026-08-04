@@ -333,10 +333,10 @@ void ExtractModel(const cgltf_data& data, LoadedModel& outModel, std::vector<juc
 
 cgltf_result VfsFileRead(const cgltf_memory_options* memoryOptions, const cgltf_file_options* fileOptions,
                           const char* path, cgltf_size* size, void** data) {
-    auto* vfs = static_cast<assets::VirtualFileSystem*>(fileOptions->user_data);
+    auto* vfs = static_cast<creation::assets::VirtualFileSystem*>(fileOptions->user_data);
 
     juce::MemoryBlock block;
-    if (vfs == nullptr || !vfs->ReadFile(juce::String(path), block)) {
+    if (vfs == nullptr || !vfs->readFile(juce::String(path), block)) {
         return cgltf_result_file_not_found;
     }
 
@@ -406,9 +406,9 @@ bool LoadGltf(const juce::File& gltfFile, LoadedModel& outModel) {
     return true;
 }
 
-bool LoadGltfFromVfs(assets::VirtualFileSystem& vfs, const juce::String& virtualGltfPath, LoadedModel& outModel) {
+bool LoadGltfFromVfs(creation::assets::VirtualFileSystem& vfs, const juce::String& virtualGltfPath, LoadedModel& outModel) {
     juce::MemoryBlock gltfBytes;
-    if (!vfs.ReadFile(virtualGltfPath, gltfBytes)) {
+    if (!vfs.readFile(virtualGltfPath, gltfBytes)) {
         std::cout << "[gltf] VFS: entry not found: " << virtualGltfPath << std::endl;
         return false;
     }

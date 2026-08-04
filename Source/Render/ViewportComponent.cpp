@@ -201,7 +201,7 @@ void ViewportComponent::newOpenGLContextCreated() {
     shaderComposer_->GetProgram(openGLContext_, "programs/unlit.vert", "programs/unlit.frag");
 
     const juce::File packagesDir = juce::File(CE_ASSET_SOURCE_DIR).getChildFile("packages");
-    if (!vfs_.Mount(packagesDir.getChildFile("base.zip"), 0)) {
+    if (!vfs_.mount(packagesDir.getChildFile("base.zip"), 0)) {
         std::cout << "[render] failed to mount base.zip; nothing will render." << std::endl;
         return;
     }
@@ -209,7 +209,7 @@ void ViewportComponent::newOpenGLContextCreated() {
     // CesiumLogoFlat.png, mounted at higher priority than base.zip.
     const juce::File overrideFile = packagesDir.getChildFile("override.zip");
     if (overrideFile.existsAsFile()) {
-        vfs_.Mount(overrideFile, 10);
+        vfs_.mount(overrideFile, 10);
     }
 
     assetCatalog_.LoadBuiltins(vfs_);

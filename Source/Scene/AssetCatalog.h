@@ -8,7 +8,7 @@
 
 #include <JuceHeader.h>
 
-#include "assets/VirtualFileSystem.h"
+#include "creation/assets/VirtualFileSystem.h"
 #include "Render/GL/Texture2D.h"
 #include "Render/Scene/Material.h"
 #include "Render/Scene/Mesh.h"
@@ -67,7 +67,7 @@ public:
     // Loads the built-in demo set: a procedural cube, a procedural
     // sphere, and the BoxTextured glTF asset read through vfs (expects
     // assets/packages/base.zip already mounted).
-    void LoadBuiltins(assets::VirtualFileSystem& vfs);
+    void LoadBuiltins(creation::assets::VirtualFileSystem& vfs);
 
     // Builds a Mesh/Material (and texture/Skeleton, if the model has
     // them) from already-parsed glTF data and registers it under `name`,
@@ -81,7 +81,7 @@ public:
     // own disk-vs-VFS duality. Must be called with a current GL context
     // (Mesh::Upload/Texture2D need one) -- callers off the render thread
     // need to hop via OpenGLContext::executeOnGLThread first.
-    bool AddFromModel(const juce::String& name, const LoadedModel& model, assets::VirtualFileSystem* vfs = nullptr);
+    bool AddFromModel(const juce::String& name, const LoadedModel& model, creation::assets::VirtualFileSystem* vfs = nullptr);
 
     // Registers an already-built mesh/material pair under `name`,
     // overwriting any existing asset with that name -- the generic

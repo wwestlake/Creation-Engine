@@ -6,7 +6,7 @@
 
 #include <JuceHeader.h>
 
-#include "assets/VirtualFileSystem.h"
+#include "creation/assets/VirtualFileSystem.h"
 #include "engine/world.h"
 #include "Render/Scene/Camera.h"
 #include "Render/Scene/FreeCamera.h"
@@ -118,7 +118,7 @@ private:
 
     juce::OpenGLContext openGLContext_;
     std::unique_ptr<ShaderComposer> shaderComposer_;
-    assets::VirtualFileSystem vfs_;
+    creation::assets::VirtualFileSystem vfs_;
     scene::AssetCatalog assetCatalog_;
     scene::ScriptCatalog scriptCatalog_;
     bool hasSeededDemoScene_ = false;

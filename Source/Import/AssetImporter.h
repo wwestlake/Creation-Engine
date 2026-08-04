@@ -18,7 +18,7 @@ class AssetCatalog;
 class ScriptCatalog;
 }
 
-namespace ce::assets {
+namespace creation::assets {
 class VirtualFileSystem;
 }
 
@@ -50,7 +50,7 @@ struct AnimationImportOptions {
 struct ImportContext {
     engine::World* world = nullptr;
     scene::AssetCatalog* catalog = nullptr;
-    assets::VirtualFileSystem* vfs = nullptr;
+    creation::assets::VirtualFileSystem* vfs = nullptr;
     ViewportComponent* viewport = nullptr; // for RunOnGLThread -- see ViewportComponent.h.
     audio::AudioCatalog* audioCatalog = nullptr;
     juce::AudioFormatManager* audioFormatManager = nullptr;

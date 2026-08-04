@@ -6,7 +6,7 @@
 
 #include <JuceHeader.h>
 
-#include "assets/VirtualFileSystem.h"
+#include "creation/assets/VirtualFileSystem.h"
 #include "Render/GL/Texture2D.h"
 #include "Render/Scene/Animation.h"
 #include "Render/Scene/Vertex.h"
@@ -105,6 +105,6 @@ bool LoadGltf(const juce::File& gltfFile, LoadedModel& outModel);
 // the entry glTF file, e.g. "models/BoxTextured/BoxTextured.gltf";
 // buffer URIs resolve relative to it the same way disk-mode resolves
 // relative to gltfFile's parent directory.
-bool LoadGltfFromVfs(assets::VirtualFileSystem& vfs, const juce::String& virtualGltfPath, LoadedModel& outModel);
+bool LoadGltfFromVfs(creation::assets::VirtualFileSystem& vfs, const juce::String& virtualGltfPath, LoadedModel& outModel);
 
 } // namespace ce

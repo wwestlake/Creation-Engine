@@ -6,7 +6,7 @@
 
 #include <JuceHeader.h>
 
-#include "assets/VirtualFileSystem.h"
+#include "creation/assets/VirtualFileSystem.h"
 
 namespace ce {
 
@@ -39,7 +39,7 @@ namespace ce {
 class ShaderComposer final {
 public:
     explicit ShaderComposer(juce::File shaderRoot);
-    ShaderComposer(assets::VirtualFileSystem& vfs, juce::String vfsRootPrefix);
+    ShaderComposer(creation::assets::VirtualFileSystem& vfs, juce::String vfsRootPrefix);
 
     // vertexEntry/fragmentEntry: paths relative to the shader root, e.g.
     // "programs/pbr_lit.vert" / "programs/pbr_lit.frag". Returns a linked
@@ -55,7 +55,7 @@ private:
     juce::String ResolveIncludes(const juce::String& source, std::vector<juce::String>& alreadyIncluded);
 
     juce::File shaderRoot_;                            // valid in disk mode, ignored otherwise.
-    assets::VirtualFileSystem* vfs_ = nullptr;          // non-null in VFS mode.
+    creation::assets::VirtualFileSystem* vfs_ = nullptr; // non-null in VFS mode.
     juce::String vfsRootPrefix_;                        // prepended to relative paths in VFS mode.
 
     std::unordered_map<std::string, std::unique_ptr<juce::OpenGLShaderProgram>> cache_;

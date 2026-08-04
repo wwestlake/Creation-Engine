@@ -24,7 +24,7 @@ void AssetCatalog::AddProcedural(const juce::String& name, const std::vector<Ver
     assets_[name.toStdString()] = Asset{ mesh, material };
 }
 
-void AssetCatalog::LoadBuiltins(assets::VirtualFileSystem& vfs) {
+void AssetCatalog::LoadBuiltins(creation::assets::VirtualFileSystem& vfs) {
     // Guards against a GL context recreation (e.g. the window moving to
     // a monitor with a different pixel format) re-running this: without
     // it, every procedural Mesh this builds a second time would be a
@@ -59,7 +59,7 @@ void AssetCatalog::LoadBuiltins(assets::VirtualFileSystem& vfs) {
     std::cout << "[catalog] loaded builtins: " << names_.size() << " assets" << std::endl;
 }
 
-bool AssetCatalog::AddFromModel(const juce::String& name, const LoadedModel& model, assets::VirtualFileSystem* vfs) {
+bool AssetCatalog::AddFromModel(const juce::String& name, const LoadedModel& model, creation::assets::VirtualFileSystem* vfs) {
     if (model.primitives.empty()) {
         return false;
     }
@@ -78,7 +78,7 @@ bool AssetCatalog::AddFromModel(const juce::String& name, const LoadedModel& mod
 
         if (vfs != nullptr && srcMaterial.baseColorTextureVirtualPath.isNotEmpty()) {
             juce::MemoryBlock textureBytes;
-            if (vfs->ReadFile(srcMaterial.baseColorTextureVirtualPath, textureBytes)) {
+            if (vfs->readFile(srcMaterial.baseColorTextureVirtualPath, textureBytes)) {
                 texture = std::make_unique<gl::Texture2D>();
                 if (texture->LoadFromMemory(textureBytes.getData(), textureBytes.getSize(),
                                              srcMaterial.baseColorTextureVirtualPath)) {
