@@ -40,6 +40,10 @@ MainComponent::MainComponent()
                                      creation::ui::SuiteAssetManagerCapability{ "Creation Engine",
                                                                                 creation::assets::SuiteAppDomain::engine,
                                                                                 { ".cel" },
+                                                                                {},
+                                                                                {},
+                                                                                {},
+                                                                                {},
                                                                                 { ".cel" } }
                                  },
                                  [this](const juce::String& status)
