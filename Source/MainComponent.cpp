@@ -37,7 +37,10 @@ MainComponent::MainComponent()
                                      "Creation Engine",
                                      creation::assets::SuiteAppDomain::engine,
                                      juce::Colour(0xff15181d),
-                                     creation::ui::SuiteAssetManagerCapability{ "Creation Engine", { ".cel" }, { ".cel" } }
+                                     creation::ui::SuiteAssetManagerCapability{ "Creation Engine",
+                                                                                creation::assets::SuiteAppDomain::engine,
+                                                                                { ".cel" },
+                                                                                { ".cel" } }
                                  },
                                  [this](const juce::String& status)
                                  {
