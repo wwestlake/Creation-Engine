@@ -7,6 +7,8 @@
       "name": "llvm",
       "default-features": false,
       "features": ["target-x86", "tools"]
-    }
+    },
+    "glslang",
+    "spirv-cross"
   ]
 }

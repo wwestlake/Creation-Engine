@@ -1,5 +1,7 @@
 #include "MainComponent.h"
 
+#include <creation/services/SuiteVfsJsonStore.h>
+
 #if CE_ENABLE_SCRIPTING
 #include "lang/jit/script_runtime.h"
 #endif
@@ -37,15 +39,15 @@ MainComponent::MainComponent()
                                      "Creation Engine",
                                      creation::assets::SuiteAppDomain::engine,
                                      juce::Colour(0xff15181d),
-                                     creation::ui::SuiteAssetManagerCapability{ "Creation Engine", { ".cel" }, { ".cel" } }
+                                     creation::ui::SuiteAssetManagerCapability{ "Creation Engine", creation::assets::SuiteAppDomain::engine, { ".cel" }, { ".cel" } }
                                  },
                                  [this](const juce::String& status)
                                  {
                                      headerBar_.setStatusText(status);
                                  });
-    suiteShellController_.onProjectOpenRequested = [this](const juce::File& file)
+    suiteShellController_.onProjectOpenRequested = [this](const juce::String& projectId)
     {
-        openProject(file);
+        openProject(projectId);
     };
     headerBar_.onProjectMenuRequested = [this]
     {
@@ -221,14 +223,14 @@ void MainComponent::createNewProject()
         options->headerBar_.setProjectLabel("Project: " + options->projectSession_.getManifest().projectName);
         options->saveSessionToDisk(true);
         options->saveAppSettings();
-        options->headerBar_.setStatusText("Created project: " + options->projectSession_.getContainerFile().getFileName());
+        options->headerBar_.setStatusText("Created project: " + options->projectSession_.getManifest().projectName);
     }), true);
 }
 
-void MainComponent::openProject(const juce::File& containerFile)
+void MainComponent::openProject(const juce::String& projectId)
 {
     juce::String err;
-    if (! creation::assets::ProjectWorkspaceService::openProject(containerFile, projectSession_, err))
+    if (! creation::assets::ProjectWorkspaceService::openProject(suiteSettings_, projectId, projectSession_, err))
     {
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Project Error", err);
         return;
@@ -265,7 +267,7 @@ void MainComponent::saveSessionToDisk(bool userInitiated)
     }
 
     if (userInitiated)
-        headerBar_.setStatusText("Project saved: " + projectSession_.getContainerFile().getFileName());
+        headerBar_.setStatusText("Project saved: " + projectSession_.getManifest().projectName);
 }
 
 void MainComponent::loadSessionFromDisk()
@@ -297,25 +299,18 @@ bool MainComponent::ensureProjectSessionActive(juce::String& errorMessage)
     if (projectSession_.isValid())
         return true;
 
-    auto settingsFile = getAppSettingsFile();
-    if (settingsFile.existsAsFile())
+    juce::String settingsError;
+    auto settings = creation::services::SuiteVfsJsonStore::loadJson("engine-settings.json", settingsError);
+    if (auto* settingsObject = settings.getDynamicObject())
     {
-        if (auto xml = juce::XmlDocument::parse(settingsFile))
+        auto lastProjectId = settingsObject->getProperty("lastOpenedProjectId").toString();
+        if (lastProjectId.isNotEmpty())
         {
-            auto settings = juce::ValueTree::fromXml(*xml);
-            auto lastPath = settings.getProperty("lastOpenedProjectContainer").toString();
-            if (lastPath.isNotEmpty())
+            if (creation::assets::ProjectWorkspaceService::openProject(suiteSettings_, lastProjectId, projectSession_, errorMessage))
             {
-                juce::File lastContainer(lastPath);
-                if (lastContainer.existsAsFile())
-                {
-                    if (creation::assets::ProjectWorkspaceService::openProject(lastContainer, projectSession_, errorMessage))
-                    {
-                        headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName);
-                        loadSessionFromDisk();
-                        return true;
-                    }
-                }
+                headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName);
+                loadSessionFromDisk();
+                return true;
             }
         }
     }
@@ -325,7 +320,7 @@ bool MainComponent::ensureProjectSessionActive(juce::String& errorMessage)
 
     if (! availableProjects.isEmpty())
     {
-        if (creation::assets::ProjectWorkspaceService::openProject(availableProjects.getFirst().containerFile, projectSession_, errorMessage))
+        if (creation::assets::ProjectWorkspaceService::openProject(suiteSettings_, availableProjects.getFirst().projectId, projectSession_, errorMessage))
         {
             headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName);
             loadSessionFromDisk();
@@ -337,23 +332,19 @@ bool MainComponent::ensureProjectSessionActive(juce::String& errorMessage)
     return false;
 }
 
-juce::File MainComponent::getAppSettingsFile() const
-{
-    return suiteSettingsStore_.getSuiteConfigDirectory().getChildFile("creation-engine-settings.xml");
-}
-
 void MainComponent::saveAppSettings()
 {
-    juce::ValueTree state("CreationEngineSettings");
+    auto* object = new juce::DynamicObject();
     if (projectSession_.isValid())
-        state.setProperty("lastOpenedProjectContainer", projectSession_.getContainerFile().getFullPathName(), nullptr);
+        object->setProperty("lastOpenedProjectId", projectSession_.getProjectId());
 
-    auto settingsFile = getAppSettingsFile();
-    settingsFile.getParentDirectory().createDirectory();
-    if (auto xml = state.createXml())
-        xml->writeTo(settingsFile);
+    juce::String errorMessage;
+    creation::services::SuiteVfsJsonStore::saveJson("engine-settings.json", juce::var(object), errorMessage);
 }
 
 void MainComponent::loadAppSettings()
 {
+    // The actual restore (last-opened project) happens inline in ensureProjectSessionActive(),
+    // which is where it's actually needed (before deciding whether to create a new project) --
+    // this function exists so save/load read as a matched pair, same shape as CreationStation's.
 }

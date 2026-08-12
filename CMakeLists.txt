@@ -232,6 +232,7 @@ target_link_libraries(CreationEngineEditor PRIVATE
     engine_core
     node_system
     creation_suite_asset_system
+    creation_suite_services
     creation_suite_ui
     creation_suite_ui_assets
     ${CE_SCRIPTING_LINK_LIBS}

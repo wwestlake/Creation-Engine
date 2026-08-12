@@ -45,11 +45,10 @@ private:
     void SetPlaying(bool playing);
 
     void createNewProject();
-    void openProject(const juce::File& containerFile);
+    void openProject(const juce::String& projectId);
     void saveSessionToDisk(bool userInitiated = false);
     void loadSessionFromDisk();
     bool ensureProjectSessionActive(juce::String& errorMessage);
-    juce::File getAppSettingsFile() const;
     void saveAppSettings();
     void loadAppSettings();
 

@@ -145,6 +145,14 @@ Always use GitHub Issues and the official GitHub Project Board (**Creation Suite
 - **Status Sync Rule**: Every time an agent completes a task, fixes an issue, or changes work status, the agent MUST immediately update the corresponding GitHub Issue and Project Board item on **Creation Suite Road Map** (Project #19), adding completion comments (`gh issue comment`) and explicitly setting the project board item Status field to **Ready for Testing** (`gh project item-edit --id <item-id> --project-id PVT_kwHOADBc_84Bet07 --field-id PVTSSF_lAHOADBc_84Bet07zhZF9co --single-select-option-id a822205a`).
 - Do not use temporary local `.md` task files as the primary task tracker.
 
+## C: Drive Rule
+
+**Under no circumstances write, download, build, or install anything on the C: drive. Period.** No exceptions for size or a tool's default location (including vcpkg's default `C:\opt\vcpkg\downloads`/`buildtrees`) — redirect to a D:-drive path instead. See the root `AGENTS.md`'s C: Drive Rule for the full incident.
+
+## LLVM / vcpkg Build Rule
+
+**Never build, rebuild, or touch LLVM (`apps/CreationEngine/vcpkg_installed/x64-windows/`) — directly or as a side effect of any `vcpkg` command — without an explicit, in-the-moment yes from the user.** This includes running `vcpkg install` in manifest mode for any reason, since that reconciles the whole `vcpkg.json` dependency list (which includes `llvm`) and can silently trigger a full rebuild even when you only meant to add something unrelated. See the root `AGENTS.md`'s LLVM / vcpkg Build Rule for the full incident this is based on and what to do instead. If blocked, stop and ask — never act.
+
 ## Required Reference
 
 For the full concurrency and handoff process, read:
