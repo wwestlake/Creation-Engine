@@ -7,9 +7,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(NOT DEFINED JUCE_DIR)
-    message(FATAL_ERROR "Set JUCE_DIR to your JUCE root directory before configuring (same JUCE checkout Creation Station uses).")
-endif()
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/CMake/CreationSuiteBuildSettings.cmake")
+creation_suite_require_juce()
 
 enable_testing()
 
@@ -26,9 +25,8 @@ enable_testing()
 # itself is checked out.
 option(CE_ENABLE_SCRIPTING "Build the CEL scripting language module (Language/, requires vcpkg LLVM)" ON)
 if(CE_ENABLE_SCRIPTING)
-    set(CE_VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/vcpkg_installed/x64-windows")
-    if(NOT EXISTS "${CE_VCPKG_INSTALLED_DIR}")
-        set(CE_VCPKG_INSTALLED_DIR "D:/000 Creation Engine/vcpkg_installed/x64-windows")
+    if(NOT DEFINED CE_VCPKG_INSTALLED_DIR OR CE_VCPKG_INSTALLED_DIR STREQUAL "")
+        set(CE_VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/vcpkg_installed/x64-windows")
     endif()
     if(NOT EXISTS "${CE_VCPKG_INSTALLED_DIR}")
         message(FATAL_ERROR "CE_ENABLE_SCRIPTING is ON but ${CE_VCPKG_INSTALLED_DIR} doesn't exist. Run `vcpkg install --triplet x64-windows` from the repo root first (see README.md's \"Scripting language build\" section), or configure with -DCE_ENABLE_SCRIPTING=OFF to skip the scripting module.")
@@ -55,10 +53,8 @@ endif()
 add_subdirectory("${JUCE_DIR}" juce)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/entt/CMakeLists.txt")
     add_subdirectory(third_party/entt)
-elseif(EXISTS "D:/000 Creation Engine/third_party/entt/CMakeLists.txt")
-    add_subdirectory("D:/000 Creation Engine/third_party/entt" EnttExternal)
 else()
-    message(FATAL_ERROR "Could not find the entt dependency for Creation Engine.")
+    message(FATAL_ERROR "Could not find the entt dependency for Creation Engine. Run `git submodule update --init --recursive` in this checkout first.")
 endif()
 
 # --- Shared, framework-agnostic libraries --------------------------------
@@ -105,14 +101,10 @@ juce_add_gui_app(CreationEngineEditor
 )
 
 # Mirrors the built executable into the workspace-level shared bin
-# directory (D:\CreationSuite-Workspaces\claude-<config>-bin) so it's
+# directory (D:\CreationSuite-Workspaces\codex-<config>-bin) so it's
 # reachable at a stable path without needing OS symlink privileges.
 # Every suite agent does this for its own repo -- see AGENTS.md.
-add_custom_command(TARGET CreationEngineEditor POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/claude-$<LOWER_CASE:$<CONFIG>>-bin"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineEditor>" "D:/CreationSuite-Workspaces/claude-$<LOWER_CASE:$<CONFIG>>-bin/"
-    COMMENT "Copying CreationEngineEditor to the shared claude bin directory"
-)
+creation_suite_add_shared_bin_copy(CreationEngineEditor)
 
 juce_generate_juce_header(CreationEngineEditor)
 
@@ -262,14 +254,10 @@ juce_add_console_app(CreationEngineServer
 )
 
 # Mirrors the built executable into the workspace-level shared bin
-# directory (D:\CreationSuite-Workspaces\claude-<config>-bin) so it's
+# directory (D:\CreationSuite-Workspaces\codex-<config>-bin) so it's
 # reachable at a stable path without needing OS symlink privileges.
 # Every suite agent does this for its own repo -- see AGENTS.md.
-add_custom_command(TARGET CreationEngineServer POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/claude-$<LOWER_CASE:$<CONFIG>>-bin"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineServer>" "D:/CreationSuite-Workspaces/claude-$<LOWER_CASE:$<CONFIG>>-bin/"
-    COMMENT "Copying CreationEngineServer to the shared claude bin directory"
-)
+creation_suite_add_shared_bin_copy(CreationEngineServer)
 
 juce_generate_juce_header(CreationEngineServer)
 

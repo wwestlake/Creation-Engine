@@ -1,3 +1,7 @@
+include_guard(GLOBAL)
+include("${CMAKE_CURRENT_LIST_DIR}/../../../shared/CMake/CreationSuiteBuildSettings.cmake")
+creation_suite_init_build_settings()
+
 # Wraps WinFlexBison (win_bison.exe/win_flex.exe) as CMake custom
 # commands that regenerate CEL's lexer/parser from grammar/cel.l and
 # grammar/cel.y whenever those files change. Not vendored into the repo
