@@ -74,6 +74,9 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/VFS" CreationSuiteSha
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/AssetSystem" CreationSuiteSharedAssetSystem)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/Services" CreationSuiteSharedServices)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/UI" CreationSuiteSharedUI)
+if(NOT TARGET CreationDock)
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/JuceDocking" CreationSuiteSharedDocking)
+endif()
 
 # --- Shared, juce_core-only libraries -------------------------------------
 # Not framework-agnostic like the two above (needs juce::juce_core for
@@ -115,6 +118,10 @@ add_custom_command(TARGET CreationEngineEditor POST_BUILD
 )
 
 juce_generate_juce_header(CreationEngineEditor)
+
+target_include_directories(CreationEngineEditor PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/JuceDocking/include"
+)
 
 target_sources(CreationEngineEditor PRIVATE
     Source/Main.cpp
@@ -235,6 +242,7 @@ target_link_libraries(CreationEngineEditor PRIVATE
     creation_suite_services
     creation_suite_ui
     creation_suite_ui_assets
+    CreationDock
     ${CE_SCRIPTING_LINK_LIBS}
     juce::juce_gui_extra
     juce::juce_opengl
@@ -260,6 +268,14 @@ juce_add_console_app(CreationEngineServer
     COMPANY_NAME "LagDaemon Software"
     BUNDLE_ID "com.lagdaemon.creationengine.server"
 )
+
+# juce_add_console_app has no ICON_BIG/ICON_SMALL hook (that's GUI-app-only in
+# JUCE's CMake API), so the exe icon is embedded directly as a Win32 resource
+# instead -- a plain .rc/.ico pair, no juce_gui_* dependency, so this doesn't
+# touch the headless constraint above.
+if(WIN32)
+    target_sources(CreationEngineServer PRIVATE assets/branding/CreationEngineServer.rc)
+endif()
 
 # Mirrors the built executable into the workspace-level shared bin
 # directory (D:\CreationSuite-Workspaces\claude-<config>-bin) so it's

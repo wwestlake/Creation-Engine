@@ -20,6 +20,7 @@
 #include <creation/assets/ProjectSession.h>
 #include <creation/assets/ProjectWorkspaceService.h>
 #include <creation/suite/SuiteSettings.h>
+#include <CreationDock/DockManager.h>
 
 // The editor and the runtime are the same executable in different modes
 // (capabilities spec, section 1). The top-level shell (TransportBar +
@@ -29,8 +30,14 @@
 // the simulation itself (spec 3.3's "play-in-viewport") rather than an
 // audio transport. Only Scene has a real panel today; the rest are
 // PlaceholderPanel stand-ins until their own milestones land.
+//
+// Panels are now CreationDock dock panels rather than ViewModeBar-exclusive
+// visibility groups -- any combination can be open at once, or none, matching
+// every other suite app's conversion. ViewModeBar is kept as a quick-nav
+// affordance (jumps to/activates a panel) rather than removed outright.
 class MainComponent final : public juce::Component,
-                            private juce::Timer
+                            private juce::Timer,
+                            private juce::MenuBarModel
 {
 public:
     MainComponent();
@@ -43,6 +50,16 @@ private:
     void timerCallback() override;
     void SetActiveMode(ce::WorkspaceMode mode);
     void SetPlaying(bool playing);
+
+    juce::StringArray getMenuBarNames() override;
+    juce::PopupMenu getMenuForIndex(int topLevelMenuIndex, const juce::String&) override;
+    void menuItemSelected(int menuItemID, int topLevelMenuIndex) override;
+    void initialiseDockingWorkspace();
+    void toggleDockPanel(const juce::String& panelId, CreationDock::DockTargetZone fallbackZone);
+
+    std::unique_ptr<juce::MenuBarComponent> menuBar_;
+    std::unique_ptr<CreationDock::DockManager> dockManager_;
+    std::unique_ptr<juce::Component> inspectorHost_;
 
     void createNewProject();
     void openProject(const juce::String& projectId);

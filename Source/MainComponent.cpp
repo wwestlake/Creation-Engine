@@ -8,6 +8,98 @@
 #include <creation/ui/CreationSuiteLogos.h>
 #include "Scene/EngineSceneSerializer.h"
 
+namespace
+{
+// Wraps an existing component (not owned) as a dock panel's content, filling
+// whatever bounds the dock zone/tab gives it.
+class NonOwningPanelHost final : public juce::Component
+{
+public:
+    explicit NonOwningPanelHost(juce::Component& contentToHost) : content(contentToHost)
+    {
+        addAndMakeVisible(content);
+    }
+
+    void resized() override
+    {
+        content.setBounds(getLocalBounds());
+    }
+
+private:
+    juce::Component& content;
+};
+
+// The Scene-mode inspector column (title + tick counter + four per-entity
+// editors) used to be laid out as one stacked block inside
+// MainComponent::resized(). Registering all six as separate dock panels would
+// be a much bigger decomposition than this pass is scoping (see the rollout
+// plan) -- this keeps them as one dock panel, with the exact same stacked
+// layout math lifted verbatim out of the old MainComponent::resized().
+class EngineInspectorHost final : public juce::Component
+{
+public:
+    EngineInspectorHost(juce::Label& inspectorTitle, juce::Label& tickLabel, ce::TransformPanel& transformPanel,
+                        ce::ScriptPanel& scriptPanel, ce::MaterialsPanel& pbrMaterialPanel, ce::LightPanel& lightPanel)
+        : inspectorTitle_(inspectorTitle), tickLabel_(tickLabel), transformPanel_(transformPanel),
+          scriptPanel_(scriptPanel), pbrMaterialPanel_(pbrMaterialPanel), lightPanel_(lightPanel)
+    {
+        addAndMakeVisible(inspectorTitle_);
+        addAndMakeVisible(tickLabel_);
+        addAndMakeVisible(transformPanel_);
+        addAndMakeVisible(scriptPanel_);
+        addAndMakeVisible(pbrMaterialPanel_);
+        addAndMakeVisible(lightPanel_);
+    }
+
+    void resized() override
+    {
+        auto bounds = getLocalBounds().reduced(12);
+
+        inspectorTitle_.setBounds(bounds.removeFromTop(28));
+        tickLabel_.setBounds(bounds.removeFromTop(24));
+
+        bounds.removeFromTop(12);
+        transformPanel_.setBounds(bounds.removeFromTop(ce::TransformPanel::kPreferredHeight));
+
+        bounds.removeFromTop(12);
+        scriptPanel_.setBounds(bounds.removeFromTop(ce::ScriptPanel::kPreferredHeight));
+
+        bounds.removeFromTop(12);
+        pbrMaterialPanel_.setBounds(bounds.removeFromTop(ce::MaterialsPanel::kPreferredHeight));
+
+        bounds.removeFromTop(16);
+        lightPanel_.setBounds(bounds.removeFromTop(lightPanel_.PreferredHeight()));
+    }
+
+private:
+    juce::Label& inspectorTitle_;
+    juce::Label& tickLabel_;
+    ce::TransformPanel& transformPanel_;
+    ce::ScriptPanel& scriptPanel_;
+    ce::MaterialsPanel& pbrMaterialPanel_;
+    ce::LightPanel& lightPanel_;
+};
+
+const juce::String panelIdHierarchy = "hierarchy";
+const juce::String panelIdViewport = "viewport";
+const juce::String panelIdInspector = "inspector";
+const juce::String panelIdLogic = "logic";
+const juce::String panelIdAssets = "assets";
+const juce::String panelIdMaterials = "materials";
+const juce::String panelIdServer = "server";
+const juce::String panelIdSettings = "settings";
+
+constexpr int menuIdPanelHierarchy = 3001;
+constexpr int menuIdPanelViewport = 3002;
+constexpr int menuIdPanelInspector = 3003;
+constexpr int menuIdPanelLogic = 3004;
+constexpr int menuIdPanelAssets = 3005;
+constexpr int menuIdPanelMaterials = 3006;
+constexpr int menuIdPanelServer = 3007;
+constexpr int menuIdPanelSettings = 3008;
+constexpr int menuIdResetLayout = 3009;
+}
+
 MainComponent::MainComponent()
     : viewport_(world_),
       hierarchyPanel_(world_, viewport_),
@@ -67,35 +159,43 @@ MainComponent::MainComponent()
     addAndMakeVisible(viewModeBar_);
     viewModeBar_.onModeSelected = [this](ce::WorkspaceMode mode) { SetActiveMode(mode); };
 
-    addAndMakeVisible(hierarchyPanel_);
     hierarchyPanel_.onSelectionChanged = [this](entt::entity entity) {
         transformPanel_.SetSelectedEntity(entity);
         scriptPanel_.SetSelectedEntity(entity);
         pbrMaterialPanel_.SetSelectedEntity(entity);
         logicPanel_.SetSelectedEntity(entity);
     };
-    addAndMakeVisible(viewport_);
 
     inspectorTitle_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
     inspectorTitle_.setColour(juce::Label::textColourId, juce::Colours::white);
-    addAndMakeVisible(inspectorTitle_);
 
     tickLabel_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
-    addAndMakeVisible(tickLabel_);
 
-    addAndMakeVisible(transformPanel_);
-    addAndMakeVisible(scriptPanel_);
-    addAndMakeVisible(pbrMaterialPanel_);
-    addAndMakeVisible(lightPanel_);
+    // hierarchyPanel_/viewport_/inspectorTitle_/tickLabel_/transformPanel_/
+    // scriptPanel_/pbrMaterialPanel_/lightPanel_/materialsPanel_/importPanel_/
+    // logicPanel_/serverPanel_/settingsPanel_ are all reparented into dock
+    // panels below (see initialiseDockingWorkspace), not added directly here.
 
-    addAndMakeVisible(materialsPanel_);
-    addAndMakeVisible(importPanel_);
-    addAndMakeVisible(logicPanel_);
-    addAndMakeVisible(serverPanel_);
-    addAndMakeVisible(settingsPanel_);
-
-    SetActiveMode(ce::WorkspaceMode::Scene);
     SetPlaying(false);
+
+    menuBar_ = std::make_unique<juce::MenuBarComponent>(static_cast<juce::MenuBarModel*>(this));
+    // Nothing in this app sets a suite-wide dark LookAndFeel, so MenuBarComponent
+    // falls back to LookAndFeel_V4::drawMenuBarItem/drawMenuBarBackground, which key
+    // off TextButton colour ids (not PopupMenu's) -- the default scheme renders dark
+    // text on a dark bar, invisible against this app's dark theme without this.
+    menuBar_->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff1c2230));
+    menuBar_->setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff2a3244));
+    menuBar_->setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+    menuBar_->setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    addAndMakeVisible(*menuBar_);
+
+    dockManager_ = std::make_unique<CreationDock::DockManager>(*this);
+    addAndMakeVisible(*dockManager_);
+    initialiseDockingWorkspace();
+    // setSize() below fires resized() immediately; menuBar_/dockManager_ must
+    // already exist and be registered before that happens, or they're silently
+    // left at zero bounds (addAndMakeVisible alone doesn't trigger a layout pass).
+    resized();
 
     setSize(1400, 900);
     startTimerHz(30);
@@ -115,55 +215,128 @@ void MainComponent::resized() {
     headerBar_.setBounds(bounds.removeFromTop(96));
     viewModeBar_.setBounds(bounds.removeFromTop(56));
 
-    const auto contentArea = bounds;
+    if (menuBar_ != nullptr)
+        menuBar_->setBounds(bounds.removeFromTop(28));
 
-    // Scene mode content — laid out even while hidden, so switching back
-    // to Scene doesn't need a relayout.
-    auto sceneArea = contentArea;
-    hierarchyPanel_.setBounds(sceneArea.removeFromLeft(220).reduced(4));
-    auto inspectorBounds = sceneArea.removeFromRight(300).reduced(12);
-    inspectorTitle_.setBounds(inspectorBounds.removeFromTop(28));
-    tickLabel_.setBounds(inspectorBounds.removeFromTop(24));
-
-    inspectorBounds.removeFromTop(12);
-    transformPanel_.setBounds(inspectorBounds.removeFromTop(ce::TransformPanel::kPreferredHeight));
-
-    inspectorBounds.removeFromTop(12);
-    scriptPanel_.setBounds(inspectorBounds.removeFromTop(ce::ScriptPanel::kPreferredHeight));
-
-    inspectorBounds.removeFromTop(12);
-    pbrMaterialPanel_.setBounds(inspectorBounds.removeFromTop(ce::MaterialsPanel::kPreferredHeight));
-
-    inspectorBounds.removeFromTop(16);
-    lightPanel_.setBounds(inspectorBounds.removeFromTop(lightPanel_.PreferredHeight()));
-
-    viewport_.setBounds(sceneArea);
-
-    materialsPanel_.setBounds(contentArea);
-    importPanel_.setBounds(contentArea);
-    logicPanel_.setBounds(contentArea);
-    serverPanel_.setBounds(contentArea);
-    settingsPanel_.setBounds(contentArea);
+    if (dockManager_ != nullptr)
+        dockManager_->setBounds(bounds);
 }
 
+// ViewModeBar is kept as a quick-nav affordance now that panels are
+// independent dock toggles rather than an exclusive-mode switch (see the
+// rollout plan) -- clicking a mode tab opens/activates that mode's panel(s)
+// instead of hiding every other mode's panels.
 void MainComponent::SetActiveMode(ce::WorkspaceMode mode) {
     activeMode_ = mode;
 
-    const bool showScene = mode == ce::WorkspaceMode::Scene;
-    hierarchyPanel_.setVisible(showScene);
-    viewport_.setVisible(showScene);
-    inspectorTitle_.setVisible(showScene);
-    tickLabel_.setVisible(showScene);
-    transformPanel_.setVisible(showScene);
-    scriptPanel_.setVisible(showScene);
-    pbrMaterialPanel_.setVisible(showScene);
-    lightPanel_.setVisible(showScene);
+    if (dockManager_ == nullptr)
+        return;
 
-    materialsPanel_.setVisible(mode == ce::WorkspaceMode::Materials);
-    importPanel_.setVisible(mode == ce::WorkspaceMode::Assets);
-    logicPanel_.setVisible(mode == ce::WorkspaceMode::Logic);
-    serverPanel_.setVisible(mode == ce::WorkspaceMode::Server);
-    settingsPanel_.setVisible(mode == ce::WorkspaceMode::Settings);
+    const auto jumpTo = [this](const juce::String& panelId, CreationDock::DockTargetZone fallbackZone) {
+        if (! dockManager_->isPanelOpen(panelId))
+            dockManager_->showPanel(panelId, fallbackZone);
+        else
+            dockManager_->activatePanel(panelId);
+    };
+
+    switch (mode) {
+        case ce::WorkspaceMode::Scene:
+            jumpTo(panelIdHierarchy, CreationDock::DockTargetZone::Left);
+            jumpTo(panelIdInspector, CreationDock::DockTargetZone::Right);
+            jumpTo(panelIdViewport, CreationDock::DockTargetZone::CenterTab);
+            break;
+        case ce::WorkspaceMode::Logic:      jumpTo(panelIdLogic, CreationDock::DockTargetZone::CenterTab); break;
+        case ce::WorkspaceMode::Materials:  jumpTo(panelIdMaterials, CreationDock::DockTargetZone::CenterTab); break;
+        case ce::WorkspaceMode::Assets:     jumpTo(panelIdAssets, CreationDock::DockTargetZone::CenterTab); break;
+        case ce::WorkspaceMode::Server:     jumpTo(panelIdServer, CreationDock::DockTargetZone::CenterTab); break;
+        case ce::WorkspaceMode::Settings:   jumpTo(panelIdSettings, CreationDock::DockTargetZone::CenterTab); break;
+    }
+
+    menuItemsChanged();
+}
+
+juce::StringArray MainComponent::getMenuBarNames() {
+    return { "Panels" };
+}
+
+juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String&) {
+    juce::PopupMenu menu;
+
+    const auto isOpen = [this](const juce::String& id) {
+        return dockManager_ != nullptr && dockManager_->isPanelOpen(id);
+    };
+
+    menu.addItem(menuIdPanelHierarchy, "Hierarchy", true, isOpen(panelIdHierarchy));
+    menu.addItem(menuIdPanelViewport, "Viewport", true, isOpen(panelIdViewport));
+    menu.addItem(menuIdPanelInspector, "Inspector", true, isOpen(panelIdInspector));
+    menu.addItem(menuIdPanelLogic, "Logic", true, isOpen(panelIdLogic));
+    menu.addItem(menuIdPanelAssets, "Assets", true, isOpen(panelIdAssets));
+    menu.addItem(menuIdPanelMaterials, "Materials", true, isOpen(panelIdMaterials));
+    menu.addItem(menuIdPanelServer, "Server", true, isOpen(panelIdServer));
+    menu.addItem(menuIdPanelSettings, "Settings", true, isOpen(panelIdSettings));
+    menu.addSeparator();
+    menu.addItem(menuIdResetLayout, "Reset Dock Layout");
+    return menu;
+}
+
+void MainComponent::menuItemSelected(int menuItemID, int) {
+    switch (menuItemID) {
+        case menuIdPanelHierarchy: toggleDockPanel(panelIdHierarchy, CreationDock::DockTargetZone::Left); break;
+        case menuIdPanelViewport:  toggleDockPanel(panelIdViewport, CreationDock::DockTargetZone::CenterTab); break;
+        case menuIdPanelInspector: toggleDockPanel(panelIdInspector, CreationDock::DockTargetZone::Right); break;
+        case menuIdPanelLogic:     toggleDockPanel(panelIdLogic, CreationDock::DockTargetZone::CenterTab); break;
+        case menuIdPanelAssets:    toggleDockPanel(panelIdAssets, CreationDock::DockTargetZone::CenterTab); break;
+        case menuIdPanelMaterials: toggleDockPanel(panelIdMaterials, CreationDock::DockTargetZone::CenterTab); break;
+        case menuIdPanelServer:    toggleDockPanel(panelIdServer, CreationDock::DockTargetZone::CenterTab); break;
+        case menuIdPanelSettings:  toggleDockPanel(panelIdSettings, CreationDock::DockTargetZone::CenterTab); break;
+        case menuIdResetLayout:    if (dockManager_ != nullptr) dockManager_->resetLayout(); break;
+        default: break;
+    }
+
+    menuItemsChanged();
+}
+
+void MainComponent::initialiseDockingWorkspace() {
+    if (dockManager_ == nullptr)
+        return;
+
+    inspectorHost_ = std::make_unique<EngineInspectorHost>(inspectorTitle_, tickLabel_, transformPanel_,
+                                                            scriptPanel_, pbrMaterialPanel_, lightPanel_);
+
+    dockManager_->registerPanel(panelIdHierarchy, "Hierarchy",
+        std::make_unique<NonOwningPanelHost>(hierarchyPanel_), CreationDock::DockTargetZone::Left);
+    dockManager_->registerPanel(panelIdViewport, "Viewport",
+        std::make_unique<NonOwningPanelHost>(viewport_), CreationDock::DockTargetZone::CenterTab);
+    dockManager_->registerPanel(panelIdInspector, "Inspector",
+        std::make_unique<NonOwningPanelHost>(*inspectorHost_), CreationDock::DockTargetZone::Right);
+    dockManager_->registerPanel(panelIdLogic, "Logic",
+        std::make_unique<NonOwningPanelHost>(logicPanel_), CreationDock::DockTargetZone::CenterTab);
+    dockManager_->registerPanel(panelIdAssets, "Assets",
+        std::make_unique<NonOwningPanelHost>(importPanel_), CreationDock::DockTargetZone::CenterTab);
+    dockManager_->registerPanel(panelIdMaterials, "Materials",
+        std::make_unique<NonOwningPanelHost>(materialsPanel_), CreationDock::DockTargetZone::CenterTab);
+    dockManager_->registerPanel(panelIdServer, "Server",
+        std::make_unique<NonOwningPanelHost>(serverPanel_), CreationDock::DockTargetZone::CenterTab);
+    dockManager_->registerPanel(panelIdSettings, "Settings",
+        std::make_unique<NonOwningPanelHost>(settingsPanel_), CreationDock::DockTargetZone::CenterTab);
+
+    // Start with just the Scene trio open, matching the app's old default
+    // (WorkspaceMode::Scene was the initial active mode) -- everything else
+    // starts closed, reachable via the Panels menu or the ViewModeBar tabs.
+    for (const auto& panelId : { panelIdLogic, panelIdAssets, panelIdMaterials, panelIdServer, panelIdSettings })
+        dockManager_->closePanel(panelId);
+}
+
+void MainComponent::toggleDockPanel(const juce::String& panelId, CreationDock::DockTargetZone fallbackZone) {
+    if (dockManager_ == nullptr)
+        return;
+
+    if (dockManager_->isPanelOpen(panelId))
+        dockManager_->closePanel(panelId);
+    else
+        dockManager_->showPanel(panelId, fallbackZone);
+
+    menuItemsChanged();
 }
 
 void MainComponent::SetPlaying(bool playing) {
