@@ -77,6 +77,9 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/UI" CreationSuiteShar
 if(NOT TARGET CreationDock)
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/JuceDocking" CreationSuiteSharedDocking)
 endif()
+if(NOT TARGET creation_suite_render)
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/Render" CreationSuiteSharedRender)
+endif()
 
 # --- Shared, juce_core-only libraries -------------------------------------
 # Not framework-agnostic like the two above (needs juce::juce_core for
@@ -131,28 +134,11 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Branding.cpp
     Source/Render/ViewportComponent.h
     Source/Render/ViewportComponent.cpp
-    Source/Render/GL/Buffer.h
-    Source/Render/GL/Buffer.cpp
-    Source/Render/GL/VertexArray.h
-    Source/Render/GL/VertexArray.cpp
     Source/Render/GL/Texture2D.h
     Source/Render/GL/Texture2D.cpp
-    Source/Render/Scene/Camera.h
-    Source/Render/Scene/Camera.cpp
-    Source/Render/Scene/FreeCamera.h
-    Source/Render/Scene/FreeCamera.cpp
-    Source/Render/Scene/GridRenderer.h
-    Source/Render/Scene/GridRenderer.cpp
-    Source/Render/Scene/Vertex.h
-    Source/Render/Scene/Mesh.h
-    Source/Render/Scene/Mesh.cpp
     Source/Render/Scene/Material.h
     Source/Render/Scene/Material.cpp
     Source/Render/Scene/Animation.h
-    Source/Render/Scene/ProceduralMesh.h
-    Source/Render/Scene/ProceduralMesh.cpp
-    Source/Render/Shaders/ShaderComposer.h
-    Source/Render/Shaders/ShaderComposer.cpp
     Source/Render/Import/GltfLoader.h
     Source/Render/Import/GltfLoader.cpp
     Source/Render/Import/ObjLoader.h
@@ -230,7 +216,7 @@ target_compile_definitions(CreationEngineEditor PRIVATE
     JUCE_OPENGL3=1
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:CreationEngineEditor,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:CreationEngineEditor,JUCE_VERSION>"
-    CE_SHADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Source/Render/Shaders"
+    CE_SHADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../shared/Render/Shaders"
     CE_ASSET_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
     CE_ENABLE_SCRIPTING=$<BOOL:${CE_ENABLE_SCRIPTING}>
 )
@@ -243,6 +229,7 @@ target_link_libraries(CreationEngineEditor PRIVATE
     creation_suite_ui
     creation_suite_ui_assets
     CreationDock
+    creation_suite_render
     ${CE_SCRIPTING_LINK_LIBS}
     juce::juce_gui_extra
     juce::juce_opengl
