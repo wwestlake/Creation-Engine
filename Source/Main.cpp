@@ -2,20 +2,22 @@
 
 #include "MainComponent.h"
 #include <creation/ui/CreationSuiteLogos.h>
+#include <creation/ui/SuiteJUCEApplication.h>
 
-class CreationEngineApplication final : public juce::JUCEApplication {
+class CreationEngineApplication final : public creation::ui::SuiteJUCEApplication {
 public:
+    CreationEngineApplication() : SuiteJUCEApplication(creation::ui::SuiteLogoId::engine) {}
+
     const juce::String getApplicationName() override { return "Creation Engine"; }
     const juce::String getApplicationVersion() override { return "0.0.1"; }
     bool moreThanOneInstanceAllowed() override { return true; }
 
-    void initialise(const juce::String&) override {
-        mainWindow_.reset(new MainWindow(getApplicationName()));
-    }
-
-    void shutdown() override { mainWindow_ = nullptr; }
-
     void systemRequestedQuit() override { quit(); }
+
+protected:
+    std::unique_ptr<juce::DocumentWindow> createMainWindow() override {
+        return std::make_unique<MainWindow>(getApplicationName());
+    }
 
 private:
     class MainWindow final : public juce::DocumentWindow {
@@ -35,8 +37,6 @@ private:
 
         void closeButtonPressed() override { juce::JUCEApplication::getInstance()->systemRequestedQuit(); }
     };
-
-    std::unique_ptr<MainWindow> mainWindow_;
 };
 
 START_JUCE_APPLICATION(CreationEngineApplication)
