@@ -168,7 +168,7 @@ jobs:
           # installed LLVM (from the S3 cache after the first run), so
           # scripting stays on for real -- CEL is meant to be in every
           # app, not disabled to dodge an LLVM build.
-          cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DJUCE_DIR="$env:RUNNER_TEMP\JUCE" "-DCREATION_ENGINE_VERSION=${{ steps.classify.outputs.version }}"
+          cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DJUCE_DIR="$env:RUNNER_TEMP\JUCE" -DCE_WINFLEXBISON_DIR="C:\tools\winflexbison" "-DCREATION_ENGINE_VERSION=${{ steps.classify.outputs.version }}"
 
       - name: Build app
         shell: pwsh
