@@ -178,8 +178,16 @@ target_link_libraries(CreationEngineEditor PRIVATE
     juce::juce_recommended_warning_flags
 )
 
-add_executable(CreationEngineFrustPluginSmoke tests/EngineFrustPluginSmoke.cpp)
-target_link_libraries(CreationEngineFrustPluginSmoke PRIVATE creation_suite_frust_plugin_runtime)
+add_executable(CreationEngineFrustPluginSmoke
+    tests/EngineFrustPluginSmoke.cpp
+    Source/Frust/EngineFrustHost.cpp
+)
+target_include_directories(CreationEngineFrustPluginSmoke PRIVATE Source)
+target_link_libraries(CreationEngineFrustPluginSmoke PRIVATE
+    engine_core
+    creation_suite_frust_plugin_runtime
+    juce::juce_core
+)
 target_compile_definitions(CreationEngineFrustPluginSmoke PRIVATE
     CE_ENGINE_LIFECYCLE_PLUGIN="${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/EngineLifecycle.frust"
 )
