@@ -37,6 +37,13 @@ struct PinSignature {
 // GS8 is just this registry mechanism itself.
 struct NodeTypeDescriptor {
     std::string typeName;
+    std::string displayName;
+    std::string category;
+    std::string description;
+    // The exported FRust function emitted by graph compilation for this
+    // node. It is metadata here; signature checking belongs to the compiler.
+    std::string frustEntryPoint;
+    std::vector<std::string> requiredCapabilities;
     Domain domain = Domain::Core;
     std::vector<PinSignature> inputs;
     std::vector<PinSignature> outputs;
