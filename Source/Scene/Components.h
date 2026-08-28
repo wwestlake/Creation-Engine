@@ -24,17 +24,8 @@ struct Name {
     juce::String value;
 };
 
-// GS6: this is now LITERALLY ce::engine::Transform, not a separate
-// JUCE-shaped struct -- before this, the editor (this file) and CEL
-// scripts (Language/src/jit/intrinsic_trampolines.cpp, which has always
-// used ce::engine::Transform) held two completely uncoordinated
-// component types on the same shared ce::engine::World, so an entity
-// moved by a script and one moved by the inspector didn't actually see
-// each other's writes at all. Aliasing to the same type makes them the
-// same entt component pool. juce::Vector3D<float>/juce::Matrix3D<float>
-// conversions now happen only at this JUCE/engine boundary (ToJuceVector3D/
-// ToVec3/ToModelMatrix below), never inside the component itself, since
-// EngineCore stays framework-agnostic.
+// The editor and runtime share this component type, so inspector changes and
+// host capability changes update the same EnTT component pool.
 using Transform = engine::Transform;
 
 inline juce::Vector3D<float> ToJuceVector3D(const engine::Vec3& v) { return { v.x, v.y, v.z }; }
@@ -131,23 +122,6 @@ struct Animator {
     float time = 0.0f;   // seconds into the active clip.
     bool playing = false;
     bool loop = true;
-};
-
-// GS7: an entity's own EDITABLE copy of a CEL script's source text --
-// independent of the ScriptCatalog entry it was originally attached
-// from (assetName is kept only for display/reference), the same
-// relationship Transform has to a placed-from asset's original position:
-// seeded from a shared source, then freely mutated per-instance from
-// here on. This is what Views/ScriptPanel.h's juce::CodeEditorComponent
-// actually reads/writes; the compiled, execution-ready result lives
-// separately on ce::engine::ScriptComponent (EngineCore, framework-
-// agnostic, no JUCE types) -- this component is the JUCE-facing source
-// text half of that pair, deliberately kept apart the same way
-// scene::Transform's JUCE conversions stay out of ce::engine::Transform
-// itself.
-struct ScriptSource {
-    juce::String assetName; // which ScriptCatalog entry this started from, for display only.
-    juce::String source;
 };
 
 } // namespace ce::scene

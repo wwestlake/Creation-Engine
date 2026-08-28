@@ -3,7 +3,6 @@
 #include "Import/Importers/AudioAssetImporter.h"
 #include "Import/Importers/GltfAssetImporter.h"
 #include "Import/Importers/ObjAssetImporter.h"
-#include "Import/Importers/ScriptAssetImporter.h"
 #include "Import/Importers/TextureAssetImporter.h"
 
 namespace ce::import {
@@ -29,7 +28,6 @@ void ImporterRegistry::RegisterBuiltins() {
     Register(std::make_unique<ObjAssetImporter>());
     Register(std::make_unique<AudioAssetImporter>());
     Register(std::make_unique<TextureAssetImporter>());
-    Register(std::make_unique<ScriptAssetImporter>());
 }
 
 } // namespace ce::import

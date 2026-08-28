@@ -6,14 +6,13 @@
 
 #include "engine/simulation.h"
 #include "engine/world.h"
+#include "Frust/EngineFrustHost.h"
 #include "Render/ViewportComponent.h"
 #include "Views/HierarchyPanel.h"
 #include "Views/ImportPanel.h"
 #include "Views/LightPanel.h"
 #include "Views/MaterialsPanel.h"
-#include "Views/NodeEditor/LogicPanel.h"
 #include "Views/PlaceholderPanel.h"
-#include "Views/ScriptPanel.h"
 #include "Views/TransformPanel.h"
 #include "Views/ViewModeBar.h"
 
@@ -58,6 +57,7 @@ private:
     bool projectDirty_ = false;
 
     ce::engine::World world_;
+    ce::frust::EngineFrustHost frustHost_ { world_ };
     bool isPlaying_ = false;
 
     CreationSuiteHeaderBar headerBar_;
@@ -78,11 +78,6 @@ private:
 
     ce::TransformPanel transformPanel_;
 
-    // GS7: declared after viewport_ (like hierarchyPanel_/importPanel_
-    // above) since its constructor needs a fully-constructed
-    // ViewportComponent& (viewport_.Scripts(), the ScriptCatalog).
-    ce::ScriptPanel scriptPanel_;
-
     // Selection-driven per-entity PBR editor (albedo/metallic/roughness),
     // replacing the old viewport-global roughness/metallic slider pair.
     // Not to be confused with materialsPanel_ below (the WorkspaceMode::
@@ -96,14 +91,9 @@ private:
     // needs a fully-constructed ViewportComponent&.
     ce::ImportPanel importPanel_;
 
-    // --- Logic mode content ---
-    // GS10: only needs world_ (for ScriptRuntime()/RegistryMutex() at
-    // Compile & Attach time), not viewport_ -- the node graph itself is
-    // authored/edited entirely independent of the 3D scene.
-    ce::LogicPanel logicPanel_;
-
     // --- Other modes: stand-ins until their milestones land ---
     ce::PlaceholderPanel materialsPanel_ { "Materials", "Node-based material editor - coming soon" };
+    ce::PlaceholderPanel frustAutomationPanel_ { "FRust Automation", "FRust event graphs and visual automation are being migrated into Creation Engine." };
     ce::PlaceholderPanel serverPanel_ { "Server", "Dedicated server operational view - coming soon" };
     ce::PlaceholderPanel settingsPanel_ { "Settings", "Application settings - coming soon" };
 

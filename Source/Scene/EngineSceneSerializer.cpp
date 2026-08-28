@@ -62,14 +62,6 @@ juce::ValueTree EngineSceneSerializer::serializeScene(ce::engine::World& world)
             }
         }
 
-        if (auto* script = reg.try_get<ScriptSource>(entity))
-        {
-            juce::ValueTree sNode("ScriptSource");
-            sNode.setProperty("assetName", script->assetName, nullptr);
-            sNode.setProperty("code", script->source, nullptr);
-            entityNode.addChild(sNode, -1, nullptr);
-        }
-
         entitiesNode.addChild(entityNode, -1, nullptr);
     }
 
@@ -145,14 +137,6 @@ bool EngineSceneSerializer::restoreScene(ce::engine::World& world, const juce::V
             reg.emplace<MeshRenderer>(entity, mr);
         }
 
-        auto sNode = entityNode.getChildWithName("ScriptSource");
-        if (sNode.isValid())
-        {
-            ScriptSource script;
-            script.assetName = sNode.getProperty("assetName").toString();
-            script.source = sNode.getProperty("code").toString();
-            reg.emplace<ScriptSource>(entity, script);
-        }
     }
 
     for (const auto entityNode : entitiesNode)

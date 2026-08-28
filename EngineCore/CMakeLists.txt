@@ -7,6 +7,6 @@ add_library(engine_core STATIC
     src/world.cpp
     src/simulation.cpp
 )
-target_include_directories(engine_core PUBLIC include "${CMAKE_CURRENT_SOURCE_DIR}/../../../shared/CEL/include")
+target_include_directories(engine_core PUBLIC include)
 target_link_libraries(engine_core PUBLIC EnTT::EnTT node_system)
 target_compile_features(engine_core PUBLIC cxx_std_20)

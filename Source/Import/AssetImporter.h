@@ -15,7 +15,6 @@ class ViewportComponent;
 
 namespace ce::scene {
 class AssetCatalog;
-class ScriptCatalog;
 }
 
 namespace creation::assets {
@@ -54,7 +53,6 @@ struct ImportContext {
     ViewportComponent* viewport = nullptr; // for RunOnGLThread -- see ViewportComponent.h.
     audio::AudioCatalog* audioCatalog = nullptr;
     juce::AudioFormatManager* audioFormatManager = nullptr;
-    scene::ScriptCatalog* scriptCatalog = nullptr; // GS7.
     AnimationImportOptions animationOptions;
 };
 

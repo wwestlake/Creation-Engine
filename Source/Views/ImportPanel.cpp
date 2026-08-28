@@ -90,7 +90,6 @@ ImportPanel::ImportPanel(engine::World& world, ViewportComponent& viewport) {
     context_.viewport = &viewport;
     context_.audioCatalog = &audioCatalog_;
     context_.audioFormatManager = &audioFormatManager_;
-    context_.scriptCatalog = &viewport.Scripts(); // GS7.
     // context_.vfs stays null -- nothing registered yet persists into the
     // VirtualFileSystem, only the live AssetCatalog/AudioCatalog (see
     // GltfAssetImporter/AudioAssetImporter).

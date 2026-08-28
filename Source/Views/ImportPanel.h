@@ -89,7 +89,7 @@ private:
     juce::Label titleLabel_{ {}, "Import" };
     juce::Label dropZoneLabel_{ {},
                                  "Drag files here to import\n(currently: glTF/GLB/OBJ models, WAV/AIFF/FLAC audio, "
-                                 "PNG/JPG/TGA/BMP/HDR textures, .cel scripts)" };
+                                 "PNG/JPG/TGA/BMP/HDR textures)" };
     juce::TextEditor log_;
 
     juce::Label audioClipsLabel_{ {}, "Audio Clips" };

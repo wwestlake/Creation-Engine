@@ -42,8 +42,7 @@ public:
     // never baked into `albedo` itself -- `albedo` is this shared asset's
     // own authored color (several entities can point at the same
     // Material, per MeshRenderer's own comment), while `tint` is where a
-    // CEL script/node graph's runtime set_color call actually lands (see
-    // ce::engine::Tint in EngineCore/include/engine/core_components.h).
+    // runtime graph or host capability updates (see ce::engine::Tint).
     // Multiplying at the uniform boundary keeps the shared asset
     // untouched no matter how many tinted instances read it.
     void ApplyUniforms(juce::OpenGLShaderProgram& program, juce::Vector3D<float> tint = { 1.0f, 1.0f, 1.0f }) const;

@@ -1,0 +1,15 @@
+manifest "{\"name\":\"engine_lifecycle\",\"version\":\"0.1.0\",\"description\":\"Creation Engine built-in FRust lifecycle proof plugin\",\"entryPoints\":[\"on_init\",\"on_event\",\"on_unload\"],\"intendedApplications\":[\"creation-engine\"],\"requiredHostFunctions\":[{\"name\":\"engine_current_tick\",\"description\":\"Reads the authoritative Engine simulation tick.\"}]}";
+
+extern fn engine_current_tick() -> i64;
+
+pub fn on_init() -> i64 = {
+    engine_current_tick()
+}
+
+pub fn on_event(id: i64, argument: i64) -> i64 = {
+    engine_current_tick() + id + argument
+}
+
+pub fn on_unload() -> i64 = {
+    0
+}
