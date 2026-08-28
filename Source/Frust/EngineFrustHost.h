@@ -31,12 +31,15 @@ public:
     EngineFrustHost(const EngineFrustHost&) = delete;
     EngineFrustHost& operator=(const EngineFrustHost&) = delete;
 
+    bool load(const std::string& pluginPath, std::string& error);
     bool loadBundled(std::string& error);
     void dispatch(EngineFrustEvent event, std::int64_t argument = 0);
     [[nodiscard]] bool isLoaded() const noexcept;
 
 private:
     static std::int64_t currentTick();
+    static std::int64_t firstTransformEntity();
+    static std::int64_t setPositionX(std::int64_t entityId, std::int64_t positionX);
 
     static EngineFrustHost* activeHost;
 

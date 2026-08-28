@@ -1,34 +1,36 @@
-#include <creation/frust/PluginRuntime.h>
+#include "Frust/EngineFrustHost.h"
+
+#include "engine/core_components.h"
+#include "engine/world.h"
 
 #include <cstdint>
 #include <iostream>
 #include <string>
 
-namespace
-{
-std::int64_t currentTick()
-{
-    return 41;
-}
-}
-
 int main()
 {
-    creation::frust::PluginRuntime runtime("creation-engine");
-    runtime.registerHostFunction("engine_current_tick", reinterpret_cast<void*>(&currentTick));
+    ce::engine::World world;
+    const auto entity = world.CreateEntity();
+    world.Registry().emplace<ce::engine::Transform>(entity, ce::engine::Transform{});
+    for (int index = 0; index < 41; ++index) {
+        world.AdvanceTick();
+    }
+
+    ce::frust::EngineFrustHost host(world);
 
     std::string error;
-    if (!runtime.load(CE_ENGINE_LIFECYCLE_PLUGIN, error)) {
+    if (!host.load(CE_ENGINE_LIFECYCLE_PLUGIN, error)) {
         std::cerr << "Could not load Engine FRust plugin: " << error << '\n';
         return 1;
     }
 
-    const auto result = runtime.callEvent(3, 5);
-    if (result != 49) {
-        std::cerr << "Unexpected FRust lifecycle result: " << result << '\n';
+    host.dispatch(ce::frust::EngineFrustEvent::simulationTick, 5);
+    const auto result = world.Registry().get<ce::engine::Transform>(entity).position.x;
+    if (result != 5.0f) {
+        std::cerr << "FRust plugin did not update the Engine transform: " << result << '\n';
         return 1;
     }
 
-    std::cout << "Creation Engine FRust lifecycle plugin passed." << '\n';
+    std::cout << "Creation Engine FRust transform capability passed." << '\n';
     return 0;
 }
