@@ -24,6 +24,7 @@ juce::Vector3D<float> FreeCamera::FlatForward() const {
 }
 
 void FreeCamera::mouseDown(const juce::MouseEvent& event) {
+    viewport_.grabKeyboardFocus();
     if (!event.mods.isRightButtonDown()) {
         return;
     }
@@ -75,6 +76,9 @@ void FreeCamera::Update(float deltaSeconds) {
     // is JUCE's own mechanism for "is my app actually the active one right
     // now" — exactly the guard needed here.
     if (!juce::Process::isForegroundProcess()) {
+        return;
+    }
+    if (firstPerson && !viewport_.hasKeyboardFocus(true)) {
         return;
     }
 

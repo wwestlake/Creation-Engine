@@ -36,6 +36,7 @@ std::array<float, 9> ExtractUpperLeft3x3(const juce::Matrix3D<float>& m) {
 namespace ce {
 
 ViewportComponent::ViewportComponent(engine::World& world) : world_(world), freeCamera_(*this) {
+    setWantsKeyboardFocus(true);
     openGLContext_.setOpenGLVersionRequired(juce::OpenGLContext::openGL4_1);
     openGLContext_.setRenderer(this);
     openGLContext_.attachTo(*this);
