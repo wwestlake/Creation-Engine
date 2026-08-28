@@ -24,6 +24,23 @@ int main()
         std::cerr << "Could not load object behavior: " << error << '\n';
         return 1;
     }
+    const auto* selectNode = host.nodeLibraries().FindNodeType("core_select");
+    if (selectNode == nullptr || selectNode->frustEntryPoint != "core_select" ||
+        selectNode->inputs.size() != 1 || selectNode->outputs.size() != 1)
+    {
+        std::cerr << "Object behavior plugin did not register its generic node library." << '\n';
+        return 1;
+    }
+    const auto* triggerNode = host.nodeLibraries().FindNodeType("core_trigger");
+    const auto* repeatNode = host.nodeLibraries().FindNodeType("core_repeat");
+    if (triggerNode == nullptr || triggerNode->outputs.size() != 1 ||
+        triggerNode->outputs.front().name != "then" || repeatNode == nullptr ||
+        repeatNode->outputs.size() != 2 || repeatNode->outputs.front().name != "body" ||
+        repeatNode->outputs.back().name != "completed")
+    {
+        std::cerr << "FRust callable or loop node reflection did not preserve execution exits." << '\n';
+        return 1;
+    }
 
     const auto& registry = world.Registry();
     host.prepareLevel(7);

@@ -1,0 +1,13 @@
+// This is a source module, not a separately loadable plugin. Generated
+// behavior roots import it with `use self::CoreNodesLibrary;` so every call
+// below is compiled into the same FRust module as the graph.
+node pure pub fn core_add(left: i64, right: i64) -> i64 = { left + right }
+node pure pub fn core_subtract(left: i64, right: i64) -> i64 = { left - right }
+node pure pub fn core_multiply(left: i64, right: i64) -> i64 = { left * right }
+node pure pub fn core_equal(left: i64, right: i64) -> bool = { left == right }
+node pure pub fn core_less_than(left: i64, right: i64) -> bool = { left < right }
+node pure pub fn core_not(value: bool) -> bool = { !value }
+
+// A minimal executable-flow primitive used by graph compilation smoke tests.
+// Real action nodes can take typed data inputs and call registered host APIs.
+node callable pub fn core_trigger() -> i64 = { 1 }

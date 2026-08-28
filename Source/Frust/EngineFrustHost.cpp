@@ -1,4 +1,5 @@
 #include "Frust/EngineFrustHost.h"
+#include "Frust/EngineNodeLibraryLoader.h"
 
 #include <algorithm>
 
@@ -37,19 +38,32 @@ EngineFrustHost::~EngineFrustHost()
 
 bool EngineFrustHost::load(const std::string& pluginPath, std::string& error)
 {
-    return runtime.load(pluginPath, error);
+    if (!runtime.load(pluginPath, error)) {
+        return false;
+    }
+    if (registerNodeLibraries(creation::frust::PluginRuntime::defaultPluginKey, error)) {
+        return true;
+    }
+    runtime.unload();
+    return false;
 }
 
 bool EngineFrustHost::loadBundled(std::string& error)
 {
     const auto executable = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
-    const auto pluginFile = executable.getParentDirectory().getChildFile("plugins").getChildFile("EngineLifecycle.frust");
-    if (!pluginFile.existsAsFile()) {
+    const auto plugins = executable.getParentDirectory().getChildFile("plugins");
+    const auto pluginFile = plugins.getChildFile("EngineLifecycle.frust");
+    const auto coreNodesFile = plugins.getChildFile("CoreNodes.frust");
+    if (!pluginFile.existsAsFile() || !coreNodesFile.existsAsFile()) {
         error = "Bundled EngineLifecycle.frust plugin was not found beside the executable.";
         return false;
     }
-
-    return load(pluginFile.getFullPathName().toStdString(), error);
+    if (!load(pluginFile.getFullPathName().toStdString(), error)) return false;
+    constexpr const char* coreNodesKey = "built-in:core-nodes";
+    if (!runtime.load(coreNodesKey, coreNodesFile.getFullPathName().toStdString(), error)) return false;
+    if (registerNodeLibraries(coreNodesKey, error)) return true;
+    runtime.unload(coreNodesKey);
+    return false;
 }
 
 bool EngineFrustHost::loadObjectBehavior(const std::string& podId, const std::string& pluginPath, std::string& error)
@@ -58,7 +72,15 @@ bool EngineFrustHost::loadObjectBehavior(const std::string& podId, const std::st
         error = "An object behavior needs a non-empty pod identifier.";
         return false;
     }
-    return runtime.load(behaviorKey(podId), pluginPath, error);
+    const auto key = behaviorKey(podId);
+    if (!runtime.load(key, pluginPath, error)) {
+        return false;
+    }
+    if (registerNodeLibraries(key, error)) {
+        return true;
+    }
+    runtime.unload(key);
+    return false;
 }
 
 void EngineFrustHost::dispatch(EngineFrustEvent event, std::int64_t argument)
@@ -142,6 +164,11 @@ bool EngineFrustHost::isLoaded() const noexcept
 bool EngineFrustHost::isObjectBehaviorLoaded(const std::string& podId) const noexcept
 {
     return runtime.isLoaded(behaviorKey(podId));
+}
+
+bool EngineFrustHost::registerNodeLibraries(const std::string& key, std::string& error)
+{
+    return RegisterPluginNodeLibraries(runtime.nodeLibraries(key), nodeLibraries_, error);
 }
 
 std::int64_t EngineFrustHost::currentTick()

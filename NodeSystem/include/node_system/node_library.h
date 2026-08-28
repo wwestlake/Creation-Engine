@@ -16,6 +16,8 @@ struct NodeLibraryDescriptor {
     std::string displayName;
     std::string description;
     GraphTarget target = GraphTarget::Behavior;
+    // Compiler-provided FRust modules a generated behavior root imports.
+    std::vector<std::string> frustSourceModules;
     std::vector<NodeTypeDescriptor> nodeTypes;
 };
 

@@ -8,6 +8,7 @@
 
 #include <entt/entt.hpp>
 #include <creation/frust/PluginRuntime.h>
+#include "node_system/node_library.h"
 
 namespace ce::engine
 {
@@ -46,6 +47,7 @@ public:
     void notifyObjectDestroyed(entt::entity entity, std::int64_t tick);
     [[nodiscard]] bool isLoaded() const noexcept;
     [[nodiscard]] bool isObjectBehaviorLoaded(const std::string& podId) const noexcept;
+    [[nodiscard]] const node_system::NodeLibraryRegistry& nodeLibraries() const noexcept { return nodeLibraries_; }
 
 private:
     static std::int64_t currentTick();
@@ -57,6 +59,7 @@ private:
     void ensureObjectLifecycle(std::int64_t entityId, const std::string& podId, std::int64_t tick);
     void invokeObjectHook(std::int64_t entityId, const std::string& podId, const char* hookName,
                           EngineFrustEvent fallbackEvent, std::int64_t tick);
+    bool registerNodeLibraries(const std::string& key, std::string& error);
 
     struct ObjectLifecycle
     {
@@ -68,6 +71,7 @@ private:
 
     engine::World& world;
     creation::frust::PluginRuntime runtime { "creation-engine" };
+    node_system::NodeLibraryRegistry nodeLibraries_;
     std::int64_t activeObjectEntityId = -1;
     bool playActive = false;
     std::unordered_map<std::int64_t, ObjectLifecycle> objectLifecycles;
