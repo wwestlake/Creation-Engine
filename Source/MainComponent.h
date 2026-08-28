@@ -11,11 +11,13 @@
 #include "Render/ViewportComponent.h"
 #include "Views/HierarchyPanel.h"
 #include "Views/ImportPanel.h"
+#include "Views/FrustLogicPanel.h"
 #include "Views/LightPanel.h"
 #include "Views/MaterialsPanel.h"
 #include "Views/PlaceholderPanel.h"
 #include "Views/TransformPanel.h"
 #include "Views/ViewModeBar.h"
+#include "Runtime/GameClientWindow.h"
 
 #include <creation/assets/ProjectSession.h>
 #include <creation/assets/ProjectWorkspaceService.h>
@@ -44,6 +46,7 @@ private:
     void SetActiveMode(ce::WorkspaceMode mode);
     void SetPlaying(bool playing);
     void initialiseDockingWorkspace();
+    void openGameClient();
 
     void createNewProject();
     void openProject(const juce::String& projectId);
@@ -77,6 +80,7 @@ private:
     ce::HierarchyPanel hierarchyPanel_;
     juce::Label inspectorTitle_ { {}, "Inspector" };
     juce::Label tickLabel_;
+    juce::TextButton runGameButton_ { "Run Game Client" };
 
     ce::TransformPanel transformPanel_;
 
@@ -95,11 +99,12 @@ private:
 
     // --- Other modes: stand-ins until their milestones land ---
     ce::PlaceholderPanel materialsPanel_ { "Materials", "Node-based material editor - coming soon" };
-    ce::PlaceholderPanel frustAutomationPanel_ { "FRust Automation", "FRust event graphs and visual automation are being migrated into Creation Engine." };
+    std::unique_ptr<ce::views::FrustLogicPanel> frustAutomationPanel_;
     ce::PlaceholderPanel serverPanel_ { "Server", "Dedicated server operational view - coming soon" };
     ce::PlaceholderPanel settingsPanel_ { "Settings", "Application settings - coming soon" };
 
     std::unique_ptr<CreationDock::DockManager> dockManager_;
+    std::vector<std::unique_ptr<ce::runtime::GameClientWindow>> gameClients_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

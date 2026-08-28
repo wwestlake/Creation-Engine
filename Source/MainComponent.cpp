@@ -31,6 +31,7 @@ MainComponent::MainComponent()
     if (!frustHost_.loadBundled(frustError)) {
         juce::Logger::writeToLog("Creation Engine FRust host: " + juce::String(frustError));
     }
+    frustAutomationPanel_ = std::make_unique<ce::views::FrustLogicPanel>(frustHost_.nodeLibraries());
 
     headerBar_.setAppTitle("Creation Engine");
     headerBar_.setLogoImage(creation::ui::getSuiteLogoImage(creation::ui::SuiteLogoId::engine));
@@ -74,6 +75,9 @@ MainComponent::MainComponent()
 
     addAndMakeVisible(viewModeBar_);
     viewModeBar_.onModeSelected = [this](ce::WorkspaceMode mode) { SetActiveMode(mode); };
+    runGameButton_.onClick = [this] { openGameClient(); };
+    runGameButton_.setTooltip("Open an isolated game client window. Click again for another local multiplayer client.");
+    addAndMakeVisible(runGameButton_);
 
     hierarchyPanel_.onSelectionChanged = [this](entt::entity entity) {
         transformPanel_.SetSelectedEntity(entity);
@@ -97,6 +101,7 @@ MainComponent::MainComponent()
 
 MainComponent::~MainComponent() {
     stopTimer();
+    gameClients_.clear();
 }
 
 void MainComponent::paint(juce::Graphics& g) {
@@ -108,8 +113,16 @@ void MainComponent::resized() {
 
     headerBar_.setBounds(bounds.removeFromTop(96));
     viewModeBar_.setBounds(bounds.removeFromTop(56));
+    runGameButton_.setBounds(getWidth() - 170, 105, 158, 34);
 
     if (dockManager_ != nullptr) dockManager_->setBounds(bounds);
+}
+
+void MainComponent::openGameClient()
+{
+    const int clientNumber = static_cast<int>(gameClients_.size()) + 1;
+    gameClients_.push_back(std::make_unique<ce::runtime::GameClientWindow>(clientNumber));
+    headerBar_.setStatusText("Running " + juce::String(gameClients_.size()) + " game client" + (gameClients_.size() == 1 ? "" : "s"));
 }
 
 void MainComponent::SetActiveMode(ce::WorkspaceMode mode) {
@@ -130,7 +143,7 @@ void MainComponent::initialiseDockingWorkspace()
     dockManager_->registerPanel("transform", "Transform", std::make_unique<NonOwningPanelHost>(transformPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("materials-pbr", "Material Inspector", std::make_unique<NonOwningPanelHost>(pbrMaterialPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("lighting", "Lighting", std::make_unique<NonOwningPanelHost>(lightPanel_), CreationDock::DockTargetZone::Right);
-    dockManager_->registerPanel("logic", "FRust Logic", std::make_unique<NonOwningPanelHost>(frustAutomationPanel_), CreationDock::DockTargetZone::CenterTab);
+    dockManager_->registerPanel("logic", "FRust Logic", std::make_unique<NonOwningPanelHost>(*frustAutomationPanel_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("materials", "Materials", std::make_unique<NonOwningPanelHost>(materialsPanel_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("assets", "Assets & Import", std::make_unique<NonOwningPanelHost>(importPanel_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("server", "Server", std::make_unique<NonOwningPanelHost>(serverPanel_), CreationDock::DockTargetZone::Bottom);
