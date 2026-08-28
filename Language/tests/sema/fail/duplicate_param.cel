@@ -1,3 +1,0 @@
-func Bad(a: int, a: float) {
-    log("hi");
-}

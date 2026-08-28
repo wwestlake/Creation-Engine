@@ -2,9 +2,6 @@
 
 #include <creation/services/SuiteVfsJsonStore.h>
 
-#if CE_ENABLE_SCRIPTING
-#include "lang/jit/script_runtime.h"
-#endif
 #include <creation/ui/CreationSuiteLogos.h>
 #include "Scene/EngineSceneSerializer.h"
 
@@ -12,17 +9,16 @@ MainComponent::MainComponent()
     : viewport_(world_),
       hierarchyPanel_(world_, viewport_),
       transformPanel_(world_),
-      scriptPanel_(world_, viewport_),
       pbrMaterialPanel_(world_),
       importPanel_(world_, viewport_),
-      lightPanel_(viewport_),
-      logicPanel_(world_) {
+      lightPanel_(viewport_) {
     juce::String suiteErr;
     suiteSettings_ = suiteSettingsStore_.load(suiteErr);
 
-#if CE_ENABLE_SCRIPTING
-    world_.SetScriptRuntime(ce::lang::jit::CreateScriptRuntime());
-#endif
+    std::string frustError;
+    if (!frustHost_.loadBundled(frustError)) {
+        juce::Logger::writeToLog("Creation Engine FRust host: " + juce::String(frustError));
+    }
 
     headerBar_.setAppTitle("Creation Engine");
     headerBar_.setLogoImage(creation::ui::getSuiteLogoImage(creation::ui::SuiteLogoId::engine));
@@ -39,7 +35,7 @@ MainComponent::MainComponent()
                                      "Creation Engine",
                                      creation::assets::SuiteAppDomain::engine,
                                      juce::Colour(0xff15181d),
-                                     creation::ui::SuiteAssetManagerCapability{ "Creation Engine", creation::assets::SuiteAppDomain::engine, { ".cel" }, { ".cel" } }
+                                     creation::ui::SuiteAssetManagerCapability{ "Creation Engine", creation::assets::SuiteAppDomain::engine, { ".frust" }, { ".frust" } }
                                  },
                                  [this](const juce::String& status)
                                  {
@@ -70,9 +66,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(hierarchyPanel_);
     hierarchyPanel_.onSelectionChanged = [this](entt::entity entity) {
         transformPanel_.SetSelectedEntity(entity);
-        scriptPanel_.SetSelectedEntity(entity);
         pbrMaterialPanel_.SetSelectedEntity(entity);
-        logicPanel_.SetSelectedEntity(entity);
     };
     addAndMakeVisible(viewport_);
 
@@ -84,13 +78,12 @@ MainComponent::MainComponent()
     addAndMakeVisible(tickLabel_);
 
     addAndMakeVisible(transformPanel_);
-    addAndMakeVisible(scriptPanel_);
     addAndMakeVisible(pbrMaterialPanel_);
     addAndMakeVisible(lightPanel_);
 
     addAndMakeVisible(materialsPanel_);
     addAndMakeVisible(importPanel_);
-    addAndMakeVisible(logicPanel_);
+    addAndMakeVisible(frustAutomationPanel_);
     addAndMakeVisible(serverPanel_);
     addAndMakeVisible(settingsPanel_);
 
@@ -128,10 +121,6 @@ void MainComponent::resized() {
     inspectorBounds.removeFromTop(12);
     transformPanel_.setBounds(inspectorBounds.removeFromTop(ce::TransformPanel::kPreferredHeight));
 
-    inspectorBounds.removeFromTop(12);
-    scriptPanel_.setBounds(inspectorBounds.removeFromTop(ce::ScriptPanel::kPreferredHeight));
-
-    inspectorBounds.removeFromTop(12);
     pbrMaterialPanel_.setBounds(inspectorBounds.removeFromTop(ce::MaterialsPanel::kPreferredHeight));
 
     inspectorBounds.removeFromTop(16);
@@ -141,7 +130,7 @@ void MainComponent::resized() {
 
     materialsPanel_.setBounds(contentArea);
     importPanel_.setBounds(contentArea);
-    logicPanel_.setBounds(contentArea);
+    frustAutomationPanel_.setBounds(contentArea);
     serverPanel_.setBounds(contentArea);
     settingsPanel_.setBounds(contentArea);
 }
@@ -155,19 +144,25 @@ void MainComponent::SetActiveMode(ce::WorkspaceMode mode) {
     inspectorTitle_.setVisible(showScene);
     tickLabel_.setVisible(showScene);
     transformPanel_.setVisible(showScene);
-    scriptPanel_.setVisible(showScene);
     pbrMaterialPanel_.setVisible(showScene);
     lightPanel_.setVisible(showScene);
 
     materialsPanel_.setVisible(mode == ce::WorkspaceMode::Materials);
     importPanel_.setVisible(mode == ce::WorkspaceMode::Assets);
-    logicPanel_.setVisible(mode == ce::WorkspaceMode::Logic);
+    frustAutomationPanel_.setVisible(mode == ce::WorkspaceMode::Logic);
     serverPanel_.setVisible(mode == ce::WorkspaceMode::Server);
     settingsPanel_.setVisible(mode == ce::WorkspaceMode::Settings);
 }
 
 void MainComponent::SetPlaying(bool playing) {
+    if (isPlaying_ == playing) {
+        return;
+    }
+
     isPlaying_ = playing;
+    frustHost_.dispatch(playing ? ce::frust::EngineFrustEvent::simulationStarted
+                                : ce::frust::EngineFrustEvent::simulationPaused,
+                        static_cast<std::int64_t>(world_.CurrentTick()));
     headerBar_.setPlaybackVisualState(isPlaying_, false);
     headerBar_.setStatusText(isPlaying_ ? "Playing" : "Editing");
 }
@@ -181,13 +176,13 @@ void MainComponent::timerCallback() {
         // server genuinely execute scripts identically. 1/30s matches
         // this timer's own 30 Hz rate (startTimerHz(30) below).
         ce::engine::Simulation::Step(world_, 1.0f / 30.0f);
+        frustHost_.dispatch(ce::frust::EngineFrustEvent::simulationTick,
+                            static_cast<std::int64_t>(world_.CurrentTick()));
     }
     tickLabel_.setText("tick " + juce::String(world_.CurrentTick()), juce::dontSendNotification);
     hierarchyPanel_.Refresh();
     transformPanel_.Refresh();
-    scriptPanel_.Refresh();
     pbrMaterialPanel_.Refresh();
-    logicPanel_.Refresh();
 }
 
 void MainComponent::createNewProject()
@@ -286,8 +281,6 @@ void MainComponent::loadSessionFromDisk()
             {
                 hierarchyPanel_.Refresh();
                 transformPanel_.Refresh();
-                scriptPanel_.Refresh();
-                logicPanel_.Refresh();
                 pbrMaterialPanel_.Refresh();
             }
         }

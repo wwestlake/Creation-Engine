@@ -1,3 +1,0 @@
-func Bad() {
-    log("this string never closes
-}

@@ -1,3 +1,0 @@
-func Bad() {
-    var x: nosuchtype = 1;
-}

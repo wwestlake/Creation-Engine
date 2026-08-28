@@ -1,4 +1,0 @@
-func Bad() {
-    var x: int = 1;
-    var x: int = 2;
-}

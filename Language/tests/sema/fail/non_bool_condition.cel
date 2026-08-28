@@ -1,5 +1,0 @@
-func Bad(x: int) {
-    if (x) {
-        log("nope");
-    }
-}

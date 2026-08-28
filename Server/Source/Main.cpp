@@ -1,30 +1,17 @@
 #include <JuceHeader.h>
 
-#include <cmath>
-#include <fstream>
-#include <iomanip>
 #include <iostream>
-#include <sstream>
 
-#include "engine/core_components.h"
-#include "engine/script_component.h"
 #include "engine/simulation.h"
 #include "engine/world.h"
-#include "lang/jit/script_runtime.h"
 
 namespace {
 
 struct ServerConfig {
     int port = 7777;
     double tickRateHz = 30.0;
-    juce::String scriptPath;
-    // -1: run forever (the real dedicated-server loop below). >= 0: run
-    // exactly this many Simulation::Step calls then dump state and
-    // exit -- a deterministic headless batch mode, not a "real" server
-    // feature, that exists so `--script`'s behavior can be verified by
-    // CTest (see Language/tests/simulation/) and cross-checked
-    // bit-for-bit against celc --run-simulation (same script, same
-    // ticks, same dt) without needing a running network client.
+    // -1 runs the server loop forever. A non-negative value is a useful
+    // deterministic smoke-test mode for the host simulation clock.
     int ticks = -1;
     float dt = -1.0f; // <0: derive from tickRateHz.
 };
@@ -39,9 +26,6 @@ ServerConfig ParseArgs(const juce::ArgumentList& args) {
     }
     if (auto index = args.indexOfOption("--tick-rate"); index >= 0 && index + 1 < args.size()) {
         config.tickRateHz = args[index + 1].text.getDoubleValue();
-    }
-    if (auto index = args.indexOfOption("--script"); index >= 0 && index + 1 < args.size()) {
-        config.scriptPath = args[index + 1].text;
     }
     if (auto index = args.indexOfOption("--ticks"); index >= 0 && index + 1 < args.size()) {
         config.ticks = args[index + 1].text.getIntValue();
@@ -61,48 +45,13 @@ int main(int argc, char* argv[]) {
     ServerConfig config = ParseArgs(args);
     ce::engine::World world;
 
-    entt::entity scriptEntity = entt::null;
-    if (config.scriptPath.isNotEmpty()) {
-        std::ifstream file(config.scriptPath.toStdString());
-        if (!file) {
-            std::cerr << "[server] cannot open script " << config.scriptPath << std::endl;
-            return 1;
-        }
-        std::ostringstream sourceStream;
-        sourceStream << file.rdbuf();
-
-        auto runtime = ce::lang::jit::CreateScriptRuntime();
-        std::string error;
-        auto compiled = runtime->Compile(sourceStream.str(), error);
-        if (compiled == nullptr) {
-            std::cerr << "[server] script compile failed: " << error << std::endl;
-            return 1;
-        }
-        world.SetScriptRuntime(runtime);
-        scriptEntity = world.CreateEntity();
-        world.Registry().emplace<ce::engine::ScriptComponent>(scriptEntity, ce::engine::ScriptComponent{ compiled });
-    }
-
     const float stepDt = config.dt >= 0.0f ? config.dt : static_cast<float>(1.0 / config.tickRateHz);
 
     if (config.ticks >= 0) {
-        // Headless batch mode -- see ServerConfig::ticks's own comment.
         for (int i = 0; i < config.ticks; ++i) {
             ce::engine::Simulation::Step(world, stepDt);
         }
-
-        std::lock_guard<std::mutex> lock(world.RegistryMutex());
-        if (scriptEntity != entt::null && world.Registry().valid(scriptEntity)) {
-            const auto& script = world.Registry().get<ce::engine::ScriptComponent>(scriptEntity);
-            const auto* transform = world.Registry().try_get<ce::engine::Transform>(scriptEntity);
-            const ce::engine::Vec3 p = transform != nullptr ? transform->position : ce::engine::Vec3{};
-            std::cout << std::setprecision(9) << p.x << " " << p.y << " " << p.z << "\n";
-            std::cout << std::floor(p.x * p.x + p.z * p.z + 0.5f) << std::endl;
-            if (script.faulted) {
-                std::cerr << "[server] script faulted: " << script.faultMessage << std::endl;
-                return 1;
-            }
-        }
+        std::cout << "[server] completed " << world.CurrentTick() << " ticks" << std::endl;
         return 0;
     }
 

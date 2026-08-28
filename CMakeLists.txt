@@ -13,45 +13,6 @@ endif()
 
 enable_testing()
 
-# --- GS: CEL scripting language (LALR parser + LLVM JIT) -----------------
-# LLVM comes from a vcpkg-managed install (see vcpkg.json's pinned
-# builtin-baseline), not the full vcpkg CMake toolchain-file integration
-# -- that would require CMAKE_TOOLCHAIN_FILE to be set on this build
-# directory's very first configure, which AGENTS.md says not to do
-# without asking first. `vcpkg install` run from the repo root (manifest
-# mode, per vcpkg.json) lands packages in vcpkg_installed/<triplet>/ next
-# to the manifest by default -- pointing CMAKE_PREFIX_PATH there is
-# additive and safe to introduce on any reconfigure of the existing
-# build/ directory, and needs no knowledge of where the vcpkg tool
-# itself is checked out.
-option(CE_ENABLE_SCRIPTING "Build the CEL scripting language module (Language/, requires vcpkg LLVM)" ON)
-if(CE_ENABLE_SCRIPTING)
-    set(CE_VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/vcpkg_installed/x64-windows")
-    if(NOT EXISTS "${CE_VCPKG_INSTALLED_DIR}")
-        set(CE_VCPKG_INSTALLED_DIR "D:/000 Creation Engine/vcpkg_installed/x64-windows")
-    endif()
-    if(NOT EXISTS "${CE_VCPKG_INSTALLED_DIR}")
-        message(FATAL_ERROR "CE_ENABLE_SCRIPTING is ON but ${CE_VCPKG_INSTALLED_DIR} doesn't exist. Run `vcpkg install --triplet x64-windows` from the repo root first (see README.md's \"Scripting language build\" section), or configure with -DCE_ENABLE_SCRIPTING=OFF to skip the scripting module.")
-    endif()
-    list(APPEND CMAKE_PREFIX_PATH "${CE_VCPKG_INSTALLED_DIR}")
-
-    # Suite-level CEL: shared/NodeSystem and shared/CEL are the authoritative
-    # source for the frontend/JIT/nodegen (creation_suite_cel_frontend/jit/nodegen,
-    # aliased to ce_lang_frontend/ce_lang_jit/ce_lang_nodegen) -- added here,
-    # before Language/, since Language/CMakeLists.txt calls
-    # target_include_directories() on these targets directly, which requires
-    # them to already exist at that point (unlike target_link_libraries,
-    # which CMake resolves lazily against the full target graph).
-    if(NOT TARGET node_system)
-        add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/NodeSystem" CreationSuiteSharedNodeSystem)
-    endif()
-    if(NOT TARGET ce_lang_frontend)
-        add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/CEL" CreationSuiteSharedCel)
-    endif()
-
-    add_subdirectory(Language)
-endif()
-
 add_subdirectory("${JUCE_DIR}" juce)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/entt/CMakeLists.txt")
     add_subdirectory(third_party/entt)
@@ -62,35 +23,21 @@ else()
 endif()
 
 # --- Shared, framework-agnostic libraries --------------------------------
-# NodeSystem now comes from shared/NodeSystem (added above, before
-# Language/, when CE_ENABLE_SCRIPTING is on). If scripting is disabled,
-# fall back to Engine's own local copy so NodeSystem-dependent code
-# (HierarchyPanel, node editor UI) still has a target to link.
-if(NOT TARGET node_system)
-    add_subdirectory(NodeSystem)
-endif()
+# NodeSystem is language-neutral graph infrastructure. It remains in the
+# Engine while FRust visual automation is introduced on top of it.
+add_subdirectory(NodeSystem)
 add_subdirectory(EngineCore)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/VFS" CreationSuiteSharedVFS)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/AssetSystem" CreationSuiteSharedAssetSystem)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/Services" CreationSuiteSharedServices)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/UI" CreationSuiteSharedUI)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/FrustPluginRuntime" CreationSuiteSharedFrustPluginRuntime)
 
 # --- Shared, juce_core-only libraries -------------------------------------
 # Not framework-agnostic like the two above (needs juce::juce_core for
 # juce::ZipFile), but still no GUI/rendering dependency, so a future
 # server-side asset loader could link this without pulling in anything
 # beyond what CreationEngineServer already links.
-
-# ce_lang_jit/ce_engine_lang_world/ce_lang_nodegen only exist when
-# CE_ENABLE_SCRIPTING is on (they come from shared/CEL + Language/, both
-# skipped above otherwise) -- linking them unconditionally fails at link
-# time (not configure time, since target_link_libraries doesn't validate
-# target existence until generate) with a plain "cannot open input file"
-# once scripting is disabled.
-set(CE_SCRIPTING_LINK_LIBS "")
-if(CE_ENABLE_SCRIPTING)
-    set(CE_SCRIPTING_LINK_LIBS ce_lang_jit ce_engine_lang_world ce_lang_nodegen)
-endif()
 
 # --- Client / editor executable ------------------------------------------
 # Per spec section 1, the editor and the runtime are the same binary in
@@ -111,6 +58,8 @@ juce_add_gui_app(CreationEngineEditor
 add_custom_command(TARGET CreationEngineEditor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/claude-$<LOWER_CASE:$<CONFIG>>-bin"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineEditor>" "D:/CreationSuite-Workspaces/claude-$<LOWER_CASE:$<CONFIG>>-bin/"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/EngineLifecycle.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
     COMMENT "Copying CreationEngineEditor to the shared claude bin directory"
 )
 
@@ -120,6 +69,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Main.cpp
     Source/MainComponent.h
     Source/MainComponent.cpp
+    Source/Frust/EngineFrustHost.h
+    Source/Frust/EngineFrustHost.cpp
     Source/Branding.h
     Source/Branding.cpp
     Source/Render/ViewportComponent.h
@@ -167,22 +118,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/TransformPanel.cpp
     Source/Views/MaterialsPanel.h
     Source/Views/MaterialsPanel.cpp
-    Source/Views/ScriptPanel.h
-    Source/Views/ScriptPanel.cpp
-    Source/Views/CelCodeTokeniser.h
-    Source/Views/CelCodeTokeniser.cpp
     Source/Views/ImportPanel.h
     Source/Views/ImportPanel.cpp
-    Source/Views/NodeEditor/NodeGraphComponent.h
-    Source/Views/NodeEditor/NodeGraphComponent.cpp
-    Source/Views/NodeEditor/NodePalette.h
-    Source/Views/NodeEditor/NodePalette.cpp
-    Source/Views/NodeEditor/NodeInspector.h
-    Source/Views/NodeEditor/NodeInspector.cpp
-    Source/Views/NodeEditor/GeneratedCodeView.h
-    Source/Views/NodeEditor/GeneratedCodeView.cpp
-    Source/Views/NodeEditor/LogicPanel.h
-    Source/Views/NodeEditor/LogicPanel.cpp
     Source/Scene/Components.h
     Source/Scene/EngineSceneSerializer.h
     Source/Scene/EngineSceneSerializer.cpp
@@ -190,8 +127,6 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Scene/AssetCatalog.cpp
     Source/Scene/AssetPlacement.h
     Source/Scene/AssetPlacement.cpp
-    Source/Scene/ScriptCatalog.h
-    Source/Scene/ScriptCatalog.cpp
     Source/Scene/AnimationSampler.h
     Source/Scene/AnimationSampler.cpp
     Source/Scene/AnimationSlicer.h
@@ -207,8 +142,6 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Import/Importers/AudioAssetImporter.cpp
     Source/Import/Importers/TextureAssetImporter.h
     Source/Import/Importers/TextureAssetImporter.cpp
-    Source/Import/Importers/ScriptAssetImporter.h
-    Source/Import/Importers/ScriptAssetImporter.cpp
     Source/Audio/AudioCatalog.h
     Source/Audio/AudioCatalog.cpp
     Source/Audio/AudioPreviewPlayer.h
@@ -225,7 +158,6 @@ target_compile_definitions(CreationEngineEditor PRIVATE
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:CreationEngineEditor,JUCE_VERSION>"
     CE_SHADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Source/Render/Shaders"
     CE_ASSET_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
-    CE_ENABLE_SCRIPTING=$<BOOL:${CE_ENABLE_SCRIPTING}>
 )
 
 target_link_libraries(CreationEngineEditor PRIVATE
@@ -235,7 +167,7 @@ target_link_libraries(CreationEngineEditor PRIVATE
     creation_suite_services
     creation_suite_ui
     creation_suite_ui_assets
-    ${CE_SCRIPTING_LINK_LIBS}
+    creation_suite_frust_plugin_runtime
     juce::juce_gui_extra
     juce::juce_opengl
     juce::juce_audio_basics
@@ -246,15 +178,16 @@ target_link_libraries(CreationEngineEditor PRIVATE
     juce::juce_recommended_warning_flags
 )
 
+add_executable(CreationEngineFrustPluginSmoke tests/EngineFrustPluginSmoke.cpp)
+target_link_libraries(CreationEngineFrustPluginSmoke PRIVATE creation_suite_frust_plugin_runtime)
+target_compile_definitions(CreationEngineFrustPluginSmoke PRIVATE
+    CE_ENGINE_LIFECYCLE_PLUGIN="${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/EngineLifecycle.frust"
+)
+add_test(NAME creation_engine_frust_plugin_smoke COMMAND CreationEngineFrustPluginSmoke)
+
 # --- Dedicated server executable ------------------------------------------
-# Headless build: no rendering, no client-only assets (spec section 6.2).
-# Only juce_core/juce_events for cross-platform utilities (threads, time,
-# argument parsing, logging) — never juce_gui_* or juce_opengl. GS6 adds
-# ce_lang_jit (CEL script compilation/execution via Simulation::Step) —
-# that's an LLVM dependency, not a GUI one, so it doesn't violate the
-# "headless" property above; Language's own header firewall (see
-# Language/include/lang/jit/runtime.h) keeps llvm/*.h out of every
-# translation unit outside Language/src/jit/ regardless.
+# Headless build: no rendering or client-only assets. Only juce_core and
+# juce_events provide cross-platform utilities for the server shell.
 juce_add_console_app(CreationEngineServer
     PRODUCT_NAME "Creation Engine Server"
     COMPANY_NAME "LagDaemon Software"
@@ -287,40 +220,12 @@ target_compile_definitions(CreationEngineServer PRIVATE
 target_link_libraries(CreationEngineServer PRIVATE
     engine_core
     node_system
-    ce_lang_jit
-    ce_engine_lang_world
     juce::juce_core
     juce::juce_events
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags
 )
-
-# GS6: the concrete proof of "the same rule module runs identically
-# client-side or server-side" -- runs the SAME script through celc
-# --run-simulation (Simulation::Step driven directly, no networking) and
-# CreationEngineServer --script/--ticks/--dt (its own headless batch
-# mode, see Server/Source/Main.cpp), and asserts their two-line stdout
-# is byte-for-byte identical. Lives here, not in Language/CMakeLists.txt,
-# since it's the one test that needs both executables and both are only
-# fully defined once the whole top-level configure has run.
-# celc only exists when CE_ENABLE_SCRIPTING is on (see the vcpkg-LLVM
-# gate near the top of this file) -- guard this test's registration so
-# a scripting-disabled configure (e.g. release CI, which never triggers
-# an LLVM build) doesn't fail at generate time referencing a target
-# that was never defined.
-if(TARGET celc AND TARGET CreationEngineServer)
-    add_test(
-        NAME gs6_simulation_server_parity
-        COMMAND ${CMAKE_COMMAND}
-                -DCELC_EXE=$<TARGET_FILE:celc>
-                -DSERVER_EXE=$<TARGET_FILE:CreationEngineServer>
-                -DTEST_CEL=${CMAKE_CURRENT_SOURCE_DIR}/Language/tests/simulation/orbit.cel
-                -DTICKS=300
-                -DDT=0.016666667
-                -P "${CMAKE_CURRENT_SOURCE_DIR}/Language/tests/run_simulation_parity_test.cmake"
-    )
-endif()
 
 install(TARGETS CreationEngineEditor
     RUNTIME DESTINATION .

@@ -1,3 +1,0 @@
-func Bad(message: entity) {
-    log(message);
-}

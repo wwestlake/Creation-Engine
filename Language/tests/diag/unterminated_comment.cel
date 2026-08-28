@@ -1,3 +1,0 @@
-var x: int = 1;
-/* this comment never closes
-var y: int = 2;

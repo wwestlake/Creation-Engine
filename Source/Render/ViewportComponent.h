@@ -16,7 +16,6 @@
 #include "Render/Scene/Mesh.h"
 #include "Render/Shaders/ShaderComposer.h"
 #include "Scene/AssetCatalog.h"
-#include "Scene/ScriptCatalog.h"
 
 namespace ce {
 
@@ -87,12 +86,6 @@ public:
     const scene::AssetCatalog& Catalog() const { return assetCatalog_; }
     scene::AssetCatalog& Catalog() { return assetCatalog_; }
 
-    // GS7: staged CEL script sources (Import Hub's ScriptAssetImporter),
-    // available for ScriptPanel's "Attach Script" combo the same way
-    // Catalog() is available for HierarchyPanel's "+Add" menu.
-    const scene::ScriptCatalog& Scripts() const { return scriptCatalog_; }
-    scene::ScriptCatalog& Scripts() { return scriptCatalog_; }
-
     // A point `distance` units in front of the free camera, for SC5's
     // "place a new entity where I'm looking" — reads the snapshot taken
     // under stateLock_ each frame (see stateLock_ doc above), not
@@ -120,7 +113,6 @@ private:
     std::unique_ptr<ShaderComposer> shaderComposer_;
     creation::assets::VirtualFileSystem vfs_;
     scene::AssetCatalog assetCatalog_;
-    scene::ScriptCatalog scriptCatalog_;
     bool hasSeededDemoScene_ = false;
     entt::entity demoEntity_ = entt::null;
 
