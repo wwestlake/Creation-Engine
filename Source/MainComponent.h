@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include <creation/ui/CreationSuiteHeaderBar.h>
 #include <creation/ui/SuiteShellController.h>
+#include <CreationDock/DockManager.h>
 
 #include "engine/simulation.h"
 #include "engine/world.h"
@@ -42,6 +43,7 @@ private:
     void timerCallback() override;
     void SetActiveMode(ce::WorkspaceMode mode);
     void SetPlaying(bool playing);
+    void initialiseDockingWorkspace();
 
     void createNewProject();
     void openProject(const juce::String& projectId);
@@ -96,6 +98,8 @@ private:
     ce::PlaceholderPanel frustAutomationPanel_ { "FRust Automation", "FRust event graphs and visual automation are being migrated into Creation Engine." };
     ce::PlaceholderPanel serverPanel_ { "Server", "Dedicated server operational view - coming soon" };
     ce::PlaceholderPanel settingsPanel_ { "Settings", "Application settings - coming soon" };
+
+    std::unique_ptr<CreationDock::DockManager> dockManager_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
