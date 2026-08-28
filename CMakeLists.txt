@@ -195,6 +195,35 @@ target_compile_definitions(CreationEngineFrustPluginSmoke PRIVATE
 )
 add_test(NAME creation_engine_frust_plugin_smoke COMMAND CreationEngineFrustPluginSmoke)
 
+add_executable(CreationEngineMultiPluginRuntimeSmoke
+    tests/MultiPluginRuntimeSmoke.cpp
+)
+target_link_libraries(CreationEngineMultiPluginRuntimeSmoke PRIVATE
+    creation_suite_frust_plugin_runtime
+)
+target_compile_definitions(CreationEngineMultiPluginRuntimeSmoke PRIVATE
+    CE_RUNTIME_ALPHA_PLUGIN="${CMAKE_CURRENT_SOURCE_DIR}/tests/plugins/RuntimeAlpha.frust"
+    CE_RUNTIME_BETA_PLUGIN="${CMAKE_CURRENT_SOURCE_DIR}/tests/plugins/RuntimeBeta.frust"
+)
+add_test(NAME creation_engine_multi_plugin_runtime_smoke COMMAND CreationEngineMultiPluginRuntimeSmoke)
+
+add_executable(CreationEngineObjectBehaviorSmoke
+    tests/EngineObjectBehaviorSmoke.cpp
+    Source/Frust/EngineFrustHost.cpp
+)
+target_include_directories(CreationEngineObjectBehaviorSmoke PRIVATE Source)
+target_link_libraries(CreationEngineObjectBehaviorSmoke PRIVATE
+    engine_core
+    creation_suite_frust_plugin_runtime
+    juce::juce_core
+    juce::juce_graphics
+    juce::juce_opengl
+)
+target_compile_definitions(CreationEngineObjectBehaviorSmoke PRIVATE
+    CE_ENGINE_OBJECT_BEHAVIOR_PLUGIN="${CMAKE_CURRENT_SOURCE_DIR}/tests/plugins/SetCurrentObjectX.frust"
+)
+add_test(NAME creation_engine_object_behavior_smoke COMMAND CreationEngineObjectBehaviorSmoke)
+
 add_executable(CreationEngineObjectDefinitionSmoke
     tests/ObjectDefinitionSmoke.cpp
     Source/Scene/ObjectDefinitions.cpp

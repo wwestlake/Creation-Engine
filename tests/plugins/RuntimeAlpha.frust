@@ -1,0 +1,5 @@
+manifest "{\"name\":\"runtime_alpha\",\"version\":\"0.1.0\",\"description\":\"Multi-plugin runtime isolation smoke fixture\",\"entryPoints\":[\"on_event\"],\"intendedApplications\":[\"creation-engine\"]}";
+
+pub fn on_event(id: i64, argument: i64) -> i64 = {
+    id * 100 + argument
+}
