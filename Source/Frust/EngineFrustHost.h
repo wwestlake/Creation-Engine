@@ -1,8 +1,12 @@
 #pragma once
 
 #include <cstdint>
+#include <set>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
+#include <entt/entt.hpp>
 #include <creation/frust/PluginRuntime.h>
 
 namespace ce::engine
@@ -35,6 +39,11 @@ public:
     bool loadBundled(std::string& error);
     bool loadObjectBehavior(const std::string& podId, const std::string& pluginPath, std::string& error);
     void dispatch(EngineFrustEvent event, std::int64_t argument = 0);
+    void prepareLevel(std::int64_t tick);
+    void beginPlay(std::int64_t tick);
+    void tick(std::int64_t tick);
+    void endPlay(std::int64_t tick);
+    void notifyObjectDestroyed(entt::entity entity, std::int64_t tick);
     [[nodiscard]] bool isLoaded() const noexcept;
     [[nodiscard]] bool isObjectBehaviorLoaded(const std::string& podId) const noexcept;
 
@@ -44,12 +53,23 @@ private:
     static std::int64_t currentObjectEntity();
     static std::int64_t setPositionX(std::int64_t entityId, std::int64_t positionX);
     [[nodiscard]] static std::string behaviorKey(const std::string& podId);
-    void dispatchObjectBehaviors(EngineFrustEvent event, std::int64_t argument);
+    [[nodiscard]] std::vector<std::pair<std::int64_t, std::string>> attachedObjectBehaviors() const;
+    void ensureObjectLifecycle(std::int64_t entityId, const std::string& podId, std::int64_t tick);
+    void invokeObjectHook(std::int64_t entityId, const std::string& podId, const char* hookName,
+                          EngineFrustEvent fallbackEvent, std::int64_t tick);
+
+    struct ObjectLifecycle
+    {
+        std::set<std::string> spawnedPods;
+        std::set<std::string> playingPods;
+    };
 
     static EngineFrustHost* activeHost;
 
     engine::World& world;
     creation::frust::PluginRuntime runtime { "creation-engine" };
     std::int64_t activeObjectEntityId = -1;
+    bool playActive = false;
+    std::unordered_map<std::int64_t, ObjectLifecycle> objectLifecycles;
 };
 } // namespace ce::frust

@@ -26,3 +26,6 @@ object receiving that call. The behavior can use a separately granted Engine
 capability such as `engine_set_position_x`; it is not given unrestricted
 registry access. Pod source discovery and VFS-backed project packaging are a
 separate asset-management concern from this execution contract.
+
+The Engine's named behavior lifecycle is documented in
+[`FRUST_BEHAVIOR_LIFECYCLE.md`](FRUST_BEHAVIOR_LIFECYCLE.md).

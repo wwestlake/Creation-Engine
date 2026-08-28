@@ -47,6 +47,7 @@ public:
     ~HierarchyPanel() override;
 
     std::function<void(entt::entity)> onSelectionChanged;
+    std::function<void(entt::entity)> onEntityDestroying;
 
     void Refresh();
     entt::entity SelectedEntity() const { return selectedEntity_; }

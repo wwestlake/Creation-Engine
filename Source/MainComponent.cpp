@@ -68,6 +68,9 @@ MainComponent::MainComponent()
         transformPanel_.SetSelectedEntity(entity);
         pbrMaterialPanel_.SetSelectedEntity(entity);
     };
+    hierarchyPanel_.onEntityDestroying = [this](entt::entity entity) {
+        frustHost_.notifyObjectDestroyed(entity, static_cast<std::int64_t>(world_.CurrentTick()));
+    };
     addAndMakeVisible(viewport_);
 
     inspectorTitle_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
@@ -160,9 +163,12 @@ void MainComponent::SetPlaying(bool playing) {
     }
 
     isPlaying_ = playing;
-    frustHost_.dispatch(playing ? ce::frust::EngineFrustEvent::simulationStarted
-                                : ce::frust::EngineFrustEvent::simulationPaused,
-                        static_cast<std::int64_t>(world_.CurrentTick()));
+    const auto tick = static_cast<std::int64_t>(world_.CurrentTick());
+    if (playing) {
+        frustHost_.beginPlay(tick);
+    } else {
+        frustHost_.endPlay(tick);
+    }
     headerBar_.setPlaybackVisualState(isPlaying_, false);
     headerBar_.setStatusText(isPlaying_ ? "Playing" : "Editing");
 }
@@ -176,8 +182,7 @@ void MainComponent::timerCallback() {
         // server genuinely execute scripts identically. 1/30s matches
         // this timer's own 30 Hz rate (startTimerHz(30) below).
         ce::engine::Simulation::Step(world_, 1.0f / 30.0f);
-        frustHost_.dispatch(ce::frust::EngineFrustEvent::simulationTick,
-                            static_cast<std::int64_t>(world_.CurrentTick()));
+        frustHost_.tick(static_cast<std::int64_t>(world_.CurrentTick()));
     }
     tickLabel_.setText("tick " + juce::String(world_.CurrentTick()), juce::dontSendNotification);
     hierarchyPanel_.Refresh();
@@ -279,6 +284,7 @@ void MainComponent::loadSessionFromDisk()
             auto state = juce::ValueTree::fromXml(*xml);
             if (ce::scene::EngineSceneSerializer::restoreScene(world_, state))
             {
+                frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
                 hierarchyPanel_.Refresh();
                 transformPanel_.Refresh();
                 pbrMaterialPanel_.Refresh();

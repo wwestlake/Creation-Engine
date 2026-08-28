@@ -1,5 +1,7 @@
 #include "Frust/EngineFrustHost.h"
 
+#include <algorithm>
+
 #include <juce_core/juce_core.h>
 
 #include "engine/core_components.h"
@@ -8,6 +10,11 @@
 
 namespace ce::frust
 {
+namespace
+{
+using ObjectLifecycleHook = std::int64_t (*)(std::int64_t);
+}
+
 EngineFrustHost* EngineFrustHost::activeHost = nullptr;
 
 EngineFrustHost::EngineFrustHost(engine::World& worldToHost)
@@ -57,7 +64,74 @@ bool EngineFrustHost::loadObjectBehavior(const std::string& podId, const std::st
 void EngineFrustHost::dispatch(EngineFrustEvent event, std::int64_t argument)
 {
     (void)runtime.callEvent(static_cast<std::int64_t>(event), argument);
-    dispatchObjectBehaviors(event, argument);
+}
+
+void EngineFrustHost::prepareLevel(std::int64_t tick)
+{
+    for (const auto& [entityId, podId] : attachedObjectBehaviors()) {
+        ensureObjectLifecycle(entityId, podId, tick);
+    }
+}
+
+void EngineFrustHost::beginPlay(std::int64_t tick)
+{
+    if (playActive) {
+        return;
+    }
+
+    playActive = true;
+    dispatch(EngineFrustEvent::simulationStarted, tick);
+    prepareLevel(tick);
+}
+
+void EngineFrustHost::tick(std::int64_t tick)
+{
+    if (!playActive) {
+        return;
+    }
+
+    dispatch(EngineFrustEvent::simulationTick, tick);
+    for (const auto& [entityId, podId] : attachedObjectBehaviors())
+    {
+        ensureObjectLifecycle(entityId, podId, tick);
+        if (objectLifecycles[entityId].playingPods.contains(podId)) {
+            invokeObjectHook(entityId, podId, "on_tick", EngineFrustEvent::simulationTick, tick);
+        }
+    }
+}
+
+void EngineFrustHost::endPlay(std::int64_t tick)
+{
+    if (!playActive) {
+        return;
+    }
+
+    for (const auto& [entityId, podId] : attachedObjectBehaviors())
+    {
+        const auto found = objectLifecycles.find(entityId);
+        if (found != objectLifecycles.end() && found->second.playingPods.erase(podId) != 0) {
+            invokeObjectHook(entityId, podId, "on_end_play", EngineFrustEvent::simulationPaused, tick);
+        }
+    }
+    playActive = false;
+    dispatch(EngineFrustEvent::simulationPaused, tick);
+}
+
+void EngineFrustHost::notifyObjectDestroyed(entt::entity entity, std::int64_t tick)
+{
+    const auto entityId = static_cast<std::int64_t>(entt::to_integral(entity));
+    const auto found = objectLifecycles.find(entityId);
+    if (found == objectLifecycles.end()) {
+        return;
+    }
+
+    for (const auto& podId : found->second.playingPods) {
+        invokeObjectHook(entityId, podId, "on_end_play", EngineFrustEvent::simulationPaused, tick);
+    }
+    for (const auto& podId : found->second.spawnedPods) {
+        invokeObjectHook(entityId, podId, "on_destroy", EngineFrustEvent::simulationPaused, tick);
+    }
+    objectLifecycles.erase(found);
 }
 
 bool EngineFrustHost::isLoaded() const noexcept
@@ -117,36 +191,51 @@ std::string EngineFrustHost::behaviorKey(const std::string& podId)
     return "object-behavior:" + podId;
 }
 
-void EngineFrustHost::dispatchObjectBehaviors(EngineFrustEvent event, std::int64_t argument)
+std::vector<std::pair<std::int64_t, std::string>> EngineFrustHost::attachedObjectBehaviors() const
 {
-    struct PendingInvocation
+    std::vector<std::pair<std::int64_t, std::string>> attachments;
+    std::lock_guard<std::mutex> lock(world.RegistryMutex());
+    const auto objects = world.Registry().view<const scene::BehaviorAttachments>();
+    for (const auto entity : objects)
     {
-        entt::entity entity = entt::null;
-        std::string podId;
-    };
-
-    std::vector<PendingInvocation> pending;
-    {
-        std::lock_guard<std::mutex> lock(world.RegistryMutex());
-        const auto objects = world.Registry().view<const scene::BehaviorAttachments>();
-        for (const auto entity : objects)
-        {
-            const auto& attachments = objects.get<const scene::BehaviorAttachments>(entity);
-            for (const auto& podId : attachments.podIds) {
-                pending.push_back({ entity, podId.toStdString() });
-            }
+        const auto& behaviorAttachments = objects.get<const scene::BehaviorAttachments>(entity);
+        for (const auto& podId : behaviorAttachments.podIds) {
+            attachments.emplace_back(static_cast<std::int64_t>(entt::to_integral(entity)), podId.toStdString());
         }
     }
+    std::sort(attachments.begin(), attachments.end());
+    return attachments;
+}
 
-    for (const auto& invocation : pending)
-    {
-        const auto key = behaviorKey(invocation.podId);
-        if (!runtime.isLoaded(key)) {
-            continue;
-        }
+void EngineFrustHost::ensureObjectLifecycle(std::int64_t entityId, const std::string& podId, std::int64_t tick)
+{
+    if (!runtime.isLoaded(behaviorKey(podId))) {
+        return;
+    }
 
-        activeObjectEntityId = static_cast<std::int64_t>(entt::to_integral(invocation.entity));
-        (void)runtime.callEvent(key, static_cast<std::int64_t>(event), argument);
+    auto& lifecycle = objectLifecycles[entityId];
+    if (lifecycle.spawnedPods.insert(podId).second) {
+        invokeObjectHook(entityId, podId, "on_spawn", EngineFrustEvent::simulationStarted, tick);
+    }
+    if (playActive && lifecycle.playingPods.insert(podId).second) {
+        invokeObjectHook(entityId, podId, "on_begin_play", EngineFrustEvent::simulationStarted, tick);
+    }
+}
+
+void EngineFrustHost::invokeObjectHook(std::int64_t entityId, const std::string& podId, const char* hookName,
+                                       EngineFrustEvent fallbackEvent, std::int64_t tick)
+{
+    const auto key = behaviorKey(podId);
+    if (!runtime.isLoaded(key)) {
+        return;
+    }
+
+    activeObjectEntityId = entityId;
+    const auto hook = reinterpret_cast<ObjectLifecycleHook>(runtime.getFunction(key, hookName));
+    if (hook != nullptr) {
+        (void)hook(tick);
+    } else {
+        (void)runtime.callEvent(key, static_cast<std::int64_t>(fallbackEvent), tick);
     }
     activeObjectEntityId = -1;
 }
