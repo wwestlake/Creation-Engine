@@ -123,6 +123,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Scene/Components.h
     Source/Scene/EngineSceneSerializer.h
     Source/Scene/EngineSceneSerializer.cpp
+    Source/Scene/ObjectDefinitions.h
+    Source/Scene/ObjectDefinitions.cpp
     Source/Scene/AssetCatalog.h
     Source/Scene/AssetCatalog.cpp
     Source/Scene/AssetPlacement.h
@@ -192,6 +194,19 @@ target_compile_definitions(CreationEngineFrustPluginSmoke PRIVATE
     CE_ENGINE_LIFECYCLE_PLUGIN="${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/EngineLifecycle.frust"
 )
 add_test(NAME creation_engine_frust_plugin_smoke COMMAND CreationEngineFrustPluginSmoke)
+
+add_executable(CreationEngineObjectDefinitionSmoke
+    tests/ObjectDefinitionSmoke.cpp
+    Source/Scene/ObjectDefinitions.cpp
+)
+target_include_directories(CreationEngineObjectDefinitionSmoke PRIVATE Source)
+target_link_libraries(CreationEngineObjectDefinitionSmoke PRIVATE
+    engine_core
+    juce::juce_core
+    juce::juce_graphics
+    juce::juce_opengl
+)
+add_test(NAME creation_engine_object_definition_smoke COMMAND CreationEngineObjectDefinitionSmoke)
 
 # --- Dedicated server executable ------------------------------------------
 # Headless build: no rendering or client-only assets. Only juce_core and

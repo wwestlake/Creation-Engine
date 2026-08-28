@@ -266,6 +266,19 @@ void ViewportComponent::renderOpenGL() {
         }
     }
 
+    // Object definitions persist an asset identifier rather than a GPU
+    // pointer. Resolve it only once the viewport owns a live GL context.
+    auto unresolvedAssets = world_.Registry().view<const scene::MeshAssetReference>();
+    for (const auto entity : unresolvedAssets) {
+        if (world_.Registry().all_of<scene::MeshRenderer>(entity)) {
+            continue;
+        }
+        const auto asset = assetCatalog_.Find(unresolvedAssets.get<const scene::MeshAssetReference>(entity).assetId);
+        if (asset.mesh != nullptr && asset.material != nullptr) {
+            world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ asset.mesh, asset.material });
+        }
+    }
+
     auto drawView = world_.Registry().view<const scene::Transform, const scene::MeshRenderer>();
     for (auto entity : drawView) {
         const auto& transform = drawView.get<const scene::Transform>(entity);
