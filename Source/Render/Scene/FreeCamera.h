@@ -40,6 +40,7 @@ public:
     // based on WASD/Q/E while a look-drag is active.
     void Update(float deltaSeconds);
     void AdjustSpeed(float wheelDeltaY);
+    void EnableFirstPersonMode() { firstPersonMode_.store(true, std::memory_order_relaxed); }
 
     juce::Vector3D<float> Position() const { return position_; }
     juce::Vector3D<float> Target() const { return position_ + Forward(); }
@@ -61,6 +62,7 @@ private:
     std::atomic<float> yaw_{ 0.0f };     // radians; 0 looks down -Z.
     std::atomic<float> pitch_{ -0.25f };
     std::atomic<bool> isLooking_{ false };
+    std::atomic<bool> firstPersonMode_{ false };
 
     juce::Point<float> lastDragScreenPos_;
     std::atomic<float> speedMultiplier_{ 1.0f };

@@ -9,6 +9,7 @@ GameClientContent::GameClientContent(int clientNumber)
     : clientNumber_(clientNumber), world_(), viewport_(world_)
 {
     addAndMakeVisible(viewport_);
+    viewport_.EnableFirstPersonMode();
     hud_.setText("CLIENT " + juce::String(clientNumber_) + "  |  LOCAL SESSION", juce::dontSendNotification);
     hud_.setColour(juce::Label::textColourId, juce::Colours::white);
     hud_.setColour(juce::Label::backgroundColourId, juce::Colour(0xaa10141a));

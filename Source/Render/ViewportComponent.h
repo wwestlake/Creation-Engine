@@ -76,6 +76,7 @@ public:
     // seeded demo entity's transform, giving Stop a real, visible effect
     // instead of just freezing the tick counter.
     void ResetDemoEntityTransform();
+    void EnableFirstPersonMode() { freeCamera_.EnableFirstPersonMode(); }
 
     // Catalog access for SC5's "+ Add" menu (HierarchyPanel) to list/look
     // up placeable assets, and for Source/Import's importers to register

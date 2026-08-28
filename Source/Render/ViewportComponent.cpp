@@ -99,21 +99,35 @@ void ViewportComponent::SeedDemoScene() {
     }
     hasSeededDemoScene_ = true;
 
-    const auto asset = assetCatalog_.Find("BoxTextured");
+    auto asset = assetCatalog_.Find("BoxTextured");
+    if (asset.mesh == nullptr)
+        asset = assetCatalog_.Find("Cube");
     if (asset.mesh == nullptr) {
-        std::cout << "[scene] BoxTextured not in catalog; demo scene will be empty." << std::endl;
+        std::cout << "[scene] no cube asset in catalog; starter room will be empty." << std::endl;
         return;
     }
 
     const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
-    const auto entity = world_.CreateEntity();
-    world_.Registry().emplace<scene::Name>(entity, scene::Name{ "Box" });
-    world_.Registry().emplace<scene::Transform>(entity, scene::Transform{});
-    world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ asset.mesh, asset.material });
-    world_.Registry().emplace<scene::SceneFlags>(entity, scene::SceneFlags{});
-    demoEntity_ = entity;
+    auto addBox = [&](const char* name, engine::Vec3 position, engine::Vec3 scale) {
+        const auto entity = world_.CreateEntity();
+        scene::Transform transform;
+        transform.position = position;
+        transform.scale = scale;
+        world_.Registry().emplace<scene::Name>(entity, scene::Name{ name });
+        world_.Registry().emplace<scene::Transform>(entity, transform);
+        world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ asset.mesh, asset.material });
+        world_.Registry().emplace<scene::SceneFlags>(entity, scene::SceneFlags{});
+        return entity;
+    };
 
-    std::cout << "[scene] seeded demo entity 'Box'" << std::endl;
+    demoEntity_ = addBox("Center Block", { 0.0f, 0.5f, 0.0f }, { 1.0f, 1.0f, 1.0f });
+    addBox("Floor", { 0.0f, -0.5f, 0.0f }, { 10.0f, 0.1f, 10.0f });
+    addBox("North Wall", { 0.0f, 2.0f, -10.0f }, { 10.0f, 2.5f, 0.1f });
+    addBox("South Wall", { 0.0f, 2.0f, 10.0f }, { 10.0f, 2.5f, 0.1f });
+    addBox("West Wall", { -10.0f, 2.0f, 0.0f }, { 0.1f, 2.5f, 10.0f });
+    addBox("East Wall", { 10.0f, 2.0f, 0.0f }, { 0.1f, 2.5f, 10.0f });
+
+    std::cout << "[scene] seeded starter room: floor, four walls, center block" << std::endl;
 }
 
 juce::Vector3D<float> ViewportComponent::SpawnPosition(float distance) const {

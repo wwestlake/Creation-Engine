@@ -63,7 +63,8 @@ void FreeCamera::mouseUp(const juce::MouseEvent& event) {
 }
 
 void FreeCamera::Update(float deltaSeconds) {
-    if (!isLooking_.load(std::memory_order_relaxed)) {
+    const bool firstPerson = firstPersonMode_.load(std::memory_order_relaxed);
+    if (!firstPerson && !isLooking_.load(std::memory_order_relaxed)) {
         return;
     }
 
@@ -85,13 +86,13 @@ void FreeCamera::Update(float deltaSeconds) {
     const auto forward = Forward();
     const auto flatForward = FlatForward();
     const auto right = flatForward ^ juce::Vector3D<float>{ 0.0f, 1.0f, 0.0f };
-    const float speed = 3.0f * deltaSeconds * speedMultiplier_.load(std::memory_order_relaxed);
+    const float speed = (firstPerson ? 4.0f : 3.0f) * deltaSeconds * speedMultiplier_.load(std::memory_order_relaxed);
 
     if (juce::KeyPress::isKeyCurrentlyDown('W')) {
-        position_ += forward * speed;
+        position_ += (firstPerson ? flatForward : forward) * speed;
     }
     if (juce::KeyPress::isKeyCurrentlyDown('S')) {
-        position_ -= forward * speed;
+        position_ -= (firstPerson ? flatForward : forward) * speed;
     }
     if (juce::KeyPress::isKeyCurrentlyDown('A')) {
         position_ -= right * speed;
@@ -99,11 +100,24 @@ void FreeCamera::Update(float deltaSeconds) {
     if (juce::KeyPress::isKeyCurrentlyDown('D')) {
         position_ += right * speed;
     }
-    if (juce::KeyPress::isKeyCurrentlyDown('E')) {
+    if (!firstPerson && juce::KeyPress::isKeyCurrentlyDown('E')) {
         position_.y += speed;
     }
-    if (juce::KeyPress::isKeyCurrentlyDown('Q')) {
+    if (!firstPerson && juce::KeyPress::isKeyCurrentlyDown('Q')) {
         position_.y -= speed;
+    }
+
+    if (firstPerson) {
+        // The starter room is an axis-aligned 20x20 test space. The camera
+        // is the player capsule for this first slice; the bounds become
+        // proper collider components when the physics layer lands.
+        position_.x = juce::jlimit(-9.35f, 9.35f, position_.x);
+        position_.z = juce::jlimit(-9.35f, 9.35f, position_.z);
+        position_.y -= 9.8f * deltaSeconds;
+        if (position_.y <= 1.6f)
+            position_.y = 1.6f;
+        if (position_.y < -5.0f)
+            position_ = { 0.0f, 1.6f, 5.0f };
     }
 }
 
