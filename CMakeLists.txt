@@ -22,6 +22,11 @@ else()
     message(FATAL_ERROR "Could not find the entt dependency for Creation Engine.")
 endif()
 
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/JuceDocking/CMakeLists.txt")
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/JuceDocking"
+                     "${CMAKE_CURRENT_BINARY_DIR}/CreationSuiteSharedJuceDocking")
+endif()
+
 # --- Shared, framework-agnostic libraries --------------------------------
 # NodeSystem is language-neutral graph infrastructure. It remains in the
 # Engine while FRust visual automation is introduced on top of it.
@@ -52,17 +57,17 @@ juce_add_gui_app(CreationEngineEditor
 )
 
 # Mirrors the built executable into the workspace-level shared bin
-# directory (D:\CreationSuite-Workspaces\claude-<config>-bin) so it's
+# directory (D:\CreationSuite-Workspaces\codex-<config>-bin) so it's
 # reachable at a stable path without needing OS symlink privileges.
 # Every suite agent does this for its own repo -- see AGENTS.md.
 add_custom_command(TARGET CreationEngineEditor POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/claude-$<LOWER_CASE:$<CONFIG>>-bin"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineEditor>" "D:/CreationSuite-Workspaces/claude-$<LOWER_CASE:$<CONFIG>>-bin/"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/codex-$<LOWER_CASE:$<CONFIG>>-bin"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineEditor>" "D:/CreationSuite-Workspaces/codex-$<LOWER_CASE:$<CONFIG>>-bin/"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/EngineLifecycle.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodes.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodesLibrary.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
-    COMMENT "Copying CreationEngineEditor to the shared claude bin directory"
+    COMMENT "Copying CreationEngineEditor to the shared codex bin directory"
 )
 
 juce_generate_juce_header(CreationEngineEditor)
@@ -154,7 +159,11 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Audio/AudioPreviewPlayer.cpp
 )
 
-target_include_directories(CreationEngineEditor PRIVATE Source third_party)
+target_include_directories(CreationEngineEditor PRIVATE
+    Source
+    third_party
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/JuceDocking"
+)
 
 target_compile_definitions(CreationEngineEditor PRIVATE
     JUCE_WEB_BROWSER=0
@@ -174,6 +183,7 @@ target_link_libraries(CreationEngineEditor PRIVATE
     creation_suite_ui
     creation_suite_ui_assets
     creation_suite_frust_plugin_runtime
+    CreationDock
     juce::juce_gui_extra
     juce::juce_opengl
     juce::juce_audio_basics
@@ -189,6 +199,10 @@ add_executable(CreationEngineFrustPluginSmoke
     Source/Frust/EngineFrustHost.cpp
     Source/Frust/EngineNodeLibraryLoader.cpp
 )
+
+if(MSVC)
+    target_compile_options(CreationEngineEditor PRIVATE /MP1 /FS)
+endif()
 target_include_directories(CreationEngineFrustPluginSmoke PRIVATE Source)
 target_link_libraries(CreationEngineFrustPluginSmoke PRIVATE
     engine_core
@@ -285,13 +299,13 @@ juce_add_console_app(CreationEngineServer
 )
 
 # Mirrors the built executable into the workspace-level shared bin
-# directory (D:\CreationSuite-Workspaces\claude-<config>-bin) so it's
+# directory (D:\CreationSuite-Workspaces\codex-<config>-bin) so it's
 # reachable at a stable path without needing OS symlink privileges.
 # Every suite agent does this for its own repo -- see AGENTS.md.
 add_custom_command(TARGET CreationEngineServer POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/claude-$<LOWER_CASE:$<CONFIG>>-bin"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineServer>" "D:/CreationSuite-Workspaces/claude-$<LOWER_CASE:$<CONFIG>>-bin/"
-    COMMENT "Copying CreationEngineServer to the shared claude bin directory"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/codex-$<LOWER_CASE:$<CONFIG>>-bin"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineServer>" "D:/CreationSuite-Workspaces/codex-$<LOWER_CASE:$<CONFIG>>-bin/"
+    COMMENT "Copying CreationEngineServer to the shared codex bin directory"
 )
 
 juce_generate_juce_header(CreationEngineServer)

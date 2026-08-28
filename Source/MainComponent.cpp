@@ -5,6 +5,18 @@
 #include <creation/ui/CreationSuiteLogos.h>
 #include "Scene/EngineSceneSerializer.h"
 
+namespace {
+class NonOwningPanelHost final : public juce::Component
+{
+public:
+    explicit NonOwningPanelHost(juce::Component& component) : content(component) { addAndMakeVisible(content); }
+    void resized() override { content.setBounds(getLocalBounds()); }
+private:
+    juce::Component& content;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NonOwningPanelHost)
+};
+}
+
 MainComponent::MainComponent()
     : viewport_(world_),
       hierarchyPanel_(world_, viewport_),
@@ -63,7 +75,6 @@ MainComponent::MainComponent()
     addAndMakeVisible(viewModeBar_);
     viewModeBar_.onModeSelected = [this](ce::WorkspaceMode mode) { SetActiveMode(mode); };
 
-    addAndMakeVisible(hierarchyPanel_);
     hierarchyPanel_.onSelectionChanged = [this](entt::entity entity) {
         transformPanel_.SetSelectedEntity(entity);
         pbrMaterialPanel_.SetSelectedEntity(entity);
@@ -71,24 +82,11 @@ MainComponent::MainComponent()
     hierarchyPanel_.onEntityDestroying = [this](entt::entity entity) {
         frustHost_.notifyObjectDestroyed(entity, static_cast<std::int64_t>(world_.CurrentTick()));
     };
-    addAndMakeVisible(viewport_);
-
     inspectorTitle_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
     inspectorTitle_.setColour(juce::Label::textColourId, juce::Colours::white);
-    addAndMakeVisible(inspectorTitle_);
-
     tickLabel_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
-    addAndMakeVisible(tickLabel_);
 
-    addAndMakeVisible(transformPanel_);
-    addAndMakeVisible(pbrMaterialPanel_);
-    addAndMakeVisible(lightPanel_);
-
-    addAndMakeVisible(materialsPanel_);
-    addAndMakeVisible(importPanel_);
-    addAndMakeVisible(frustAutomationPanel_);
-    addAndMakeVisible(serverPanel_);
-    addAndMakeVisible(settingsPanel_);
+    initialiseDockingWorkspace();
 
     SetActiveMode(ce::WorkspaceMode::Scene);
     SetPlaying(false);
@@ -111,50 +109,33 @@ void MainComponent::resized() {
     headerBar_.setBounds(bounds.removeFromTop(96));
     viewModeBar_.setBounds(bounds.removeFromTop(56));
 
-    const auto contentArea = bounds;
-
-    // Scene mode content — laid out even while hidden, so switching back
-    // to Scene doesn't need a relayout.
-    auto sceneArea = contentArea;
-    hierarchyPanel_.setBounds(sceneArea.removeFromLeft(220).reduced(4));
-    auto inspectorBounds = sceneArea.removeFromRight(300).reduced(12);
-    inspectorTitle_.setBounds(inspectorBounds.removeFromTop(28));
-    tickLabel_.setBounds(inspectorBounds.removeFromTop(24));
-
-    inspectorBounds.removeFromTop(12);
-    transformPanel_.setBounds(inspectorBounds.removeFromTop(ce::TransformPanel::kPreferredHeight));
-
-    pbrMaterialPanel_.setBounds(inspectorBounds.removeFromTop(ce::MaterialsPanel::kPreferredHeight));
-
-    inspectorBounds.removeFromTop(16);
-    lightPanel_.setBounds(inspectorBounds.removeFromTop(lightPanel_.PreferredHeight()));
-
-    viewport_.setBounds(sceneArea);
-
-    materialsPanel_.setBounds(contentArea);
-    importPanel_.setBounds(contentArea);
-    frustAutomationPanel_.setBounds(contentArea);
-    serverPanel_.setBounds(contentArea);
-    settingsPanel_.setBounds(contentArea);
+    if (dockManager_ != nullptr) dockManager_->setBounds(bounds);
 }
 
 void MainComponent::SetActiveMode(ce::WorkspaceMode mode) {
     activeMode_ = mode;
 
-    const bool showScene = mode == ce::WorkspaceMode::Scene;
-    hierarchyPanel_.setVisible(showScene);
-    viewport_.setVisible(showScene);
-    inspectorTitle_.setVisible(showScene);
-    tickLabel_.setVisible(showScene);
-    transformPanel_.setVisible(showScene);
-    pbrMaterialPanel_.setVisible(showScene);
-    lightPanel_.setVisible(showScene);
+    viewModeBar_.SetActiveMode(mode);
+    if (dockManager_ == nullptr) return;
+    static constexpr const char* panelIds[] = { "viewport", "logic", "materials", "assets", "server", "settings" };
+    dockManager_->activatePanel(panelIds[static_cast<std::size_t>(mode)]);
+}
 
-    materialsPanel_.setVisible(mode == ce::WorkspaceMode::Materials);
-    importPanel_.setVisible(mode == ce::WorkspaceMode::Assets);
-    frustAutomationPanel_.setVisible(mode == ce::WorkspaceMode::Logic);
-    serverPanel_.setVisible(mode == ce::WorkspaceMode::Server);
-    settingsPanel_.setVisible(mode == ce::WorkspaceMode::Settings);
+void MainComponent::initialiseDockingWorkspace()
+{
+    dockManager_ = std::make_unique<CreationDock::DockManager>(*this);
+    addAndMakeVisible(*dockManager_);
+    dockManager_->registerPanel("hierarchy", "Hierarchy", std::make_unique<NonOwningPanelHost>(hierarchyPanel_), CreationDock::DockTargetZone::Left);
+    dockManager_->registerPanel("viewport", "Scene Viewport", std::make_unique<NonOwningPanelHost>(viewport_), CreationDock::DockTargetZone::CenterTab);
+    dockManager_->registerPanel("transform", "Transform", std::make_unique<NonOwningPanelHost>(transformPanel_), CreationDock::DockTargetZone::Right);
+    dockManager_->registerPanel("materials-pbr", "Material Inspector", std::make_unique<NonOwningPanelHost>(pbrMaterialPanel_), CreationDock::DockTargetZone::Right);
+    dockManager_->registerPanel("lighting", "Lighting", std::make_unique<NonOwningPanelHost>(lightPanel_), CreationDock::DockTargetZone::Right);
+    dockManager_->registerPanel("logic", "FRust Logic", std::make_unique<NonOwningPanelHost>(frustAutomationPanel_), CreationDock::DockTargetZone::CenterTab);
+    dockManager_->registerPanel("materials", "Materials", std::make_unique<NonOwningPanelHost>(materialsPanel_), CreationDock::DockTargetZone::CenterTab);
+    dockManager_->registerPanel("assets", "Assets & Import", std::make_unique<NonOwningPanelHost>(importPanel_), CreationDock::DockTargetZone::CenterTab);
+    dockManager_->registerPanel("server", "Server", std::make_unique<NonOwningPanelHost>(serverPanel_), CreationDock::DockTargetZone::Bottom);
+    dockManager_->registerPanel("settings", "Settings", std::make_unique<NonOwningPanelHost>(settingsPanel_), CreationDock::DockTargetZone::Right);
+    dockManager_->registerPanel("runtime-status", "Runtime Status", std::make_unique<NonOwningPanelHost>(tickLabel_), CreationDock::DockTargetZone::Bottom);
 }
 
 void MainComponent::SetPlaying(bool playing) {
