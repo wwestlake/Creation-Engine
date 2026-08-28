@@ -25,12 +25,44 @@ int main()
         return 1;
     }
 
-    host.dispatch(ce::frust::EngineFrustEvent::simulationTick, 19);
     const auto& registry = world.Registry();
+    host.prepareLevel(7);
+    if (registry.get<ce::engine::Transform>(first).position.x != 107.0f ||
+        registry.get<ce::engine::Transform>(second).position.x != 107.0f)
+    {
+        std::cerr << "Object behavior did not receive spawn during level preparation." << '\n';
+        return 1;
+    }
+
+    host.beginPlay(10);
+    if (registry.get<ce::engine::Transform>(first).position.x != 210.0f ||
+        registry.get<ce::engine::Transform>(second).position.x != 210.0f)
+    {
+        std::cerr << "Object behavior did not receive begin-play." << '\n';
+        return 1;
+    }
+
+    host.tick(19);
     if (registry.get<ce::engine::Transform>(first).position.x != 19.0f ||
         registry.get<ce::engine::Transform>(second).position.x != 19.0f)
     {
         std::cerr << "Object behavior did not receive its current entity context." << '\n';
+        return 1;
+    }
+
+    host.endPlay(20);
+    if (registry.get<ce::engine::Transform>(first).position.x != -320.0f ||
+        registry.get<ce::engine::Transform>(second).position.x != -320.0f)
+    {
+        std::cerr << "Object behavior did not receive end-play." << '\n';
+        return 1;
+    }
+
+    host.notifyObjectDestroyed(first, 21);
+    if (registry.get<ce::engine::Transform>(first).position.x != -421.0f ||
+        registry.get<ce::engine::Transform>(second).position.x != -320.0f)
+    {
+        std::cerr << "Object behavior did not receive destroy, or affected another object." << '\n';
         return 1;
     }
 

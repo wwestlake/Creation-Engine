@@ -335,10 +335,29 @@ void HierarchyPanel::DeleteSelected() {
         if (!registry.valid(selectedEntity_)) {
             return;
         }
-
         if (const auto* sceneFlags = registry.try_get<scene::SceneFlags>(selectedEntity_)) {
             if (sceneFlags->locked) {
                 std::cout << "[scene] refused to delete a locked entity" << std::endl;
+                return;
+            }
+        }
+    }
+
+    // Behaviors may call back into the Engine, so lifecycle hooks run before
+    // taking the registry lock used by the actual destruction operation.
+    if (onEntityDestroying) {
+        onEntityDestroying(selectedEntity_);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+        auto& registry = world_.Registry();
+        if (!registry.valid(selectedEntity_)) {
+            return;
+        }
+
+        if (const auto* sceneFlags = registry.try_get<scene::SceneFlags>(selectedEntity_)) {
+            if (sceneFlags->locked) {
                 return;
             }
         }

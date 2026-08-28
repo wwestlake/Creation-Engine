@@ -3,7 +3,27 @@ manifest "{\"name\":\"set_current_x\",\"version\":\"0.1.0\",\"description\":\"Cr
 extern fn engine_current_object_entity() -> i64;
 extern fn engine_set_position_x(entity: i64, position_x: i64) -> i64;
 
-pub fn on_event(id: i64, argument: i64) -> i64 = {
+pub fn on_spawn(tick: i64) -> i64 = {
     let entity = engine_current_object_entity();
-    engine_set_position_x(entity, argument)
+    engine_set_position_x(entity, 100 + tick)
+}
+
+pub fn on_begin_play(tick: i64) -> i64 = {
+    let entity = engine_current_object_entity();
+    engine_set_position_x(entity, 200 + tick)
+}
+
+pub fn on_tick(tick: i64) -> i64 = {
+    let entity = engine_current_object_entity();
+    engine_set_position_x(entity, tick)
+}
+
+pub fn on_end_play(tick: i64) -> i64 = {
+    let entity = engine_current_object_entity();
+    engine_set_position_x(entity, 0 - (300 + tick))
+}
+
+pub fn on_destroy(tick: i64) -> i64 = {
+    let entity = engine_current_object_entity();
+    engine_set_position_x(entity, 0 - (400 + tick))
 }
