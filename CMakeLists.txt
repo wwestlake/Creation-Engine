@@ -237,6 +237,14 @@ target_link_libraries(CreationEngineObjectDefinitionSmoke PRIVATE
 )
 add_test(NAME creation_engine_object_definition_smoke COMMAND CreationEngineObjectDefinitionSmoke)
 
+add_executable(CreationEngineFrustGraphSmoke
+    tests/FrustGraphSmoke.cpp
+)
+target_link_libraries(CreationEngineFrustGraphSmoke PRIVATE
+    node_system
+)
+add_test(NAME creation_engine_frust_graph_smoke COMMAND CreationEngineFrustGraphSmoke)
+
 # --- Dedicated server executable ------------------------------------------
 # Headless build: no rendering or client-only assets. Only juce_core and
 # juce_events provide cross-platform utilities for the server shell.

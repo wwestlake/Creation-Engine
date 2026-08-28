@@ -89,10 +89,6 @@ std::optional<std::vector<NodeId>> TopologicalDataOrder(const Graph& graph) {
         }
     }
 
-    // Sorted seed so the result is deterministic across runs (map/set
-    // iteration order isn't guaranteed) -- matters for
-    // celc --selftest-graph's structural-equality assertions and for
-    // .celg round-trip stability if this were ever serialized.
     std::vector<NodeId> ready;
     for (const auto& [id, degree] : inDegree) {
         if (degree == 0) {
@@ -120,7 +116,54 @@ std::optional<std::vector<NodeId>> TopologicalDataOrder(const Graph& graph) {
     }
 
     if (order.size() != graph.Nodes().size()) {
-        return std::nullopt; // a data cycle left some node(s) permanently in-degree > 0.
+        return std::nullopt;
+    }
+    return order;
+}
+
+std::optional<std::vector<NodeId>> TopologicalStreamOrder(const Graph& graph) {
+    const auto adjacency = BuildAdjacency(graph, PinKind::Stream);
+
+    std::unordered_map<NodeId, int> inDegree;
+    for (const auto& [id, node] : graph.Nodes()) {
+        inDegree[id] = 0;
+    }
+    for (const auto& [from, targets] : adjacency) {
+        for (NodeId to : targets) {
+            inDegree[to]++;
+        }
+    }
+
+    // Seed the queue in sorted order so stream evaluation remains stable
+    // regardless of unordered container iteration order.
+    std::vector<NodeId> ready;
+    for (const auto& [id, degree] : inDegree) {
+        if (degree == 0) {
+            ready.push_back(id);
+        }
+    }
+    std::sort(ready.begin(), ready.end());
+    std::priority_queue<NodeId, std::vector<NodeId>, std::greater<>> queue(ready.begin(), ready.end());
+
+    std::vector<NodeId> order;
+    while (!queue.empty()) {
+        const NodeId current = queue.top();
+        queue.pop();
+        order.push_back(current);
+
+        const auto it = adjacency.find(current);
+        if (it == adjacency.end()) {
+            continue;
+        }
+        for (NodeId next : it->second) {
+            if (--inDegree[next] == 0) {
+                queue.push(next);
+            }
+        }
+    }
+
+    if (order.size() != graph.Nodes().size()) {
+        return std::nullopt;
     }
     return order;
 }
@@ -141,6 +184,11 @@ ValidationResult ValidateGraph(const Graph& graph, const NodeTypeRegistry* regis
     if (!TopologicalDataOrder(graph).has_value()) {
         result.ok = false;
         result.errors.push_back("data dependency cycle detected");
+    }
+
+    if (!TopologicalStreamOrder(graph).has_value()) {
+        result.ok = false;
+        result.errors.push_back("stream dependency cycle detected");
     }
 
     if (registry != nullptr) {

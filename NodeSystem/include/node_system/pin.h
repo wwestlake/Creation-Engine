@@ -6,13 +6,12 @@
 
 namespace ce::node_system {
 
-// A pin either carries continuous/discrete data (dataflow graphs: materials,
-// animation blending, audio) or is an execution/trigger pin (control-flow
-// graphs: event/rule graphs). Both kinds coexist in the same graph so a
-// single node system serves every authoring domain (spec section 4.1).
+// A pin carries data, imperative execution, or a typed stream. All three
+// coexist so one graph system can express gameplay, tools, and materials.
 enum class PinKind {
     Data,
     Exec,
+    Stream,
 };
 
 // Data pin value types. Kept intentionally small; grows only when a domain
@@ -44,16 +43,13 @@ struct PinTypeDesc {
     }
 };
 
-// Whether a connection from `output` to `input` is legal. Exec pins only
-// connect to Exec pins; Data pins only connect to Data pins of the same
-// DataType. This is the author-time type check referenced in section 4.1 —
-// a bone-transform output cannot be wired into a color input, and an
-// event-trigger pin cannot be wired into a numeric data pin.
+// Exec pins connect only to Exec pins. Data and Stream pins connect only to
+// the same kind carrying the same payload type.
 inline bool IsConnectionCompatible(const PinTypeDesc& output, const PinTypeDesc& input) {
     if (output.kind != input.kind) {
         return false;
     }
-    if (output.kind == PinKind::Data) {
+    if (output.kind == PinKind::Data || output.kind == PinKind::Stream) {
         return output.dataType == input.dataType;
     }
     return true; // Exec -> Exec is always compatible.
