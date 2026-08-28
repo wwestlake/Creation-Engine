@@ -31,6 +31,10 @@ endif()
 # NodeSystem is language-neutral graph infrastructure. It remains in the
 # Engine while FRust visual automation is introduced on top of it.
 add_subdirectory(NodeSystem)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/NodeEditorUI/CMakeLists.txt")
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/NodeEditorUI"
+                     "${CMAKE_CURRENT_BINARY_DIR}/CreationSuiteSharedNodeEditorUI")
+endif()
 add_subdirectory(EngineCore)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/VFS" CreationSuiteSharedVFS)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/AssetSystem" CreationSuiteSharedAssetSystem)
@@ -119,6 +123,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/TransportBar.cpp
     Source/Views/ViewModeBar.h
     Source/Views/ViewModeBar.cpp
+    Source/Views/FrustLogicPanel.h
+    Source/Views/FrustLogicPanel.cpp
     Source/Views/PlaceholderPanel.h
     Source/Views/PlaceholderPanel.cpp
     Source/Views/HierarchyPanel.h
@@ -184,6 +190,7 @@ target_link_libraries(CreationEngineEditor PRIVATE
     creation_suite_ui_assets
     creation_suite_frust_plugin_runtime
     CreationDock
+    creation_suite_node_editor_ui
     juce::juce_gui_extra
     juce::juce_opengl
     juce::juce_audio_basics

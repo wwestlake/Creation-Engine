@@ -11,6 +11,7 @@
 #include "Render/ViewportComponent.h"
 #include "Views/HierarchyPanel.h"
 #include "Views/ImportPanel.h"
+#include "Views/FrustLogicPanel.h"
 #include "Views/LightPanel.h"
 #include "Views/MaterialsPanel.h"
 #include "Views/PlaceholderPanel.h"
@@ -95,7 +96,7 @@ private:
 
     // --- Other modes: stand-ins until their milestones land ---
     ce::PlaceholderPanel materialsPanel_ { "Materials", "Node-based material editor - coming soon" };
-    ce::PlaceholderPanel frustAutomationPanel_ { "FRust Automation", "FRust event graphs and visual automation are being migrated into Creation Engine." };
+    std::unique_ptr<ce::views::FrustLogicPanel> frustAutomationPanel_;
     ce::PlaceholderPanel serverPanel_ { "Server", "Dedicated server operational view - coming soon" };
     ce::PlaceholderPanel settingsPanel_ { "Settings", "Application settings - coming soon" };
 
