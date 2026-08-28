@@ -4,7 +4,7 @@
 
 namespace ce::node_system {
 
-Graph::Graph(std::string name) : name_(std::move(name)) {}
+Graph::Graph(std::string name, GraphTarget target) : name_(std::move(name)), target_(target) {}
 
 Node& Graph::AddNode(std::string typeName, Domain domain) {
     NodeId id = nextNodeId_++;

@@ -13,6 +13,15 @@ namespace ce::node_system {
 
 using ConnectionId = std::uint64_t;
 
+// The compiler backend selected for a graph asset. Behavior graphs compile
+// to FRust, material graphs compile to shader code, and dataflow graphs can
+// target non-rendering evaluators without changing their authored structure.
+enum class GraphTarget {
+    Behavior,
+    Material,
+    Dataflow,
+};
+
 struct Connection {
     ConnectionId id = 0;
     NodeId fromNode = 0;
@@ -39,7 +48,7 @@ enum class ConnectError {
 // by the Domain of the nodes inside it.
 class Graph {
 public:
-    explicit Graph(std::string name);
+    explicit Graph(std::string name, GraphTarget target = GraphTarget::Behavior);
 
     Node& AddNode(std::string typeName, Domain domain);
     bool RemoveNode(NodeId id);
@@ -47,8 +56,8 @@ public:
     const Node* FindNode(NodeId id) const;
     const std::unordered_map<NodeId, std::unique_ptr<Node>>& Nodes() const { return nodes_; }
 
-    // GS8: for reconstructing a graph from a .celg file (see
-    // celg_serialization.h) with its ORIGINAL node id intact, so a
+    // Restores a graph from an .frgraph file with its original node id
+    // intact, so a
     // save/load/save round trip is byte-identical. Also advances the
     // internal next-auto-assigned-id counter past `id`, mirroring
     // Node::AddInputWithId/AddOutputWithId's contract exactly. Rejects
@@ -62,7 +71,7 @@ public:
                                          ConnectError* outError = nullptr);
 
     // Same validation as Connect, but for reconstructing a graph from a
-    // .celg file with the connection's ORIGINAL id intact -- same
+    // .frgraph file with the connection's original id intact -- same
     // reasoning as AddNodeWithId. Rejects (returns nullopt with
     // *outError left untouched) if `id` is already in use, in addition
     // to every rejection reason Connect itself checks.
@@ -73,12 +82,15 @@ public:
 
     const std::vector<Connection>& Connections() const { return connections_; }
     const std::string& Name() const { return name_; }
+    GraphTarget Target() const { return target_; }
+    void SetTarget(GraphTarget target) { target_ = target; }
 
 private:
     std::optional<ConnectionId> ConnectInternal(std::optional<ConnectionId> explicitId, NodeId fromNode,
                                                  PinId fromPin, NodeId toNode, PinId toPin, ConnectError* outError);
 
     std::string name_;
+    GraphTarget target_ = GraphTarget::Behavior;
     std::unordered_map<NodeId, std::unique_ptr<Node>> nodes_;
     std::vector<Connection> connections_;
     NodeId nextNodeId_ = 1;

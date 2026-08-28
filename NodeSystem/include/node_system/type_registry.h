@@ -82,7 +82,7 @@ Node* AddRegisteredNode(Graph& graph, const NodeTypeRegistry& registry, const st
 // Nodes built via AddRegisteredNode always pass trivially (before any
 // such override); this exists to catch actual SHAPE drift -- a node
 // hand-built via the raw AddNode/AddInput/AddOutput API with the wrong
-// pin count/name/type, or loaded from a .celg file saved before a
+// pin count/name/type, or loaded from an .frgraph file saved before a
 // type's registered pin shape changed. Returns true (with `errorsOut`
 // left empty, if given) iff every node's shape matches.
 bool ValidateAgainstRegistry(const Graph& graph, const NodeTypeRegistry& registry,

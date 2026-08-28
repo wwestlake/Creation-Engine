@@ -27,6 +27,10 @@ std::optional<std::vector<NodeId>> DetectExecCycle(const Graph& graph);
 // exec cycle-shaped control-flow pattern meaningful.
 std::optional<std::vector<NodeId>> TopologicalDataOrder(const Graph& graph);
 
+// Stream wires preserve ordered flow without becoming imperative control
+// flow. A cycle is rejected so stream consumers have deterministic inputs.
+std::optional<std::vector<NodeId>> TopologicalStreamOrder(const Graph& graph);
+
 struct ValidationResult {
     bool ok = true;
     std::vector<std::string> errors;
