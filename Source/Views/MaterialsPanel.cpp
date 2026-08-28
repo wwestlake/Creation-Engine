@@ -2,6 +2,7 @@
 
 #include <mutex>
 
+#include "Render/Scene/Material.h"
 #include "Scene/Components.h"
 
 namespace ce {

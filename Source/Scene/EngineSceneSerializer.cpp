@@ -1,5 +1,7 @@
 #include "Scene/EngineSceneSerializer.h"
 
+#include "Render/Scene/Material.h"
+
 namespace ce::scene
 {
 juce::ValueTree EngineSceneSerializer::serializeScene(ce::engine::World& world)
@@ -62,6 +64,32 @@ juce::ValueTree EngineSceneSerializer::serializeScene(ce::engine::World& world)
             }
         }
 
+        if (auto* meshAsset = reg.try_get<MeshAssetReference>(entity))
+            entityNode.setProperty("meshAssetId", meshAsset->assetId, nullptr);
+
+        if (auto* objectDefinition = reg.try_get<ObjectDefinitionRef>(entity))
+            entityNode.setProperty("objectDefinitionId", objectDefinition->definitionId, nullptr);
+
+        if (auto* behaviors = reg.try_get<BehaviorAttachments>(entity))
+        {
+            juce::ValueTree behaviorNode("Behaviors");
+            for (const auto& podId : behaviors->podIds)
+            {
+                juce::ValueTree podNode("Behavior");
+                podNode.setProperty("podId", podId, nullptr);
+                behaviorNode.addChild(podNode, -1, nullptr);
+            }
+            entityNode.addChild(behaviorNode, -1, nullptr);
+        }
+
+        if (auto* objectState = reg.try_get<ObjectState>(entity))
+        {
+            juce::ValueTree stateNode("ObjectState");
+            for (int index = 0; index < objectState->values.size(); ++index)
+                stateNode.setProperty(objectState->values.getName(index), objectState->values.getValueAt(index), nullptr);
+            entityNode.addChild(stateNode, -1, nullptr);
+        }
+
         entitiesNode.addChild(entityNode, -1, nullptr);
     }
 
@@ -120,6 +148,34 @@ bool EngineSceneSerializer::restoreScene(ce::engine::World& world, const juce::V
             t.scale.y = static_cast<float>(tNode.getProperty("scaleY", 1.0));
             t.scale.z = static_cast<float>(tNode.getProperty("scaleZ", 1.0));
             reg.emplace<Transform>(entity, t);
+        }
+
+        const auto meshAssetId = entityNode.getProperty("meshAssetId").toString();
+        if (meshAssetId.isNotEmpty())
+            reg.emplace<MeshAssetReference>(entity, MeshAssetReference{ meshAssetId });
+
+        const auto objectDefinitionId = entityNode.getProperty("objectDefinitionId").toString();
+        if (objectDefinitionId.isNotEmpty())
+            reg.emplace<ObjectDefinitionRef>(entity, ObjectDefinitionRef{ objectDefinitionId });
+
+        if (const auto behaviorsNode = entityNode.getChildWithName("Behaviors"); behaviorsNode.isValid())
+        {
+            BehaviorAttachments behaviors;
+            for (const auto behaviorNode : behaviorsNode)
+                if (behaviorNode.hasType("Behavior"))
+                    behaviors.podIds.push_back(behaviorNode.getProperty("podId").toString());
+            reg.emplace<BehaviorAttachments>(entity, std::move(behaviors));
+        }
+
+        if (const auto objectStateNode = entityNode.getChildWithName("ObjectState"); objectStateNode.isValid())
+        {
+            ObjectState objectState;
+            for (int index = 0; index < objectStateNode.getNumProperties(); ++index)
+            {
+                const auto propertyName = objectStateNode.getPropertyName(index);
+                objectState.values.set(propertyName, objectStateNode.getProperty(propertyName));
+            }
+            reg.emplace<ObjectState>(entity, std::move(objectState));
         }
 
         auto mNode = entityNode.getChildWithName("Material");

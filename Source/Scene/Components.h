@@ -4,13 +4,19 @@
 #include <vector>
 
 #include <entt/entt.hpp>
-#include <JuceHeader.h>
+#include <juce_core/juce_core.h>
+#include <juce_graphics/juce_graphics.h>
+#include <juce_opengl/juce_opengl.h>
 
 #include "engine/core_components.h"
 #include "engine/math.h"
 #include "Render/Scene/Animation.h"
-#include "Render/Scene/Material.h"
-#include "Render/Scene/Mesh.h"
+
+namespace ce
+{
+class Material;
+class Mesh;
+}
 
 namespace ce::scene {
 
@@ -50,6 +56,26 @@ inline juce::Matrix3D<float> ToModelMatrix(const Transform& t) {
 struct MeshRenderer {
     std::shared_ptr<Mesh> mesh;
     std::shared_ptr<Material> material;
+};
+
+// A serializable asset identifier. Object definitions use this instead of
+// embedding GPU resources, and the viewport resolves it through AssetCatalog.
+struct MeshAssetReference {
+    juce::String assetId;
+};
+
+// Identity and authored behavior remain on the entity rather than inside a
+// FRust runtime, so projects can inspect and save them independently.
+struct ObjectDefinitionRef {
+    juce::String definitionId;
+};
+
+struct BehaviorAttachments {
+    std::vector<juce::String> podIds;
+};
+
+struct ObjectState {
+    juce::NamedValueSet values;
 };
 
 // Hierarchy grouping (spec section 3.2: "organize placed objects into a
