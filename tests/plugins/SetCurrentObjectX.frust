@@ -1,5 +1,17 @@
 manifest "{\"name\":\"set_current_x\",\"version\":\"0.1.0\",\"description\":\"Creation Engine current object capability smoke behavior\",\"entryPoints\":[\"on_event\"],\"intendedApplications\":[\"creation-engine\"],\"requiredHostFunctions\":[{\"name\":\"engine_current_object_entity\",\"description\":\"Reads the object currently receiving this behavior event.\"},{\"name\":\"engine_set_position_x\",\"description\":\"Sets an Engine entity X position.\"}]}";
 
+node pure pub fn core_select(condition: bool) -> i64 = {
+    1
+}
+
+node callable pub fn core_trigger() -> i64 = {
+    1
+}
+
+node loop pub fn core_repeat(count: i64) -> i64 = {
+    count
+}
+
 extern fn engine_current_object_entity() -> i64;
 extern fn engine_set_position_x(entity: i64, position_x: i64) -> i64;
 

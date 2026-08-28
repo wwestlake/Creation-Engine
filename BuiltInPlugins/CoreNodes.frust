@@ -1,0 +1,5 @@
+manifest "{\"name\":\"core_nodes\",\"version\":\"0.1.0\",\"description\":\"Creation Suite generic math and logic nodes\",\"intendedApplications\":[\"creation-engine\"],\"nodeSourceModules\":[\"CoreNodesLibrary\"]}";
+
+// Discovery wrapper: the compiler reflects the declarations in the module
+// below, while generated graphs import that same module into their own root.
+use self::CoreNodesLibrary;

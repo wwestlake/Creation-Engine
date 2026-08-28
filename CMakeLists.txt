@@ -60,6 +60,8 @@ add_custom_command(TARGET CreationEngineEditor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineEditor>" "D:/CreationSuite-Workspaces/claude-$<LOWER_CASE:$<CONFIG>>-bin/"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/EngineLifecycle.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodes.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodesLibrary.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
     COMMENT "Copying CreationEngineEditor to the shared claude bin directory"
 )
 
@@ -71,6 +73,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/MainComponent.cpp
     Source/Frust/EngineFrustHost.h
     Source/Frust/EngineFrustHost.cpp
+    Source/Frust/EngineNodeLibraryLoader.h
+    Source/Frust/EngineNodeLibraryLoader.cpp
     Source/Branding.h
     Source/Branding.cpp
     Source/Render/ViewportComponent.h
@@ -183,10 +187,12 @@ target_link_libraries(CreationEngineEditor PRIVATE
 add_executable(CreationEngineFrustPluginSmoke
     tests/EngineFrustPluginSmoke.cpp
     Source/Frust/EngineFrustHost.cpp
+    Source/Frust/EngineNodeLibraryLoader.cpp
 )
 target_include_directories(CreationEngineFrustPluginSmoke PRIVATE Source)
 target_link_libraries(CreationEngineFrustPluginSmoke PRIVATE
     engine_core
+    node_system
     creation_suite_frust_plugin_runtime
     juce::juce_core
 )
@@ -210,10 +216,12 @@ add_test(NAME creation_engine_multi_plugin_runtime_smoke COMMAND CreationEngineM
 add_executable(CreationEngineObjectBehaviorSmoke
     tests/EngineObjectBehaviorSmoke.cpp
     Source/Frust/EngineFrustHost.cpp
+    Source/Frust/EngineNodeLibraryLoader.cpp
 )
 target_include_directories(CreationEngineObjectBehaviorSmoke PRIVATE Source)
 target_link_libraries(CreationEngineObjectBehaviorSmoke PRIVATE
     engine_core
+    node_system
     creation_suite_frust_plugin_runtime
     juce::juce_core
     juce::juce_graphics
@@ -244,6 +252,28 @@ target_link_libraries(CreationEngineFrustGraphSmoke PRIVATE
     node_system
 )
 add_test(NAME creation_engine_frust_graph_smoke COMMAND CreationEngineFrustGraphSmoke)
+
+add_executable(CreationEngineNodeLibraryLoaderSmoke
+    tests/EngineNodeLibraryLoaderSmoke.cpp
+    Source/Frust/EngineNodeLibraryLoader.cpp
+)
+target_include_directories(CreationEngineNodeLibraryLoaderSmoke PRIVATE Source)
+target_link_libraries(CreationEngineNodeLibraryLoaderSmoke PRIVATE
+    node_system
+    creation_suite_frust_plugin_runtime
+    juce::juce_core
+)
+add_test(NAME creation_engine_node_library_loader_smoke COMMAND CreationEngineNodeLibraryLoaderSmoke)
+
+add_executable(CreationEngineFrustCodegenSmoke
+    tests/FrustCodegenSmoke.cpp
+)
+target_link_libraries(CreationEngineFrustCodegenSmoke PRIVATE node_system)
+target_link_libraries(CreationEngineFrustCodegenSmoke PRIVATE creation_suite_frust_plugin_runtime)
+target_compile_definitions(CreationEngineFrustCodegenSmoke PRIVATE
+    CE_CORE_NODE_LIBRARY="${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodesLibrary.frust"
+)
+add_test(NAME creation_engine_frust_codegen_smoke COMMAND CreationEngineFrustCodegenSmoke)
 
 # --- Dedicated server executable ------------------------------------------
 # Headless build: no rendering or client-only assets. Only juce_core and
