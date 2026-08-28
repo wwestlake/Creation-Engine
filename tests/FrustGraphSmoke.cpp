@@ -1,5 +1,6 @@
 #include "node_system/frgraph_serialization.h"
 #include "node_system/graph_analysis.h"
+#include "node_system/node_library.h"
 
 #include <iostream>
 #include <string>
@@ -19,19 +20,46 @@ bool contains(const std::string& text, const std::string& value) {
 } // namespace
 
 int main() {
-    Graph graph("movement", GraphTarget::Behavior);
-    Node& source = graph.AddNode("InputAxis", Domain::Event);
-    const PinId sourceOut = source.AddOutput("value", streamFloat());
-    Node& consumer = graph.AddNode("Move", Domain::Core);
-    const PinId consumerIn = consumer.AddInput("value", streamFloat());
+    NodeLibraryRegistry libraries;
+    NodeLibraryDescriptor movementLibrary;
+    movementLibrary.id = "engine.movement";
+    movementLibrary.displayName = "Movement";
+    movementLibrary.description = "Input and movement behavior nodes.";
+    movementLibrary.nodeTypes.push_back({
+        "engine.input_axis", "Input Axis", "Input", "Emits a mapped input stream.", "input_axis_value",
+        { "engine_input_axis" }, Domain::Event, {}, { { "value", streamFloat(), {} } }
+    });
+    movementLibrary.nodeTypes.push_back({
+        "engine.move", "Move", "Movement", "Consumes a movement input stream.", "move_from_input",
+        { "engine_move" }, Domain::Core, { { "value", streamFloat(), {} } }, {}
+    });
+    std::string libraryError;
+    if (!libraries.Register(std::move(movementLibrary), &libraryError)) {
+        std::cerr << "Could not register node library: " << libraryError << '\n';
+        return 1;
+    }
 
-    if (!graph.Connect(source.Id(), sourceOut, consumer.Id(), consumerIn).has_value()) {
+    Graph graph("movement", GraphTarget::Behavior);
+    Node* source = libraries.AddNode(graph, "engine.input_axis", &libraryError);
+    if (source == nullptr || source->Outputs().size() != 1 || source->Outputs().front().type.kind != PinKind::Stream) {
+        std::cerr << "Plugin node library did not create its declared node: " << libraryError << '\n';
+        return 1;
+    }
+    const PinId sourceOut = source->Outputs().front().id;
+    Node* consumer = libraries.AddNode(graph, "engine.move", &libraryError);
+    if (consumer == nullptr || consumer->Inputs().size() != 1) {
+        std::cerr << "Plugin node library did not create a stream consumer: " << libraryError << '\n';
+        return 1;
+    }
+    const PinId consumerIn = consumer->Inputs().front().id;
+
+    if (!graph.Connect(source->Id(), sourceOut, consumer->Id(), consumerIn).has_value()) {
         std::cerr << "Could not create a compatible stream connection.\n";
         return 1;
     }
 
     const auto streamOrder = TopologicalStreamOrder(graph);
-    if (!streamOrder || streamOrder->size() != 2 || streamOrder->front() != source.Id()) {
+    if (!streamOrder || streamOrder->size() != 2 || streamOrder->front() != source->Id()) {
         std::cerr << "Stream graph did not produce deterministic order.\n";
         return 1;
     }
@@ -46,7 +74,7 @@ int main() {
     std::string error;
     const auto restored = DeserializeGraph(serialized, error);
     if (!restored || restored->Target() != GraphTarget::Behavior || restored->Connections().size() != 1 ||
-        restored->FindNode(source.Id())->FindPin(sourceOut)->type.kind != PinKind::Stream) {
+        restored->FindNode(source->Id())->FindPin(sourceOut)->type.kind != PinKind::Stream) {
         std::cerr << "FRust graph round trip failed: " << error << '\n';
         return 1;
     }
@@ -62,8 +90,17 @@ int main() {
         return 1;
     }
 
-    if (!ValidateGraph(graph).ok) {
+    if (!ValidateGraph(graph, &libraries.TypeRegistry()).ok) {
         std::cerr << "Valid stream graph was rejected.\n";
+        return 1;
+    }
+
+    NodeLibraryDescriptor conflictingLibrary;
+    conflictingLibrary.id = "engine.conflict";
+    conflictingLibrary.nodeTypes.push_back({ "engine.input_axis" });
+    if (libraries.Register(std::move(conflictingLibrary), &libraryError) ||
+        !contains(libraryError, "already owned by library 'engine.movement'")) {
+        std::cerr << "Plugin node library type ownership was not enforced.\n";
         return 1;
     }
 
