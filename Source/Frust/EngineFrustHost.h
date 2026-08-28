@@ -33,17 +33,23 @@ public:
 
     bool load(const std::string& pluginPath, std::string& error);
     bool loadBundled(std::string& error);
+    bool loadObjectBehavior(const std::string& podId, const std::string& pluginPath, std::string& error);
     void dispatch(EngineFrustEvent event, std::int64_t argument = 0);
     [[nodiscard]] bool isLoaded() const noexcept;
+    [[nodiscard]] bool isObjectBehaviorLoaded(const std::string& podId) const noexcept;
 
 private:
     static std::int64_t currentTick();
     static std::int64_t firstTransformEntity();
+    static std::int64_t currentObjectEntity();
     static std::int64_t setPositionX(std::int64_t entityId, std::int64_t positionX);
+    [[nodiscard]] static std::string behaviorKey(const std::string& podId);
+    void dispatchObjectBehaviors(EngineFrustEvent event, std::int64_t argument);
 
     static EngineFrustHost* activeHost;
 
     engine::World& world;
     creation::frust::PluginRuntime runtime { "creation-engine" };
+    std::int64_t activeObjectEntityId = -1;
 };
 } // namespace ce::frust
