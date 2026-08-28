@@ -17,6 +17,7 @@
 #include "Views/PlaceholderPanel.h"
 #include "Views/TransformPanel.h"
 #include "Views/ViewModeBar.h"
+#include "Runtime/GameClientWindow.h"
 
 #include <creation/assets/ProjectSession.h>
 #include <creation/assets/ProjectWorkspaceService.h>
@@ -45,6 +46,7 @@ private:
     void SetActiveMode(ce::WorkspaceMode mode);
     void SetPlaying(bool playing);
     void initialiseDockingWorkspace();
+    void openGameClient();
 
     void createNewProject();
     void openProject(const juce::String& projectId);
@@ -78,6 +80,7 @@ private:
     ce::HierarchyPanel hierarchyPanel_;
     juce::Label inspectorTitle_ { {}, "Inspector" };
     juce::Label tickLabel_;
+    juce::TextButton runGameButton_ { "Run Game Client" };
 
     ce::TransformPanel transformPanel_;
 
@@ -101,6 +104,7 @@ private:
     ce::PlaceholderPanel settingsPanel_ { "Settings", "Application settings - coming soon" };
 
     std::unique_ptr<CreationDock::DockManager> dockManager_;
+    std::vector<std::unique_ptr<ce::runtime::GameClientWindow>> gameClients_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

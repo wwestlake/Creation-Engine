@@ -125,6 +125,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/ViewModeBar.cpp
     Source/Views/FrustLogicPanel.h
     Source/Views/FrustLogicPanel.cpp
+    Source/Runtime/GameClientWindow.h
+    Source/Runtime/GameClientWindow.cpp
     Source/Views/PlaceholderPanel.h
     Source/Views/PlaceholderPanel.cpp
     Source/Views/HierarchyPanel.h
