@@ -1,5 +1,6 @@
 add_library(node_system STATIC
     src/node.cpp
+    src/node_library.cpp
     src/graph.cpp
     src/type_registry.cpp
     src/graph_analysis.cpp
