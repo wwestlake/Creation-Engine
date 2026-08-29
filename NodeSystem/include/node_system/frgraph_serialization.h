@@ -27,7 +27,6 @@ namespace ce::node_system {
 // byte-for-byte -- via Node::AddInputWithId/AddOutputWithId and
 // Graph::AddNodeWithId/ConnectWithId, not freshly renumbered ids. This
 // is what the format-stability regression test depends on. The reader also
-// accepts the old `celg 1` header for one-way migration; writers never emit it.
 
 std::string SerializeGraph(const Graph& graph);
 
