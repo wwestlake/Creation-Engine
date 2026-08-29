@@ -127,6 +127,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/FrustLogicPanel.cpp
     Source/Runtime/GameClientWindow.h
     Source/Runtime/GameClientWindow.cpp
+    Source/Character/CharacterDefinition.h
+    Source/Character/CharacterDefinition.cpp
     Source/Views/PlaceholderPanel.h
     Source/Views/PlaceholderPanel.cpp
     Source/Views/HierarchyPanel.h
