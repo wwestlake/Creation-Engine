@@ -32,7 +32,8 @@
 // audio transport. Only Scene has a real panel today; the rest are
 // PlaceholderPanel stand-ins until their own milestones land.
 class MainComponent final : public juce::Component,
-                            private juce::Timer
+                            private juce::Timer,
+                            public juce::ApplicationCommandTarget
 {
 public:
     MainComponent();
@@ -40,6 +41,11 @@ public:
 
     void paint(juce::Graphics&) override;
     void resized() override;
+
+    juce::ApplicationCommandTarget* getNextCommandTarget() override { return nullptr; }
+    void getAllCommands(juce::Array<juce::CommandID>& commands) override;
+    void getCommandInfo(juce::CommandID commandID, juce::ApplicationCommandInfo& result) override;
+    bool perform(const juce::ApplicationCommandTarget::InvocationInfo& info) override;
 
 private:
     void timerCallback() override;
@@ -60,6 +66,7 @@ private:
     creation::suite::SuiteSettingsStore suiteSettingsStore_;
     creation::assets::ProjectSession projectSession_;
     bool projectDirty_ = false;
+    juce::ApplicationCommandManager commandManager_;
 
     ce::engine::World world_;
     ce::frust::EngineFrustHost frustHost_ { world_ };
