@@ -6,6 +6,8 @@
 #include "Scene/EngineSceneSerializer.h"
 
 namespace {
+constexpr juce::CommandID kRunGameClientCommand = 0x1001;
+
 class NonOwningPanelHost final : public juce::Component
 {
 public:
@@ -24,6 +26,12 @@ MainComponent::MainComponent()
       pbrMaterialPanel_(world_),
       importPanel_(world_, viewport_),
       lightPanel_(viewport_) {
+    commandManager_.registerAllCommandsForTarget(this);
+    commandManager_.getKeyMappings()->addKeyPress(
+        kRunGameClientCommand,
+        juce::KeyPress('G', juce::ModifierKeys::ctrlModifier | juce::ModifierKeys::shiftModifier, 0));
+    addKeyListener(commandManager_.getKeyMappings());
+
     juce::String suiteErr;
     suiteSettings_ = suiteSettingsStore_.load(suiteErr);
 
@@ -100,6 +108,7 @@ MainComponent::MainComponent()
 }
 
 MainComponent::~MainComponent() {
+    removeKeyListener(commandManager_.getKeyMappings());
     stopTimer();
     gameClients_.clear();
 }
@@ -116,6 +125,30 @@ void MainComponent::resized() {
     runGameButton_.setBounds(getWidth() - 170, 105, 158, 34);
 
     if (dockManager_ != nullptr) dockManager_->setBounds(bounds);
+}
+
+void MainComponent::getAllCommands(juce::Array<juce::CommandID>& commands)
+{
+    commands.add(kRunGameClientCommand);
+}
+
+void MainComponent::getCommandInfo(juce::CommandID commandID, juce::ApplicationCommandInfo& result)
+{
+    if (commandID == kRunGameClientCommand)
+    {
+        result.setInfo("Run Game Client", "Open an isolated game client window", "Game", {});
+        result.addDefaultKeypress('G', juce::ModifierKeys::ctrlModifier | juce::ModifierKeys::shiftModifier);
+    }
+}
+
+bool MainComponent::perform(const juce::ApplicationCommandTarget::InvocationInfo& info)
+{
+    if (info.commandID == kRunGameClientCommand)
+    {
+        openGameClient();
+        return true;
+    }
+    return false;
 }
 
 void MainComponent::openGameClient()
