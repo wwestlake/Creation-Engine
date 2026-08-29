@@ -24,7 +24,7 @@ MainComponent::MainComponent()
       hierarchyPanel_(world_, viewport_),
       transformPanel_(world_),
       pbrMaterialPanel_(world_),
-      importPanel_(world_, viewport_),
+      importPanel_(world_, viewport_, projectSession_),
       lightPanel_(viewport_) {
     commandManager_.registerAllCommandsForTarget(this);
     commandManager_.getKeyMappings()->addKeyPress(

@@ -83,16 +83,15 @@ private:
 
 ImportPanel::~ImportPanel() = default;
 
-ImportPanel::ImportPanel(engine::World& world, ViewportComponent& viewport) {
+ImportPanel::ImportPanel(engine::World& world, ViewportComponent& viewport,
+                         creation::assets::ProjectSession& projectSession) {
     registry_.RegisterBuiltins();
     context_.world = &world;
     context_.catalog = &viewport.Catalog();
     context_.viewport = &viewport;
+    context_.projectSession = &projectSession;
     context_.audioCatalog = &audioCatalog_;
     context_.audioFormatManager = &audioFormatManager_;
-    // context_.vfs stays null -- nothing registered yet persists into the
-    // VirtualFileSystem, only the live AssetCatalog/AudioCatalog (see
-    // GltfAssetImporter/AudioAssetImporter).
 
     audioFormatManager_.registerBasicFormats(); // WAV, AIFF, and (JUCE_USE_FLAC defaults on) FLAC.
 
