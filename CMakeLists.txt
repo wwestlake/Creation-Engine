@@ -3,6 +3,16 @@ cmake_minimum_required(VERSION 3.22)
 set(CREATION_ENGINE_VERSION "0.0.1" CACHE STRING "Creation Engine product version")
 project(CreationEngine VERSION ${CREATION_ENGINE_VERSION} LANGUAGES CXX)
 
+find_path(CREATION_OPENXR_INCLUDE_DIR NAMES openxr/openxr.h)
+find_library(CREATION_OPENXR_LOADER_LIBRARY NAMES openxr_loader)
+if (CREATION_OPENXR_INCLUDE_DIR AND CREATION_OPENXR_LOADER_LIBRARY)
+    set(CREATION_ENGINE_HAS_OPENXR 1)
+    message(STATUS "Creation Engine: OpenXR runtime support enabled")
+else()
+    set(CREATION_ENGINE_HAS_OPENXR 0)
+    message(STATUS "Creation Engine: OpenXR runtime support disabled (optional dependency not found)")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -165,6 +175,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Audio/AudioCatalog.cpp
     Source/Audio/AudioPreviewPlayer.h
     Source/Audio/AudioPreviewPlayer.cpp
+    Source/VR/OpenXRProvider.h
+    Source/VR/OpenXRProvider.cpp
 )
 
 target_include_directories(CreationEngineEditor PRIVATE
@@ -172,6 +184,11 @@ target_include_directories(CreationEngineEditor PRIVATE
     third_party
     "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/JuceDocking"
 )
+
+if (CREATION_ENGINE_HAS_OPENXR)
+    target_include_directories(CreationEngineEditor PRIVATE ${CREATION_OPENXR_INCLUDE_DIR})
+    target_link_libraries(CreationEngineEditor PRIVATE ${CREATION_OPENXR_LOADER_LIBRARY})
+endif()
 
 target_compile_definitions(CreationEngineEditor PRIVATE
     JUCE_WEB_BROWSER=0
@@ -181,6 +198,7 @@ target_compile_definitions(CreationEngineEditor PRIVATE
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:CreationEngineEditor,JUCE_VERSION>"
     CE_SHADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Source/Render/Shaders"
     CE_ASSET_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
+    CE_HAS_OPENXR=${CREATION_ENGINE_HAS_OPENXR}
 )
 
 target_link_libraries(CreationEngineEditor PRIVATE
