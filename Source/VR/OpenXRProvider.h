@@ -2,6 +2,8 @@
 
 #include "engine/vr.h"
 
+#include <cstdint>
+
 namespace ce::vr {
 
 // PC OpenXR runtime discovery. Graphics-session creation is separate because
@@ -12,9 +14,12 @@ public:
     ~OpenXRProvider() override;
 
     bool initialize() override;
+    // Must be called from the thread with the editor's current OpenGL
+    // context. The raw context is the HGLRC returned by JUCE.
+    bool initializeOpenGL(void* rawOpenGLContext);
     void shutdown() override;
     engine::vr::SessionState sessionState() const noexcept override { return state_; }
-    engine::vr::RenderTargetSize recommendedRenderSize() const noexcept override { return { 1440, 1600 }; }
+    engine::vr::RenderTargetSize recommendedRenderSize() const noexcept override { return renderSize_; }
     bool beginFrame(engine::vr::FrameState& frame) override;
     bool submitFrame(const engine::vr::FrameState& frame) override;
 
@@ -22,6 +27,13 @@ private:
     engine::vr::SessionState state_ = engine::vr::SessionState::unavailable;
     void* instance_ = nullptr;
     void* system_ = nullptr;
+    void* session_ = nullptr;
+    void* space_ = nullptr;
+    engine::vr::RenderTargetSize renderSize_{ 1440, 1600 };
+    std::int64_t displayTime_ = 0;
+    bool frameBegun_ = false;
+
+    bool pollEvents();
 };
 
 } // namespace ce::vr
