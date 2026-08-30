@@ -18,11 +18,12 @@ using ObjectLifecycleHook = std::int64_t (*)(std::int64_t);
 
 EngineFrustHost* EngineFrustHost::activeHost = nullptr;
 
-EngineFrustHost::EngineFrustHost(engine::World& worldToHost)
-    : world(worldToHost)
+EngineFrustHost::EngineFrustHost(engine::World& worldToHost, bool isServerHost)
+    : world(worldToHost), serverMode(isServerHost)
 {
     activeHost = this;
     runtime.registerHostFunction("engine_current_tick", reinterpret_cast<void*>(&EngineFrustHost::currentTick));
+    runtime.registerHostFunction("engine_runtime_is_server", reinterpret_cast<void*>(&EngineFrustHost::runtimeIsServer));
     runtime.registerHostFunction("engine_first_transform_entity", reinterpret_cast<void*>(&EngineFrustHost::firstTransformEntity));
     runtime.registerHostFunction("engine_current_object_entity", reinterpret_cast<void*>(&EngineFrustHost::currentObjectEntity));
     runtime.registerHostFunction("engine_set_position_x", reinterpret_cast<void*>(&EngineFrustHost::setPositionX));
@@ -174,6 +175,11 @@ bool EngineFrustHost::registerNodeLibraries(const std::string& key, std::string&
 std::int64_t EngineFrustHost::currentTick()
 {
     return activeHost != nullptr ? static_cast<std::int64_t>(activeHost->world.CurrentTick()) : 0;
+}
+
+std::int64_t EngineFrustHost::runtimeIsServer()
+{
+    return activeHost != nullptr && activeHost->serverMode ? 1 : 0;
 }
 
 std::int64_t EngineFrustHost::firstTransformEntity()
