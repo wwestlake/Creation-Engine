@@ -6,12 +6,27 @@
 #include <vector>
 
 #if CE_HAS_OPENXR
+#include <juce_opengl/juce_opengl.h>
+#endif
+
+#if CE_HAS_OPENXR
+#ifndef GL_FRAMEBUFFER
+#define GL_FRAMEBUFFER 0x8D40
+#define GL_COLOR_ATTACHMENT0 0x8CE0
+#define GL_TEXTURE_2D 0x0DE1
+#define GL_FRAMEBUFFER_COMPLETE 0x8CD5
+#endif
+#endif
+
+#if CE_HAS_OPENXR
 #define XR_USE_PLATFORM_WIN32
 #define XR_USE_GRAPHICS_API_OPENGL
 #include <windows.h>
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 #endif
+
+using namespace juce::gl;
 
 namespace ce::vr {
 
@@ -105,6 +120,63 @@ bool OpenXRProvider::initializeOpenGL(void* rawOpenGLContext)
         return false;
     }
 
+    std::array<XrSwapchainCreateInfo, 2> swapchainInfos{};
+    for (int eye = 0; eye < 2; ++eye) {
+        uint32_t formatCount = 0;
+        if (xrEnumerateSwapchainFormats(session, 0, &formatCount, nullptr) != XR_SUCCESS || formatCount == 0) {
+            xrDestroySpace(space);
+            xrDestroySession(session);
+            return false;
+        }
+        std::vector<int64_t> formats(formatCount);
+        if (xrEnumerateSwapchainFormats(session, formatCount, &formatCount, formats.data()) != XR_SUCCESS) {
+            xrDestroySpace(space);
+            xrDestroySession(session);
+            return false;
+        }
+        int64_t selectedFormat = formats.front();
+        for (const auto format : formats) {
+            if (format == 0x8C43 /* GL_SRGB8_ALPHA8 */ || format == 0x8058 /* GL_RGBA8 */) {
+                selectedFormat = format;
+                break;
+            }
+        }
+        XrSwapchainCreateInfo info{ XR_TYPE_SWAPCHAIN_CREATE_INFO };
+        info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+        info.format = selectedFormat;
+        info.sampleCount = configs[eye].recommendedSwapchainSampleCount;
+        info.width = configs[eye].recommendedImageRectWidth;
+        info.height = configs[eye].recommendedImageRectHeight;
+        info.faceCount = 1;
+        info.arraySize = 1;
+        info.mipCount = 1;
+        XrSwapchain swapchain = XR_NULL_HANDLE;
+        if (xrCreateSwapchain(session, &info, &swapchain) != XR_SUCCESS) {
+            xrDestroySpace(space);
+            xrDestroySession(session);
+            return false;
+        }
+        uint32_t imageCount = 0;
+        if (xrEnumerateSwapchainImages(swapchain, 0, &imageCount, nullptr) != XR_SUCCESS || imageCount == 0) {
+            xrDestroySwapchain(swapchain);
+            xrDestroySpace(space);
+            xrDestroySession(session);
+            return false;
+        }
+        std::vector<XrSwapchainImageOpenGLKHR> images(imageCount,
+                                                       XrSwapchainImageOpenGLKHR{ XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR });
+        if (xrEnumerateSwapchainImages(swapchain, imageCount, &imageCount,
+                                       reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data())) != XR_SUCCESS) {
+            xrDestroySwapchain(swapchain);
+            xrDestroySpace(space);
+            xrDestroySession(session);
+            return false;
+        }
+        swapchains_[eye] = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(swapchain));
+        swapchainImages_[eye].reserve(imageCount);
+        for (const auto& image : images) swapchainImages_[eye].push_back(image.image);
+    }
+
     session_ = reinterpret_cast<void*>(session);
     space_ = reinterpret_cast<void*>(space);
     renderSize_ = { configs[0].recommendedImageRectWidth, configs[0].recommendedImageRectHeight };
@@ -131,6 +203,9 @@ void OpenXRProvider::shutdown()
     if (space_ != nullptr) xrDestroySpace(reinterpret_cast<XrSpace>(space_));
     if (session_ != nullptr) {
         auto session = reinterpret_cast<XrSession>(session_);
+        for (const auto swapchain : swapchains_) {
+            if (swapchain != 0) xrDestroySwapchain(reinterpret_cast<XrSwapchain>(static_cast<std::uintptr_t>(swapchain)));
+        }
         xrDestroySession(session);
     }
     if (instance_ != nullptr) xrDestroyInstance(reinterpret_cast<XrInstance>(instance_));
@@ -139,6 +214,11 @@ void OpenXRProvider::shutdown()
     system_ = nullptr;
     session_ = nullptr;
     space_ = nullptr;
+    swapchains_ = {};
+    swapchainImages_ = {};
+    acquiredImages_ = {};
+    framebuffers_ = {};
+    imageAcquired_ = {};
     frameBegun_ = false;
     displayTime_ = 0;
     state_ = engine::vr::SessionState::unavailable;
@@ -217,6 +297,33 @@ bool OpenXRProvider::beginFrame(engine::vr::FrameState& frame)
         target.pose.position = { views[eye].pose.position.x, views[eye].pose.position.y, views[eye].pose.position.z };
         target.pose.orientation = { views[eye].pose.orientation.x, views[eye].pose.orientation.y,
                                     views[eye].pose.orientation.z, views[eye].pose.orientation.w };
+        target.renderWidth = renderSize_.width;
+        target.renderHeight = renderSize_.height;
+        fov_[eye * 4 + 0] = views[eye].fov.angleLeft;
+        fov_[eye * 4 + 1] = views[eye].fov.angleRight;
+        fov_[eye * 4 + 2] = views[eye].fov.angleUp;
+        fov_[eye * 4 + 3] = views[eye].fov.angleDown;
+        XrSwapchain swapchain = reinterpret_cast<XrSwapchain>(static_cast<std::uintptr_t>(swapchains_[eye]));
+        XrSwapchainImageAcquireInfo acquireInfo{ XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
+        if (xrAcquireSwapchainImage(swapchain, &acquireInfo, &acquiredImages_[eye]) != XR_SUCCESS)
+            return false;
+        XrSwapchainImageWaitInfo imageWaitInfo{ XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
+        imageWaitInfo.timeout = XR_INFINITE_DURATION;
+        if (xrWaitSwapchainImage(swapchain, &imageWaitInfo) != XR_SUCCESS)
+            return false;
+        glGenFramebuffers(1, &framebuffers_[eye]);
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffers_[eye]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                               swapchainImages_[eye][acquiredImages_[eye]], 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glDeleteFramebuffers(1, &framebuffers_[eye]);
+            framebuffers_[eye] = 0;
+            return false;
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        target.renderTarget = framebuffers_[eye];
+        imageAcquired_[eye] = true;
     }
     frameBegun_ = true;
     return true;
@@ -232,10 +339,50 @@ bool OpenXRProvider::submitFrame(const engine::vr::FrameState& frame)
     (void)frame;
     if (!frameBegun_ || session_ == nullptr)
         return false;
+    std::array<XrCompositionLayerProjectionView, 2> projectionViews{};
+    for (int eye = 0; eye < 2; ++eye) {
+        projectionViews[eye].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
+        projectionViews[eye].pose = { { frame.leftEye.pose.orientation.x, frame.leftEye.pose.orientation.y,
+                                         frame.leftEye.pose.orientation.z, frame.leftEye.pose.orientation.w },
+                                       { frame.leftEye.pose.position.x, frame.leftEye.pose.position.y,
+                                         frame.leftEye.pose.position.z } };
+        if (eye == 1) {
+            projectionViews[eye].pose = { { frame.rightEye.pose.orientation.x, frame.rightEye.pose.orientation.y,
+                                             frame.rightEye.pose.orientation.z, frame.rightEye.pose.orientation.w },
+                                           { frame.rightEye.pose.position.x, frame.rightEye.pose.position.y,
+                                             frame.rightEye.pose.position.z } };
+        }
+        projectionViews[eye].fov = { fov_[eye * 4 + 0], fov_[eye * 4 + 1], fov_[eye * 4 + 2], fov_[eye * 4 + 3] };
+        projectionViews[eye].subImage.swapchain = reinterpret_cast<XrSwapchain>(static_cast<std::uintptr_t>(swapchains_[eye]));
+        projectionViews[eye].subImage.imageRect = { { 0, 0 },
+                                                     { static_cast<int32_t>(frame.leftEye.renderWidth),
+                                                       static_cast<int32_t>(frame.leftEye.renderHeight) } };
+        if (eye == 1)
+            projectionViews[eye].subImage.imageRect.extent = { static_cast<int32_t>(frame.rightEye.renderWidth),
+                                                               static_cast<int32_t>(frame.rightEye.renderHeight) };
+    }
+    XrCompositionLayerProjection layer{ XR_TYPE_COMPOSITION_LAYER_PROJECTION };
+    layer.space = reinterpret_cast<XrSpace>(space_);
+    layer.viewCount = 2;
+    layer.views = projectionViews.data();
     XrFrameEndInfo endInfo{ XR_TYPE_FRAME_END_INFO };
     endInfo.displayTime = displayTime_;
     endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    const XrCompositionLayerBaseHeader* layers[] = { reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer) };
+    endInfo.layerCount = 1;
+    endInfo.layers = layers;
     const bool success = xrEndFrame(reinterpret_cast<XrSession>(session_), &endInfo) == XR_SUCCESS;
+    for (int eye = 0; eye < 2; ++eye) {
+        if (framebuffers_[eye] != 0) {
+            glDeleteFramebuffers(1, &framebuffers_[eye]);
+            framebuffers_[eye] = 0;
+        }
+        if (imageAcquired_[eye]) {
+            XrSwapchainImageReleaseInfo releaseInfo{ XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
+            xrReleaseSwapchainImage(reinterpret_cast<XrSwapchain>(static_cast<std::uintptr_t>(swapchains_[eye])), &releaseInfo);
+            imageAcquired_[eye] = false;
+        }
+    }
     frameBegun_ = false;
     return success;
 #else

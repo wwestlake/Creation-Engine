@@ -2,7 +2,9 @@
 
 #include "engine/vr.h"
 
+#include <array>
 #include <cstdint>
+#include <vector>
 
 namespace ce::vr {
 
@@ -30,6 +32,12 @@ private:
     void* session_ = nullptr;
     void* space_ = nullptr;
     engine::vr::RenderTargetSize renderSize_{ 1440, 1600 };
+    std::array<std::uint64_t, 2> swapchains_{};
+    std::array<std::vector<std::uint32_t>, 2> swapchainImages_{};
+    std::array<std::uint32_t, 2> acquiredImages_{};
+    std::array<std::uint32_t, 2> framebuffers_{};
+    std::array<float, 8> fov_{};
+    std::array<bool, 2> imageAcquired_{};
     std::int64_t displayTime_ = 0;
     bool frameBegun_ = false;
 

@@ -32,6 +32,11 @@ enum class Eye : std::uint8_t { left, right };
 struct View {
     Pose pose{};
     std::array<float, 16> projection{};
+    // Opaque graphics target supplied by a provider. Zero means the view is
+    // tracking-only and has no compositor render target.
+    std::uintptr_t renderTarget = 0;
+    std::uint32_t renderWidth = 0;
+    std::uint32_t renderHeight = 0;
 };
 
 struct ControllerState {
