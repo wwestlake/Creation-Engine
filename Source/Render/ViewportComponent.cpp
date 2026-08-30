@@ -414,12 +414,15 @@ void ViewportComponent::renderOpenGL() {
     // provider owns the OpenXR swapchains; the next renderer step will render
     // the scene separately with each eye's pose and projection.
     if (vrFrameActive) {
-        const auto copyEye = [](const engine::vr::View& eye) {
+        const auto sourceWidth = juce::roundToInt(scale * static_cast<float>(getWidth()));
+        const auto sourceHeight = juce::roundToInt(scale * static_cast<float>(getHeight()));
+        const auto copyEye = [sourceWidth, sourceHeight](const engine::vr::View& eye) {
             if (eye.renderTarget == 0 || eye.renderWidth == 0 || eye.renderHeight == 0)
                 return;
             glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+            glReadBuffer(GL_BACK);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(eye.renderTarget));
-            glBlitFramebuffer(0, 0, eye.renderWidth, eye.renderHeight,
+            glBlitFramebuffer(0, 0, sourceWidth, sourceHeight,
                               0, 0, eye.renderWidth, eye.renderHeight,
                               GL_COLOR_BUFFER_BIT, GL_LINEAR);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
