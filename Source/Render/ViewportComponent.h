@@ -16,6 +16,7 @@
 #include "Render/Scene/Mesh.h"
 #include "Render/Shaders/ShaderComposer.h"
 #include "Scene/AssetCatalog.h"
+#include "VR/OpenXRProvider.h"
 
 namespace ce {
 
@@ -111,6 +112,8 @@ private:
     engine::World& world_;
 
     juce::OpenGLContext openGLContext_;
+    std::unique_ptr<vr::OpenXRProvider> openXRProvider_;
+    engine::vr::FrameState vrFrame_{};
     std::unique_ptr<ShaderComposer> shaderComposer_;
     creation::assets::VirtualFileSystem vfs_;
     scene::AssetCatalog assetCatalog_;

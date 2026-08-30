@@ -153,6 +153,15 @@ void ViewportComponent::newOpenGLContextCreated() {
     std::cout << "[render] newOpenGLContextCreated: GL_VERSION="
               << reinterpret_cast<const char*>(glGetString(GL_VERSION)) << std::endl;
 
+    openXRProvider_ = std::make_unique<vr::OpenXRProvider>();
+    if (openXRProvider_->initialize() && openXRProvider_->initializeOpenGL(openGLContext_.getRawContext())) {
+        const auto size = openXRProvider_->recommendedRenderSize();
+        std::cout << "[vr] OpenXR OpenGL session created; eye target " << size.width << "x" << size.height << std::endl;
+    } else {
+        openXRProvider_.reset();
+        std::cout << "[vr] OpenXR session unavailable; desktop viewport remains active." << std::endl;
+    }
+
     shaderComposer_ = std::make_unique<ShaderComposer>(juce::File(CE_SHADER_SOURCE_DIR));
 
     // Proves the composer handles more than one program/variant: the
@@ -185,6 +194,7 @@ void ViewportComponent::newOpenGLContextCreated() {
 }
 
 void ViewportComponent::renderOpenGL() {
+    const bool vrFrameActive = openXRProvider_ != nullptr && openXRProvider_->beginFrame(vrFrame_);
     // Must be set every frame, not once at context creation: JUCE's own
     // OpenGLGraphicsContext composites this component's 2D paint() on the
     // same context immediately after this callback returns each frame,
@@ -210,6 +220,7 @@ void ViewportComponent::renderOpenGL() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     if (shaderComposer_ == nullptr) {
+        if (vrFrameActive) openXRProvider_->submitFrame(vrFrame_);
         return;
     }
 
@@ -399,9 +410,14 @@ void ViewportComponent::renderOpenGL() {
     }
 
     LogGLErrors("draw");
+    if (vrFrameActive) openXRProvider_->submitFrame(vrFrame_);
 }
 
 void ViewportComponent::openGLContextClosing() {
+    if (openXRProvider_ != nullptr) {
+        openXRProvider_->shutdown();
+        openXRProvider_.reset();
+    }
     {
         const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
         auto view = world_.Registry().view<scene::MeshRenderer>();
