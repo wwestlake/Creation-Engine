@@ -201,6 +201,21 @@ target_compile_definitions(CreationEngineEditor PRIVATE
     CE_HAS_OPENXR=${CREATION_ENGINE_HAS_OPENXR}
 )
 
+if (CREATION_ENGINE_HAS_OPENXR)
+    add_executable(CreationEngineOpenXRRuntimeSmoke
+        tests/OpenXRRuntimeSmoke.cpp
+        Source/VR/OpenXRProvider.cpp
+    )
+    target_include_directories(CreationEngineOpenXRRuntimeSmoke PRIVATE
+        Source
+        EngineCore/include
+        ${CREATION_OPENXR_INCLUDE_DIR}
+    )
+    target_link_libraries(CreationEngineOpenXRRuntimeSmoke PRIVATE ${CREATION_OPENXR_LOADER_LIBRARY})
+    target_compile_definitions(CreationEngineOpenXRRuntimeSmoke PRIVATE CE_HAS_OPENXR=1)
+    add_test(NAME creation_engine_openxr_runtime_smoke COMMAND CreationEngineOpenXRRuntimeSmoke)
+endif()
+
 target_link_libraries(CreationEngineEditor PRIVATE
     engine_core
     node_system
