@@ -17,12 +17,16 @@ public:
 
     void advance(float seconds);
     void setSessionLost(bool lost) noexcept;
+    void setHandsTracked(bool tracked) noexcept { handsTracked_ = tracked; }
+    void setControllersConnected(bool connected) noexcept { controllersConnected_ = connected; }
     [[nodiscard]] float elapsedSeconds() const noexcept { return elapsedSeconds_; }
 
 private:
     SessionState state_ = SessionState::unavailable;
     std::uint64_t frameIndex_ = 0;
     float elapsedSeconds_ = 0.0f;
+    bool handsTracked_ = true;
+    bool controllersConnected_ = true;
 };
 
 } // namespace ce::engine::vr
