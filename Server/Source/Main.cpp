@@ -4,6 +4,7 @@
 
 #include "engine/simulation.h"
 #include "engine/world.h"
+#include "Frust/EngineFrustHost.h"
 
 namespace {
 
@@ -44,13 +45,22 @@ int main(int argc, char* argv[]) {
     const juce::ArgumentList args(argc, argv);
     ServerConfig config = ParseArgs(args);
     ce::engine::World world;
+    ce::frust::EngineFrustHost frustHost(world, true);
+    std::string frustError;
+    if (!frustHost.loadBundled(frustError)) {
+        std::cerr << "[server] failed to load authoritative FRust plugins: " << frustError << std::endl;
+        return 1;
+    }
 
     const float stepDt = config.dt >= 0.0f ? config.dt : static_cast<float>(1.0 / config.tickRateHz);
 
     if (config.ticks >= 0) {
+        frustHost.beginPlay(0);
         for (int i = 0; i < config.ticks; ++i) {
             ce::engine::Simulation::Step(world, stepDt);
+            frustHost.tick(static_cast<std::int64_t>(world.CurrentTick()));
         }
+        frustHost.endPlay(static_cast<std::int64_t>(world.CurrentTick()));
         std::cout << "[server] completed " << world.CurrentTick() << " ticks" << std::endl;
         return 0;
     }
@@ -61,6 +71,7 @@ int main(int argc, char* argv[]) {
               << " Hz." << std::endl;
 
     const auto startTime = juce::Time::getMillisecondCounterHiRes();
+    frustHost.beginPlay(0);
 
     // The real dedicated-server loop: advances the world clock (and any
     // attached ScriptComponents) at a fixed rate and reports basic
@@ -72,6 +83,7 @@ int main(int argc, char* argv[]) {
     // client-side or server-side."
     while (true) {
         ce::engine::Simulation::Step(world, stepDt);
+        frustHost.tick(static_cast<std::int64_t>(world.CurrentTick()));
 
         if (world.CurrentTick() % static_cast<ce::engine::Tick>(config.tickRateHz * 10) == 0) {
             const auto uptimeSeconds = (juce::Time::getMillisecondCounterHiRes() - startTime) / 1000.0;

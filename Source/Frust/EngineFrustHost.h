@@ -30,7 +30,7 @@ enum class EngineFrustEvent : std::int64_t
 class EngineFrustHost final
 {
 public:
-    explicit EngineFrustHost(engine::World& world);
+    explicit EngineFrustHost(engine::World& world, bool isServer = false);
     ~EngineFrustHost();
 
     EngineFrustHost(const EngineFrustHost&) = delete;
@@ -46,11 +46,13 @@ public:
     void endPlay(std::int64_t tick);
     void notifyObjectDestroyed(entt::entity entity, std::int64_t tick);
     [[nodiscard]] bool isLoaded() const noexcept;
+    [[nodiscard]] bool isServer() const noexcept { return serverMode; }
     [[nodiscard]] bool isObjectBehaviorLoaded(const std::string& podId) const noexcept;
     [[nodiscard]] const node_system::NodeLibraryRegistry& nodeLibraries() const noexcept { return nodeLibraries_; }
 
 private:
     static std::int64_t currentTick();
+    static std::int64_t runtimeIsServer();
     static std::int64_t firstTransformEntity();
     static std::int64_t currentObjectEntity();
     static std::int64_t setPositionX(std::int64_t entityId, std::int64_t positionX);
@@ -74,6 +76,7 @@ private:
     node_system::NodeLibraryRegistry nodeLibraries_;
     std::int64_t activeObjectEntityId = -1;
     bool playActive = false;
+    bool serverMode = false;
     std::unordered_map<std::int64_t, ObjectLifecycle> objectLifecycles;
 };
 } // namespace ce::frust

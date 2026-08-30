@@ -7,6 +7,7 @@
 #include "engine/world.h"
 #include "Import/ImporterRegistry.h"
 #include "Render/ViewportComponent.h"
+#include <creation/assets/ProjectSession.h>
 
 namespace ce {
 
@@ -39,7 +40,7 @@ namespace ce {
 class ImportPanel final : public juce::Component,
                            public juce::FileDragAndDropTarget {
 public:
-    ImportPanel(engine::World& world, ViewportComponent& viewport);
+    ImportPanel(engine::World& world, ViewportComponent& viewport, creation::assets::ProjectSession& projectSession);
 
     // Declared (not defaulted inline) and defined in the .cpp, after
     // AudioClipRow's full definition: audioClipRows_ is a
