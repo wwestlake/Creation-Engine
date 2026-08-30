@@ -43,6 +43,35 @@ struct ControllerState {
     Vec3 thumbstick{};
 };
 
+struct HandState {
+    bool tracked = false;
+    Pose wrist{};
+    Pose indexTip{};
+    Pose thumbTip{};
+    float pinchStrength = 0.0f;
+    bool pinchActive = false;
+};
+
+enum class InputSource : std::uint8_t { none, controller, hand };
+
+struct ActionState {
+    bool selectPressed = false;
+    bool grabPressed = false;
+    bool menuPressed = false;
+    InputSource source = InputSource::none;
+};
+
+inline ActionState ResolveActions(const ControllerState& controller, const HandState& hand)
+{
+    if (controller.connected) {
+        return {controller.selectPressed, controller.gripPressed, controller.menuPressed, InputSource::controller};
+    }
+    if (hand.tracked) {
+        return {hand.pinchActive, hand.pinchActive, false, InputSource::hand};
+    }
+    return {};
+}
+
 struct RenderTargetSize {
     std::uint32_t width = 0;
     std::uint32_t height = 0;
@@ -55,6 +84,10 @@ struct FrameState {
     View rightEye{};
     ControllerState leftController{};
     ControllerState rightController{};
+    HandState leftHand{};
+    HandState rightHand{};
+    ActionState leftAction{};
+    ActionState rightAction{};
 };
 
 // Engine-owned boundary for desktop, mock, and OpenXR providers. No renderer
