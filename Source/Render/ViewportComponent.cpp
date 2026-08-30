@@ -153,14 +153,10 @@ void ViewportComponent::newOpenGLContextCreated() {
     std::cout << "[render] newOpenGLContextCreated: GL_VERSION="
               << reinterpret_cast<const char*>(glGetString(GL_VERSION)) << std::endl;
 
-    openXRProvider_ = std::make_unique<vr::OpenXRProvider>();
-    if (openXRProvider_->initialize() && openXRProvider_->initializeOpenGL(openGLContext_.getRawContext())) {
-        const auto size = openXRProvider_->recommendedRenderSize();
-        std::cout << "[vr] OpenXR OpenGL session created; eye target " << size.width << "x" << size.height << std::endl;
-    } else {
-        openXRProvider_.reset();
-        std::cout << "[vr] OpenXR session unavailable; desktop viewport remains active." << std::endl;
-    }
+    // OpenXR session presentation is intentionally disabled until the scene
+    // renderer has a real per-eye pass. Creating a session without that pass
+    // can submit invalid compositor content and flash the headset display.
+    std::cout << "[vr] OpenXR presentation paused pending per-eye renderer." << std::endl;
 
     shaderComposer_ = std::make_unique<ShaderComposer>(juce::File(CE_SHADER_SOURCE_DIR));
 
@@ -194,7 +190,7 @@ void ViewportComponent::newOpenGLContextCreated() {
 }
 
 void ViewportComponent::renderOpenGL() {
-    const bool vrFrameActive = openXRProvider_ != nullptr && openXRProvider_->beginFrame(vrFrame_);
+    constexpr bool vrFrameActive = false;
     // Must be set every frame, not once at context creation: JUCE's own
     // OpenGLGraphicsContext composites this component's 2D paint() on the
     // same context immediately after this callback returns each frame,
