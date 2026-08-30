@@ -761,6 +761,10 @@ juce_add_console_app(CreationEngineServer
 add_custom_command(TARGET CreationEngineServer POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineServer>" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:CreationEngineServer>/plugins"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/EngineLifecycle.frust" "$<TARGET_FILE_DIR:CreationEngineServer>/plugins/EngineLifecycle.frust"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodes.frust" "$<TARGET_FILE_DIR:CreationEngineServer>/plugins/CoreNodes.frust"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodesLibrary.frust" "$<TARGET_FILE_DIR:CreationEngineServer>/plugins/CoreNodesLibrary.frust"
     COMMENT "Copying CreationEngineServer to the shared ${CREATION_ENGINE_AGENT_NAME} bin directory"
 )
 
@@ -776,7 +780,10 @@ target_sources(CreationEngineServer PRIVATE
     Source/Assets/AssetPackStore.cpp
     Source/Scene/EngineSceneSerializer.h
     Source/Scene/EngineSceneSerializer.cpp
+    Source/Frust/EngineFrustHost.cpp
 )
+target_include_directories(CreationEngineServer PRIVATE Source)
+
 target_include_directories(CreationEngineServer PRIVATE Source)
 
 target_compile_definitions(CreationEngineServer PRIVATE
@@ -791,6 +798,8 @@ target_link_libraries(CreationEngineServer PRIVATE
     engine_core
     node_system
     creation_suite_asset_system
+    creation_suite_frust_plugin_runtime
+    node_library_loader
     juce::juce_core
     juce::juce_events
     juce::juce_graphics
