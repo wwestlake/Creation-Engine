@@ -9,6 +9,7 @@
       "features": ["target-x86", "tools"]
     },
     "glslang",
-    "spirv-cross"
+    "spirv-cross",
+    "openxr-loader"
   ]
 }
