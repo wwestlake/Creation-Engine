@@ -75,6 +75,7 @@ private:
     creation::assets::ProjectSession projectSession_;
     ce::project::GameDocumentInfo activeGame_;
     ce::project::SceneDocumentInfo activeScene_;
+    juce::String pendingSceneTransitionId_;
     juce::Array<ce::project::GameDocumentInfo> games_;
     bool projectDirty_ = false;
     juce::ApplicationCommandManager commandManager_;

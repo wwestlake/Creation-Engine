@@ -41,6 +41,13 @@ MainComponent::MainComponent()
         juce::Logger::writeToLog("Creation Engine FRust host: " + juce::String(frustError));
     }
     frustAutomationPanel_ = std::make_unique<ce::views::FrustLogicPanel>(frustHost_.nodeLibraries());
+    frustHost_.setSceneTransitionRequestHandler([this](const std::string& reference) {
+        const juce::String sceneReference(reference);
+        for (const auto& scene : activeGame_.scenes)
+            if (scene.id == sceneReference || scene.name == sceneReference) { pendingSceneTransitionId_ = scene.id; return; }
+    });
+    frustHost_.setActiveGameIdProvider([this] { return activeGame_.id.toStdString(); });
+    frustHost_.setActiveSceneIdProvider([this] { return activeScene_.id.toStdString(); });
 
     headerBar_.setAppTitle("Creation Engine");
     headerBar_.setLogoImage(creation::ui::getSuiteLogoImage(creation::ui::SuiteLogoId::engine));
@@ -219,6 +226,14 @@ void MainComponent::SetPlaying(bool playing) {
 }
 
 void MainComponent::timerCallback() {
+    if (pendingSceneTransitionId_.isNotEmpty()) {
+        const auto requestedScene = pendingSceneTransitionId_;
+        pendingSceneTransitionId_.clear();
+        const bool resumeAfterTransition = isPlaying_;
+        if (resumeAfterTransition) SetPlaying(false);
+        selectScene(requestedScene);
+        if (resumeAfterTransition) SetPlaying(true);
+    }
     if (isPlaying_) {
         // GS6: runs every attached ScriptComponent's on_tick (and
         // on_start, on an entity's first playing tick) before advancing
