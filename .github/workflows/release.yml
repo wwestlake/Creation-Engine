@@ -100,7 +100,6 @@ jobs:
       - name: Install WinFlexBison (prebuilt binary, no compile)
         shell: pwsh
         run: |
-          # shared/CEL's grammar generation needs win_bison.exe/win_flex.exe.
           # WinFlexBison ships prebuilt Windows binaries on its GitHub
           # releases -- this downloads and extracts one, it does not build
           # anything from source.
@@ -166,7 +165,7 @@ jobs:
         run: |
           # CE_ENABLE_SCRIPTING defaults to ON. The vcpkg step above just
           # installed LLVM (from the S3 cache after the first run), so
-          # scripting stays on for real -- CEL is meant to be in every
+          # scripting stays on for real -- FRust is meant to be in every
           # app, not disabled to dodge an LLVM build.
           cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DJUCE_DIR="$env:RUNNER_TEMP\JUCE" "-DCREATION_ENGINE_VERSION=${{ steps.classify.outputs.version }}"
 

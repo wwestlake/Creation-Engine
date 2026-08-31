@@ -4,6 +4,7 @@
 
 #include <creation/ui/CreationSuiteLogos.h>
 #include "Scene/EngineSceneSerializer.h"
+#include "engine/foundation_gameplay.h"
 
 namespace {
 constexpr juce::CommandID kRunGameClientCommand = 0x1001;
@@ -209,6 +210,7 @@ void MainComponent::timerCallback() {
         // server genuinely execute scripts identically. 1/30s matches
         // this timer's own 30 Hz rate (startTimerHz(30) below).
         ce::engine::Simulation::Step(world_, 1.0f / 30.0f);
+        ce::engine::FoundationGameplay::Step(world_, {}, 1.0f / 30.0f);
         frustHost_.tick(static_cast<std::int64_t>(world_.CurrentTick()));
     }
     tickLabel_.setText("tick " + juce::String(world_.CurrentTick()), juce::dontSendNotification);
