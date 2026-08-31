@@ -90,9 +90,7 @@ ImportPanel::ImportPanel(engine::World& world, ViewportComponent& viewport) {
     context_.viewport = &viewport;
     context_.audioCatalog = &audioCatalog_;
     context_.audioFormatManager = &audioFormatManager_;
-    // context_.vfs stays null -- nothing registered yet persists into the
-    // VirtualFileSystem, only the live AssetCatalog/AudioCatalog (see
-    // GltfAssetImporter/AudioAssetImporter).
+    // The project session is attached when MainComponent selects a game.
 
     audioFormatManager_.registerBasicFormats(); // WAV, AIFF, and (JUCE_USE_FLAC defaults on) FLAC.
 
@@ -137,6 +135,12 @@ ImportPanel::ImportPanel(engine::World& world, ViewportComponent& viewport) {
 
     addSliceButton_.onClick = [this] { AddSliceRow(); };
     addAndMakeVisible(addSliceButton_);
+}
+
+void ImportPanel::SetProjectContent(creation::assets::ProjectSession* session, const juce::String& gameAssetRoot)
+{
+    context_.projectSession = session;
+    context_.gameAssetRoot = gameAssetRoot;
 }
 
 bool ImportPanel::isInterestedInFileDrag(const juce::StringArray& files) {

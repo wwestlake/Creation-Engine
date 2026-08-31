@@ -4,17 +4,18 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <JuceHeader.h>
 
-#include "creation/assets/VirtualFileSystem.h"
 #include "Render/GL/Texture2D.h"
 #include "Render/Scene/Material.h"
 #include "Render/Scene/Mesh.h"
 #include "Render/Scene/Vertex.h"
 #include "Scene/Components.h"
 
+namespace creation::assets { class VirtualFileSystem; }
 namespace ce {
 struct LoadedModel; // Render/Import/GltfLoader.h
 }
@@ -47,6 +48,12 @@ namespace ce::scene {
 class AssetCatalog final {
 public:
     struct Asset {
+        // Durable source identity. GPU data is a cache; scenes store these
+        // values, so a placed item can be resolved after reopening.
+        juce::String assetId;
+        juce::String versionId;
+        juce::String packId;
+        juce::String packVersion;
         std::shared_ptr<Mesh> mesh;
         std::shared_ptr<Material> material;
         // AI4: null unless the source model was skinned. Shared (not
@@ -64,10 +71,12 @@ public:
         std::shared_ptr<std::vector<AnimationClip>> animationClips;
     };
 
-    // Loads the built-in demo set: a procedural cube, a procedural
-    // sphere, and the BoxTextured glTF asset read through vfs (expects
-    // assets/packages/base.zip already mounted).
-    void LoadBuiltins(creation::assets::VirtualFileSystem& vfs);
+    // Resolves declared pack assets into the GL cache. The exact VFS pack
+    // version is runtime authority; a local decoder cache is temporary only.
+    bool LoadAssetPack(const juce::String& packId, const juce::String& version, juce::String& errorMessage);
+    [[nodiscard]] static juce::String PackAssetKey(const juce::String& packId,
+                                                    const juce::String& version,
+                                                    const juce::String& assetId);
 
     // Builds a Mesh/Material (and texture/Skeleton, if the model has
     // them) from already-parsed glTF data and registers it under `name`,
@@ -96,6 +105,17 @@ public:
     bool Add(const juce::String& name, std::shared_ptr<Mesh> mesh, std::shared_ptr<Material> material,
              std::unique_ptr<gl::Texture2D> ownedTexture = nullptr);
 
+    // Maps a durable VFS asset ID to an already-loaded catalog entry without
+    // adding a second row to the authoring UI. The live catalog remains a GPU
+    // cache; scene serialization uses the durable ID.
+    bool AddAlias(const juce::String& durableAssetId, const juce::String& loadedAssetName);
+
+    // Assigns the durable source identity after a loader has populated the
+    // GPU cache entry. Used by VFS packs and project-content importers.
+    bool SetSourceIdentity(const juce::String& cacheKey, const juce::String& assetId,
+                           const juce::String& versionId = {}, const juce::String& packId = {},
+                           const juce::String& packVersion = {});
+
     // Returns a copy (two shared_ptr refcount bumps, cheap) rather than a
     // pointer/reference into assets_ -- a concurrent AddFromModel() call
     // re-importing the same name would otherwise be free to overwrite the
@@ -108,7 +128,7 @@ private:
     void AddProcedural(const juce::String& name, const std::vector<Vertex>& vertices,
                         const std::vector<GLuint>& indices, juce::Vector3D<float> albedo);
 
-    bool hasLoadedBuiltins_ = false;
+    std::unordered_set<std::string> loadedPacks_;
     mutable std::mutex mutex_;
     std::vector<std::unique_ptr<gl::Texture2D>> ownedTextures_;
     std::unordered_map<std::string, Asset> assets_;

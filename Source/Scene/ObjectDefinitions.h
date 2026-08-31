@@ -26,6 +26,9 @@ struct ObjectDefinition
     juce::String id;
     juce::String displayName;
     juce::String meshAssetId;
+    juce::String meshAssetVersionId;
+    juce::String meshPackId;
+    juce::String meshPackVersion;
     engine::Transform initialTransform;
     juce::NamedValueSet defaultState;
     std::vector<juce::String> behaviorPods;

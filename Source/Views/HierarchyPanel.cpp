@@ -220,6 +220,12 @@ void HierarchyPanel::NotifySelected(entt::entity entity) {
     }
 }
 
+void HierarchyPanel::SelectEntity(entt::entity entity) {
+    if (selectedEntity_ == entity) return;
+    NotifySelected(entity);
+    Refresh();
+}
+
 void HierarchyPanel::UpdateActionButtonState() {
     const bool hasSelection = selectedEntity_ != entt::null;
     duplicateButton_.setEnabled(hasSelection);

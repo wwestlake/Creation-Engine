@@ -5,13 +5,19 @@
 namespace ce::scene {
 
 entt::entity PlaceAssetEntity(engine::World& world, const AssetCatalog::Asset& asset, const juce::String& name,
-                               engine::Vec3 position, entt::entity parent) {
+                               engine::Vec3 position, entt::entity parent, const juce::String& durableAssetId,
+                               const juce::String& durableVersionId) {
     auto& registry = world.Registry();
 
     const entt::entity newEntity = world.CreateEntity();
     registry.emplace<scene::Name>(newEntity, scene::Name{ name });
     registry.emplace<scene::Transform>(newEntity, scene::Transform{ position });
     registry.emplace<scene::MeshRenderer>(newEntity, scene::MeshRenderer{ asset.mesh, asset.material });
+    registry.emplace<scene::MeshAssetReference>(newEntity,
+                                                 scene::MeshAssetReference{ durableAssetId.isNotEmpty() ? durableAssetId : asset.assetId,
+                                                                            durableVersionId.isNotEmpty() ? durableVersionId : asset.versionId,
+                                                                            asset.packId,
+                                                                            asset.packVersion });
     registry.emplace<scene::SceneFlags>(newEntity, scene::SceneFlags{});
     registry.emplace<scene::Parent>(newEntity, scene::Parent{ parent });
     if (asset.skeleton != nullptr) {

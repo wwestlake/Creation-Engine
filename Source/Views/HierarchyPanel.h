@@ -51,6 +51,7 @@ public:
 
     void Refresh();
     entt::entity SelectedEntity() const { return selectedEntity_; }
+    void SelectEntity(entt::entity entity);
 
     void paint(juce::Graphics& g) override;
     void resized() override;

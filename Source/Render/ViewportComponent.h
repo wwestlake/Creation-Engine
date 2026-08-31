@@ -1,12 +1,12 @@
 #pragma once
 
+#include <array>
 #include <functional>
 #include <limits>
 #include <memory>
 
 #include <JuceHeader.h>
 
-#include "creation/assets/VirtualFileSystem.h"
 #include "engine/world.h"
 #include "Render/Scene/Camera.h"
 #include "Render/Scene/FreeCamera.h"
@@ -14,9 +14,15 @@
 #include "Render/Scene/Light.h"
 #include "Render/Scene/Material.h"
 #include "Render/Scene/Mesh.h"
+#include "Render/GL/Buffer.h"
+#include "Render/GL/VertexArray.h"
 #include "Render/Shaders/ShaderComposer.h"
 #include "Scene/AssetCatalog.h"
+#include "Interaction/EditorInteraction.h"
 #include "VR/OpenXRProvider.h"
+
+namespace creation::assets { class ProjectSession; }
+namespace creation::suite { struct SuiteSettings; }
 
 namespace ce {
 
@@ -57,11 +63,14 @@ namespace ce {
 class ViewportComponent final : public juce::Component,
                                  private juce::OpenGLRenderer {
 public:
-    explicit ViewportComponent(engine::World& world);
+    explicit ViewportComponent(engine::World& world, interaction::EditorInteraction& interactions);
     ~ViewportComponent() override;
 
     void paint(juce::Graphics&) override {}
     void resized() override {}
+    void mouseDown(const juce::MouseEvent& event) override;
+    void mouseDrag(const juce::MouseEvent& event) override;
+    void mouseUp(const juce::MouseEvent& event) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override;
 
     DirectionalLight GetSunLight() const;
@@ -73,10 +82,6 @@ public:
     void AddPointLight();
     void RemovePointLight(int index);
 
-    // Called on Stop (see MainComponent's transport wiring) — resets the
-    // seeded demo entity's transform, giving Stop a real, visible effect
-    // instead of just freezing the tick counter.
-    void ResetDemoEntityTransform();
     void EnableFirstPersonMode() { freeCamera_.EnableFirstPersonMode(); }
 
     // Catalog access for SC5's "+ Add" menu (HierarchyPanel) to list/look
@@ -102,32 +107,82 @@ public:
     // building GPU resources for the imported asset can't happen there.
     void RunOnGLThread(std::function<void()> work, bool blockUntilFinished);
 
+    // Resolves durable project asset references into this viewport's GPU
+    // cache after a game scene opens. It does not author or rewrite content.
+    void ResolveProjectAssets(const creation::assets::ProjectSession& session,
+                              const creation::suite::SuiteSettings& settings);
+
 private:
+    enum class TranslationHandle { none, xAxis, yAxis, zAxis, xyPlane, xzPlane, yzPlane, free };
+
     void newOpenGLContextCreated() override;
     void renderOpenGL() override;
     void openGLContextClosing() override;
 
-    void SeedDemoScene();
+    void updateVREditorRig(float deltaSeconds);
+    void updateVRInteraction();
+    void updateDesktopTransformGizmo();
+    void uploadVRWands();
+    void uploadVRTransformGizmo();
+    void uploadVREditorCart();
+    [[nodiscard]] bool desktopRay(const juce::Point<float>& screenPosition,
+                                  juce::Vector3D<float>& origin,
+                                  juce::Vector3D<float>& direction) const;
+    [[nodiscard]] entt::entity desktopPick(const juce::Vector3D<float>& origin,
+                                           const juce::Vector3D<float>& direction,
+                                           float& distance) const;
+    [[nodiscard]] TranslationHandle desktopGizmoHandle(const juce::Vector3D<float>& origin,
+                                                        const juce::Vector3D<float>& direction) const;
+    [[nodiscard]] interaction::TranslationConstraint constraintFor(TranslationHandle handle) const;
 
     engine::World& world_;
+    interaction::EditorInteraction& interactions_;
 
     juce::OpenGLContext openGLContext_;
     std::unique_ptr<vr::OpenXRProvider> openXRProvider_;
     engine::vr::FrameState vrFrame_{};
+    // The OpenXR eye pose already contains physical headset height.  This
+    // rig is the world-space floor anchor, so adding another 1.6 m here
+    // would make the editor float above its own scene.
+    juce::Vector3D<float> vrRigPosition_{ 0.0f, 0.0f, 5.0f };
+    float vrRigYaw_ = 0.0f;
+    float vrRigPitch_ = 0.0f;
+    struct VRWandRay {
+        juce::Vector3D<float> start, end, surfaceNormal;
+        bool active = false;
+        bool hit = false;
+        entt::entity entity = entt::null;
+    };
+    struct VRTransformGizmo {
+        entt::entity entity = entt::null;
+        juce::Vector3D<float> center;
+        float scale = 1.0f;
+        TranslationHandle hovered = TranslationHandle::none;
+    };
+    std::array<VRWandRay, 2> vrWands_{};
+    std::array<TranslationHandle, 2> vrHoveredHandles_{};
+    VRTransformGizmo vrTransformGizmo_{};
+    juce::Vector3D<float> vrHoverCenter_{};
+    juce::Vector3D<float> vrHoverNormal_{ 0.0f, 0.0f, 1.0f };
+    float vrHoverRadius_ = 0.0f;
+    bool vrHoverActive_ = false;
+    int vrTranslationController_ = -1;
+    std::array<bool, 2> vrGripWasPressed_{};
+    std::array<bool, 2> vrSelectWasPressed_{};
+    gl::Buffer vrWandVertexBuffer_;
+    gl::VertexArray vrWandVertexArray_;
+    GLsizei vrWandVertexCount_ = 0;
+    gl::Buffer vrGizmoVertexBuffer_;
+    gl::VertexArray vrGizmoVertexArray_;
+    GLsizei vrGizmoVertexCount_ = 0;
+    gl::Buffer vrCartVertexBuffer_;
+    gl::VertexArray vrCartVertexArray_;
+    GLsizei vrCartDeckVertexCount_ = 0;
+    GLsizei vrCartVertexCount_ = 0;
     std::unique_ptr<ShaderComposer> shaderComposer_;
-    creation::assets::VirtualFileSystem vfs_;
     scene::AssetCatalog assetCatalog_;
-    bool hasSeededDemoScene_ = false;
-    entt::entity demoEntity_ = entt::null;
-
-    // Tracks the World tick the demo spin was last applied for, so the
-    // spin write only happens when the tick actually advances (i.e. while
-    // playing) rather than unconditionally every rendered frame. Without
-    // this, the render thread would stomp any inspector edit to the demo
-    // entity's rotation back to the spin value on the very next frame,
-    // even while paused/editing — max() as the initial sentinel so the
-    // very first frame (real tick 0) still counts as "changed."
-    engine::Tick lastSpinTick_ = std::numeric_limits<engine::Tick>::max();
+    bool desktopTransformDrag_ = false;
+    float desktopDragDistance_ = 0.0f;
 
     mutable juce::CriticalSection stateLock_;
     DirectionalLight sunLight_;

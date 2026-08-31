@@ -19,6 +19,7 @@ class AssetCatalog;
 
 namespace creation::assets {
 class VirtualFileSystem;
+class ProjectSession;
 }
 
 namespace ce::audio {
@@ -50,6 +51,8 @@ struct ImportContext {
     engine::World* world = nullptr;
     scene::AssetCatalog* catalog = nullptr;
     creation::assets::VirtualFileSystem* vfs = nullptr;
+    creation::assets::ProjectSession* projectSession = nullptr;
+    juce::String gameAssetRoot;
     ViewportComponent* viewport = nullptr; // for RunOnGLThread -- see ViewportComponent.h.
     audio::AudioCatalog* audioCatalog = nullptr;
     juce::AudioFormatManager* audioFormatManager = nullptr;

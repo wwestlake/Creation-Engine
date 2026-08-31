@@ -38,11 +38,16 @@ private:
     std::array<std::uint32_t, 2> framebuffers_{};
     std::array<float, 8> fov_{};
     std::array<bool, 2> imageAcquired_{};
+    void* actionSet_ = nullptr;
+    std::array<void*, 7> actions_{};
+    std::array<void*, 2> aimSpaces_{};
     std::int64_t displayTime_ = 0;
     bool frameBegun_ = false;
 
     bool pollEvents();
     bool endFrameWithoutLayers();
+    bool initializeInput();
+    void sampleInput(engine::vr::FrameState& frame);
 };
 
 } // namespace ce::vr

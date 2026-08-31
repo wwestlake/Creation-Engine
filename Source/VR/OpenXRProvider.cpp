@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -33,6 +34,8 @@ using namespace juce::gl;
 namespace ce::vr {
 
 namespace {
+
+enum InputAction : std::size_t { gripPoseAction, aimPoseAction, thumbstickAction, triggerAction, squeezeAction, primaryAction, menuAction };
 
 void LogVR(const std::string& message)
 {
@@ -227,6 +230,10 @@ bool OpenXRProvider::initializeOpenGL(void* rawOpenGLContext)
     session_ = reinterpret_cast<void*>(session);
     space_ = reinterpret_cast<void*>(space);
     renderSize_ = { configs[0].recommendedImageRectWidth, configs[0].recommendedImageRectHeight };
+    if (!initializeInput()) {
+        LogVR("OpenXR controller actions could not be initialized.");
+        return false;
+    }
     state_ = engine::vr::SessionState::ready;
     LogVR("OpenXR graphics session initialized successfully.");
     return true;
@@ -248,6 +255,10 @@ void OpenXRProvider::shutdown()
             xrEndFrame(session, &endInfo);
         }
     }
+    for (auto& aimSpace : aimSpaces_) {
+        if (aimSpace != nullptr) xrDestroySpace(reinterpret_cast<XrSpace>(aimSpace));
+    }
+    if (actionSet_ != nullptr) xrDestroyActionSet(reinterpret_cast<XrActionSet>(actionSet_));
     if (space_ != nullptr) xrDestroySpace(reinterpret_cast<XrSpace>(space_));
     if (session_ != nullptr) {
         auto session = reinterpret_cast<XrSession>(session_);
@@ -267,9 +278,139 @@ void OpenXRProvider::shutdown()
     acquiredImages_ = {};
     framebuffers_ = {};
     imageAcquired_ = {};
+    actionSet_ = nullptr;
+    actions_ = {};
+    aimSpaces_ = {};
     frameBegun_ = false;
     displayTime_ = 0;
     state_ = engine::vr::SessionState::unavailable;
+}
+
+bool OpenXRProvider::initializeInput()
+{
+#if CE_HAS_OPENXR
+    const auto instance = reinterpret_cast<XrInstance>(instance_);
+    const auto session = reinterpret_cast<XrSession>(session_);
+    XrActionSetCreateInfo actionSetInfo{ XR_TYPE_ACTION_SET_CREATE_INFO };
+    std::strncpy(actionSetInfo.actionSetName, "creation_engine_editor", XR_MAX_ACTION_SET_NAME_SIZE - 1);
+    std::strncpy(actionSetInfo.localizedActionSetName, "Creation Engine Editor", XR_MAX_LOCALIZED_ACTION_SET_NAME_SIZE - 1);
+    XrActionSet actionSet = XR_NULL_HANDLE;
+    if (xrCreateActionSet(instance, &actionSetInfo, &actionSet) != XR_SUCCESS) return false;
+    actionSet_ = reinterpret_cast<void*>(actionSet);
+
+    std::array<XrPath, 2> hands{};
+    if (xrStringToPath(instance, "/user/hand/left", &hands[0]) != XR_SUCCESS ||
+        xrStringToPath(instance, "/user/hand/right", &hands[1]) != XR_SUCCESS) return false;
+    const auto createAction = [&](InputAction index, const char* name, const char* label, XrActionType type) {
+        XrActionCreateInfo info{ XR_TYPE_ACTION_CREATE_INFO };
+        std::strncpy(info.actionName, name, XR_MAX_ACTION_NAME_SIZE - 1);
+        std::strncpy(info.localizedActionName, label, XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
+        info.actionType = type;
+        info.countSubactionPaths = static_cast<std::uint32_t>(hands.size());
+        info.subactionPaths = hands.data();
+        XrAction action = XR_NULL_HANDLE;
+        if (xrCreateAction(actionSet, &info, &action) != XR_SUCCESS) return false;
+        actions_[index] = reinterpret_cast<void*>(action);
+        return true;
+    };
+    if (!createAction(gripPoseAction, "grip_pose", "Grip Pose", XR_ACTION_TYPE_POSE_INPUT) ||
+        !createAction(aimPoseAction, "aim_pose", "Aim Pose", XR_ACTION_TYPE_POSE_INPUT) ||
+        !createAction(thumbstickAction, "thumbstick", "Thumbstick", XR_ACTION_TYPE_VECTOR2F_INPUT) ||
+        !createAction(triggerAction, "trigger", "Trigger", XR_ACTION_TYPE_FLOAT_INPUT) ||
+        !createAction(squeezeAction, "squeeze", "Squeeze", XR_ACTION_TYPE_FLOAT_INPUT) ||
+        !createAction(primaryAction, "primary", "Primary Button", XR_ACTION_TYPE_BOOLEAN_INPUT) ||
+        !createAction(menuAction, "menu", "Menu Button", XR_ACTION_TYPE_BOOLEAN_INPUT)) return false;
+
+    const auto path = [&](const char* value) { XrPath result = XR_NULL_PATH; xrStringToPath(instance, value, &result); return result; };
+    std::array<XrActionSuggestedBinding, 14> bindings{{
+        { reinterpret_cast<XrAction>(actions_[gripPoseAction]), path("/user/hand/left/input/grip/pose") },
+        { reinterpret_cast<XrAction>(actions_[gripPoseAction]), path("/user/hand/right/input/grip/pose") },
+        { reinterpret_cast<XrAction>(actions_[aimPoseAction]), path("/user/hand/left/input/aim/pose") },
+        { reinterpret_cast<XrAction>(actions_[aimPoseAction]), path("/user/hand/right/input/aim/pose") },
+        { reinterpret_cast<XrAction>(actions_[thumbstickAction]), path("/user/hand/left/input/thumbstick") },
+        { reinterpret_cast<XrAction>(actions_[thumbstickAction]), path("/user/hand/right/input/thumbstick") },
+        { reinterpret_cast<XrAction>(actions_[triggerAction]), path("/user/hand/left/input/trigger/value") },
+        { reinterpret_cast<XrAction>(actions_[triggerAction]), path("/user/hand/right/input/trigger/value") },
+        { reinterpret_cast<XrAction>(actions_[squeezeAction]), path("/user/hand/left/input/squeeze/value") },
+        { reinterpret_cast<XrAction>(actions_[squeezeAction]), path("/user/hand/right/input/squeeze/value") },
+        { reinterpret_cast<XrAction>(actions_[primaryAction]), path("/user/hand/left/input/x/click") },
+        { reinterpret_cast<XrAction>(actions_[primaryAction]), path("/user/hand/right/input/a/click") },
+        { reinterpret_cast<XrAction>(actions_[menuAction]), path("/user/hand/left/input/menu/click") },
+        { reinterpret_cast<XrAction>(actions_[menuAction]), path("/user/hand/right/input/b/click") }
+    }};
+    XrInteractionProfileSuggestedBinding suggested{ XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING };
+    suggested.interactionProfile = path("/interaction_profiles/oculus/touch_controller");
+    suggested.countSuggestedBindings = static_cast<std::uint32_t>(bindings.size());
+    suggested.suggestedBindings = bindings.data();
+    if (xrSuggestInteractionProfileBindings(instance, &suggested) != XR_SUCCESS) return false;
+
+    for (std::size_t hand = 0; hand < hands.size(); ++hand) {
+        XrActionSpaceCreateInfo spaceInfo{ XR_TYPE_ACTION_SPACE_CREATE_INFO };
+        spaceInfo.action = reinterpret_cast<XrAction>(actions_[aimPoseAction]);
+        spaceInfo.subactionPath = hands[hand];
+        spaceInfo.poseInActionSpace.orientation.w = 1.0f;
+        XrSpace aimSpace = XR_NULL_HANDLE;
+        if (xrCreateActionSpace(session, &spaceInfo, &aimSpace) != XR_SUCCESS) return false;
+        aimSpaces_[hand] = reinterpret_cast<void*>(aimSpace);
+    }
+    XrSessionActionSetsAttachInfo attach{ XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO };
+    attach.countActionSets = 1;
+    attach.actionSets = &actionSet;
+    return xrAttachSessionActionSets(session, &attach) == XR_SUCCESS;
+#else
+    return false;
+#endif
+}
+
+void OpenXRProvider::sampleInput(engine::vr::FrameState& frame)
+{
+#if CE_HAS_OPENXR
+    frame.leftController = {};
+    frame.rightController = {};
+    if (actionSet_ == nullptr) return;
+    const auto instance = reinterpret_cast<XrInstance>(instance_);
+    const auto session = reinterpret_cast<XrSession>(session_);
+    std::array<XrPath, 2> hands{};
+    xrStringToPath(instance, "/user/hand/left", &hands[0]);
+    xrStringToPath(instance, "/user/hand/right", &hands[1]);
+    const XrActiveActionSet activeSet{ reinterpret_cast<XrActionSet>(actionSet_), XR_NULL_PATH };
+    XrActionsSyncInfo syncInfo{ XR_TYPE_ACTIONS_SYNC_INFO };
+    syncInfo.countActiveActionSets = 1;
+    syncInfo.activeActionSets = &activeSet;
+    if (xrSyncActions(session, &syncInfo) != XR_SUCCESS) return;
+    const auto getFloat = [&](InputAction action, XrPath hand) {
+        XrActionStateGetInfo info{ XR_TYPE_ACTION_STATE_GET_INFO }; info.action = reinterpret_cast<XrAction>(actions_[action]); info.subactionPath = hand;
+        XrActionStateFloat state{ XR_TYPE_ACTION_STATE_FLOAT }; xrGetActionStateFloat(session, &info, &state);
+        return state.isActive == XR_TRUE ? state.currentState : 0.0f;
+    };
+    const auto getBoolean = [&](InputAction action, XrPath hand) {
+        XrActionStateGetInfo info{ XR_TYPE_ACTION_STATE_GET_INFO }; info.action = reinterpret_cast<XrAction>(actions_[action]); info.subactionPath = hand;
+        XrActionStateBoolean state{ XR_TYPE_ACTION_STATE_BOOLEAN }; xrGetActionStateBoolean(session, &info, &state);
+        return state.isActive == XR_TRUE && state.currentState == XR_TRUE;
+    };
+    for (std::size_t hand = 0; hand < hands.size(); ++hand) {
+        auto& controller = hand == 0 ? frame.leftController : frame.rightController;
+        XrActionStateGetInfo stickInfo{ XR_TYPE_ACTION_STATE_GET_INFO }; stickInfo.action = reinterpret_cast<XrAction>(actions_[thumbstickAction]); stickInfo.subactionPath = hands[hand];
+        XrActionStateVector2f stick{ XR_TYPE_ACTION_STATE_VECTOR2F }; xrGetActionStateVector2f(session, &stickInfo, &stick);
+        controller.thumbstick = { stick.currentState.x, stick.currentState.y, 0.0f };
+        controller.selectPressed = getFloat(triggerAction, hands[hand]) > 0.65f;
+        controller.gripPressed = getFloat(squeezeAction, hands[hand]) > 0.65f;
+        controller.primaryPressed = getBoolean(primaryAction, hands[hand]);
+        controller.menuPressed = getBoolean(menuAction, hands[hand]);
+        XrSpaceLocation location{ XR_TYPE_SPACE_LOCATION };
+        if (aimSpaces_[hand] != nullptr && xrLocateSpace(reinterpret_cast<XrSpace>(aimSpaces_[hand]), reinterpret_cast<XrSpace>(space_), displayTime_, &location) == XR_SUCCESS &&
+            (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0 &&
+            (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0) {
+            controller.connected = true;
+            controller.pose.position = { location.pose.position.x, location.pose.position.y, location.pose.position.z };
+            controller.pose.orientation = { location.pose.orientation.x, location.pose.orientation.y, location.pose.orientation.z, location.pose.orientation.w };
+        }
+    }
+    frame.leftAction = engine::vr::ResolveActions(frame.leftController, frame.leftHand);
+    frame.rightAction = engine::vr::ResolveActions(frame.rightController, frame.rightHand);
+#else
+    (void)frame;
+#endif
 }
 
 bool OpenXRProvider::pollEvents()
@@ -351,6 +492,7 @@ bool OpenXRProvider::beginFrame(engine::vr::FrameState& frame)
         endFrameWithoutLayers();
         return false;
     }
+    sampleInput(frame);
     for (int eye = 0; eye < 2; ++eye) {
         auto& target = eye == 0 ? frame.leftEye : frame.rightEye;
         target.pose.position = { views[eye].pose.position.x, views[eye].pose.position.y, views[eye].pose.position.z };
