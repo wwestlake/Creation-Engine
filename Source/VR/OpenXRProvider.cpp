@@ -3,6 +3,8 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <iostream>
+#include <string>
 #include <vector>
 
 #if CE_HAS_OPENXR
@@ -30,6 +32,35 @@ using namespace juce::gl;
 
 namespace ce::vr {
 
+namespace {
+
+void LogVR(const std::string& message)
+{
+    std::cerr << "[vr] " << message << std::endl;
+    // Diagnostics belong with the launched Engine binary, never in a
+    // machine-specific user directory. The shared debug executable therefore
+    // writes under its configured D: location, while an installed build keeps
+    // its diagnostics with its own installation.
+    const auto logDirectory = juce::File::getSpecialLocation(juce::File::currentExecutableFile)
+                                  .getParentDirectory().getChildFile("logs");
+    if (!logDirectory.createDirectory()) return;
+    const auto logFile = logDirectory.getChildFile("openxr-diagnostics.log");
+    if (auto stream = std::unique_ptr<juce::FileOutputStream>(logFile.createOutputStream(true)))
+        stream->writeText("[vr] " + juce::String(message) + "\n", false, false, "UTF-8");
+}
+
+#if CE_HAS_OPENXR
+void LogXrResult(XrInstance instance, const char* operation, XrResult result)
+{
+    char resultText[XR_MAX_RESULT_STRING_SIZE]{};
+    if (instance != XR_NULL_HANDLE)
+        xrResultToString(instance, result, resultText);
+    LogVR(std::string(operation) + " -> " + (resultText[0] != '\0' ? resultText : std::to_string(result)));
+}
+#endif
+
+} // namespace
+
 OpenXRProvider::~OpenXRProvider()
 {
     shutdown();
@@ -47,17 +78,24 @@ bool OpenXRProvider::initialize()
     createInfo.enabledExtensionCount = 1;
     createInfo.enabledExtensionNames = extensions;
     XrInstance instance = XR_NULL_HANDLE;
-    if (xrCreateInstance(&createInfo, &instance) != XR_SUCCESS) return false;
+    const auto createResult = xrCreateInstance(&createInfo, &instance);
+    if (createResult != XR_SUCCESS) {
+        LogXrResult(XR_NULL_HANDLE, "xrCreateInstance", createResult);
+        return false;
+    }
     XrSystemGetInfo systemInfo{XR_TYPE_SYSTEM_GET_INFO};
     systemInfo.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
     XrSystemId system = XR_NULL_SYSTEM_ID;
-    if (xrGetSystem(instance, &systemInfo, &system) != XR_SUCCESS) {
+    const auto systemResult = xrGetSystem(instance, &systemInfo, &system);
+    if (systemResult != XR_SUCCESS) {
+        LogXrResult(instance, "xrGetSystem", systemResult);
         xrDestroyInstance(instance);
         return false;
     }
     instance_ = reinterpret_cast<void*>(instance);
     system_ = reinterpret_cast<void*>(static_cast<std::uintptr_t>(system));
     state_ = engine::vr::SessionState::ready;
+    LogVR("OpenXR instance and HMD system discovered.");
     return true;
 #else
     return false;
@@ -77,6 +115,7 @@ bool OpenXRProvider::initializeOpenGL(void* rawOpenGLContext)
     if (xrGetInstanceProcAddr(instance, "xrGetOpenGLGraphicsRequirementsKHR",
                               reinterpret_cast<PFN_xrVoidFunction*>(&getRequirements)) != XR_SUCCESS
         || getRequirements(instance, system, &requirements) != XR_SUCCESS) {
+        LogVR("Failed to query OpenGL graphics requirements.");
         return false;
     }
 
@@ -90,8 +129,11 @@ bool OpenXRProvider::initializeOpenGL(void* rawOpenGLContext)
     sessionInfo.next = &binding;
     sessionInfo.systemId = system;
     XrSession session = XR_NULL_HANDLE;
-    if (xrCreateSession(instance, &sessionInfo, &session) != XR_SUCCESS)
+    const auto sessionResult = xrCreateSession(instance, &sessionInfo, &session);
+    if (sessionResult != XR_SUCCESS) {
+        LogXrResult(instance, "xrCreateSession", sessionResult);
         return false;
+    }
 
     XrReferenceSpaceCreateInfo spaceInfo{ XR_TYPE_REFERENCE_SPACE_CREATE_INFO };
     spaceInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
@@ -150,8 +192,13 @@ bool OpenXRProvider::initializeOpenGL(void* rawOpenGLContext)
         info.faceCount = 1;
         info.arraySize = 1;
         info.mipCount = 1;
+        LogVR("Creating eye " + std::to_string(eye) + " swapchain: " +
+              std::to_string(info.width) + "x" + std::to_string(info.height) +
+              ", format=" + std::to_string(info.format) + ", samples=" + std::to_string(info.sampleCount));
         XrSwapchain swapchain = XR_NULL_HANDLE;
-        if (xrCreateSwapchain(session, &info, &swapchain) != XR_SUCCESS) {
+        const auto swapchainResult = xrCreateSwapchain(session, &info, &swapchain);
+        if (swapchainResult != XR_SUCCESS) {
+            LogXrResult(instance, "xrCreateSwapchain", swapchainResult);
             xrDestroySpace(space);
             xrDestroySession(session);
             return false;
@@ -181,6 +228,7 @@ bool OpenXRProvider::initializeOpenGL(void* rawOpenGLContext)
     space_ = reinterpret_cast<void*>(space);
     renderSize_ = { configs[0].recommendedImageRectWidth, configs[0].recommendedImageRectHeight };
     state_ = engine::vr::SessionState::ready;
+    LogVR("OpenXR graphics session initialized successfully.");
     return true;
 #else
     (void)rawOpenGLContext;
@@ -237,7 +285,9 @@ bool OpenXRProvider::pollEvents()
             if (changed.state == XR_SESSION_STATE_READY) {
                 XrSessionBeginInfo beginInfo{ XR_TYPE_SESSION_BEGIN_INFO };
                 beginInfo.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
-                if (xrBeginSession(session, &beginInfo) == XR_SUCCESS)
+                const auto beginResult = xrBeginSession(session, &beginInfo);
+                LogXrResult(reinterpret_cast<XrInstance>(instance_), "xrBeginSession", beginResult);
+                if (beginResult == XR_SUCCESS)
                     state_ = engine::vr::SessionState::running;
             } else if (changed.state == XR_SESSION_STATE_STOPPING) {
                 if (frameBegun_) {
@@ -269,15 +319,25 @@ bool OpenXRProvider::beginFrame(engine::vr::FrameState& frame)
     XrFrameWaitInfo waitInfo{ XR_TYPE_FRAME_WAIT_INFO };
     XrFrameState xrFrame{ XR_TYPE_FRAME_STATE };
     auto session = reinterpret_cast<XrSession>(session_);
-    if (xrWaitFrame(session, &waitInfo, &xrFrame) != XR_SUCCESS)
+    const auto waitFrameResult = xrWaitFrame(session, &waitInfo, &xrFrame);
+    if (waitFrameResult != XR_SUCCESS) {
+        LogXrResult(reinterpret_cast<XrInstance>(instance_), "xrWaitFrame", waitFrameResult);
         return false;
+    }
     XrFrameBeginInfo beginInfo{ XR_TYPE_FRAME_BEGIN_INFO };
-    if (xrBeginFrame(session, &beginInfo) != XR_SUCCESS)
+    const auto beginFrameResult = xrBeginFrame(session, &beginInfo);
+    if (beginFrameResult != XR_SUCCESS) {
+        LogXrResult(reinterpret_cast<XrInstance>(instance_), "xrBeginFrame", beginFrameResult);
         return false;
+    }
 
     displayTime_ = xrFrame.predictedDisplayTime;
     frame.frameIndex++;
     frame.predictedDisplayTimeSeconds = static_cast<double>(displayTime_) / 1.0e9;
+    frame.shouldRender = xrFrame.shouldRender == XR_TRUE;
+    frameBegun_ = true;
+    if (!frame.shouldRender)
+        return true;
     XrViewLocateInfo locateInfo{ XR_TYPE_VIEW_LOCATE_INFO };
     locateInfo.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
     locateInfo.displayTime = xrFrame.predictedDisplayTime;
@@ -285,11 +345,10 @@ bool OpenXRProvider::beginFrame(engine::vr::FrameState& frame)
     XrViewState viewState{ XR_TYPE_VIEW_STATE };
     std::array<XrView, 2> views{ XrView{ XR_TYPE_VIEW }, XrView{ XR_TYPE_VIEW } };
     uint32_t count = 0;
-    if (xrLocateViews(session, &locateInfo, &viewState, 2, &count, views.data()) != XR_SUCCESS || count < 2) {
-        XrFrameEndInfo endInfo{ XR_TYPE_FRAME_END_INFO };
-        endInfo.displayTime = displayTime_;
-        endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-        xrEndFrame(session, &endInfo);
+    const auto locateResult = xrLocateViews(session, &locateInfo, &viewState, 2, &count, views.data());
+    if (locateResult != XR_SUCCESS || count < 2) {
+        LogXrResult(reinterpret_cast<XrInstance>(instance_), "xrLocateViews", locateResult);
+        endFrameWithoutLayers();
         return false;
     }
     for (int eye = 0; eye < 2; ++eye) {
@@ -297,6 +356,8 @@ bool OpenXRProvider::beginFrame(engine::vr::FrameState& frame)
         target.pose.position = { views[eye].pose.position.x, views[eye].pose.position.y, views[eye].pose.position.z };
         target.pose.orientation = { views[eye].pose.orientation.x, views[eye].pose.orientation.y,
                                     views[eye].pose.orientation.z, views[eye].pose.orientation.w };
+        target.frustumTangents = { std::tan(views[eye].fov.angleLeft), std::tan(views[eye].fov.angleRight),
+                                   std::tan(views[eye].fov.angleDown), std::tan(views[eye].fov.angleUp) };
         target.renderWidth = renderSize_.width;
         target.renderHeight = renderSize_.height;
         fov_[eye * 4 + 0] = views[eye].fov.angleLeft;
@@ -305,27 +366,37 @@ bool OpenXRProvider::beginFrame(engine::vr::FrameState& frame)
         fov_[eye * 4 + 3] = views[eye].fov.angleDown;
         XrSwapchain swapchain = reinterpret_cast<XrSwapchain>(static_cast<std::uintptr_t>(swapchains_[eye]));
         XrSwapchainImageAcquireInfo acquireInfo{ XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
-        if (xrAcquireSwapchainImage(swapchain, &acquireInfo, &acquiredImages_[eye]) != XR_SUCCESS)
+        const auto acquireResult = xrAcquireSwapchainImage(swapchain, &acquireInfo, &acquiredImages_[eye]);
+        if (acquireResult != XR_SUCCESS) {
+            LogXrResult(reinterpret_cast<XrInstance>(instance_), "xrAcquireSwapchainImage", acquireResult);
+            endFrameWithoutLayers();
             return false;
+        }
+        imageAcquired_[eye] = true;
         XrSwapchainImageWaitInfo imageWaitInfo{ XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
         imageWaitInfo.timeout = XR_INFINITE_DURATION;
-        if (xrWaitSwapchainImage(swapchain, &imageWaitInfo) != XR_SUCCESS)
+        const auto waitImageResult = xrWaitSwapchainImage(swapchain, &imageWaitInfo);
+        if (waitImageResult != XR_SUCCESS) {
+            LogXrResult(reinterpret_cast<XrInstance>(instance_), "xrWaitSwapchainImage", waitImageResult);
+            endFrameWithoutLayers();
             return false;
+        }
         glGenFramebuffers(1, &framebuffers_[eye]);
         glBindFramebuffer(GL_FRAMEBUFFER, framebuffers_[eye]);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                                swapchainImages_[eye][acquiredImages_[eye]], 0);
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            LogVR("Eye " + std::to_string(eye) + " framebuffer incomplete: status=" +
+                  std::to_string(glCheckFramebufferStatus(GL_FRAMEBUFFER)));
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glDeleteFramebuffers(1, &framebuffers_[eye]);
             framebuffers_[eye] = 0;
+            endFrameWithoutLayers();
             return false;
         }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         target.renderTarget = framebuffers_[eye];
-        imageAcquired_[eye] = true;
     }
-    frameBegun_ = true;
     return true;
 #else
     (void)frame;
@@ -339,6 +410,9 @@ bool OpenXRProvider::submitFrame(const engine::vr::FrameState& frame)
     (void)frame;
     if (!frameBegun_ || session_ == nullptr)
         return false;
+    if (!frame.shouldRender)
+        return endFrameWithoutLayers();
+
     std::array<XrCompositionLayerProjectionView, 2> projectionViews{};
     for (int eye = 0; eye < 2; ++eye) {
         projectionViews[eye].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
@@ -371,7 +445,10 @@ bool OpenXRProvider::submitFrame(const engine::vr::FrameState& frame)
     const XrCompositionLayerBaseHeader* layers[] = { reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer) };
     endInfo.layerCount = 1;
     endInfo.layers = layers;
-    const bool success = xrEndFrame(reinterpret_cast<XrSession>(session_), &endInfo) == XR_SUCCESS;
+    // OpenXR associates the image used by a layer with the most recently
+    // released swapchain image. Release each image before ending the frame;
+    // ending first leaves the runtime with an unfinished frame and causes it
+    // to discard all following frames.
     for (int eye = 0; eye < 2; ++eye) {
         if (framebuffers_[eye] != 0) {
             glDeleteFramebuffers(1, &framebuffers_[eye]);
@@ -383,10 +460,46 @@ bool OpenXRProvider::submitFrame(const engine::vr::FrameState& frame)
             imageAcquired_[eye] = false;
         }
     }
+    const auto endFrameResult = xrEndFrame(reinterpret_cast<XrSession>(session_), &endInfo);
+    if (endFrameResult != XR_SUCCESS)
+        LogXrResult(reinterpret_cast<XrInstance>(instance_), "xrEndFrame", endFrameResult);
+    const bool success = endFrameResult == XR_SUCCESS;
     frameBegun_ = false;
     return success;
 #else
     (void)frame;
+    return false;
+#endif
+}
+
+bool OpenXRProvider::endFrameWithoutLayers()
+{
+#if CE_HAS_OPENXR
+    if (!frameBegun_ || session_ == nullptr)
+        return false;
+    for (int eye = 0; eye < 2; ++eye) {
+        if (framebuffers_[eye] != 0) {
+            glDeleteFramebuffers(1, &framebuffers_[eye]);
+            framebuffers_[eye] = 0;
+        }
+        if (imageAcquired_[eye]) {
+            XrSwapchainImageReleaseInfo releaseInfo{ XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
+            const auto releaseResult = xrReleaseSwapchainImage(
+                reinterpret_cast<XrSwapchain>(static_cast<std::uintptr_t>(swapchains_[eye])), &releaseInfo);
+            if (releaseResult != XR_SUCCESS)
+                LogXrResult(reinterpret_cast<XrInstance>(instance_), "xrReleaseSwapchainImage", releaseResult);
+            imageAcquired_[eye] = false;
+        }
+    }
+    XrFrameEndInfo endInfo{ XR_TYPE_FRAME_END_INFO };
+    endInfo.displayTime = displayTime_;
+    endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    const auto result = xrEndFrame(reinterpret_cast<XrSession>(session_), &endInfo);
+    if (result != XR_SUCCESS)
+        LogXrResult(reinterpret_cast<XrInstance>(instance_), "xrEndFrame(empty)", result);
+    frameBegun_ = false;
+    return result == XR_SUCCESS;
+#else
     return false;
 #endif
 }

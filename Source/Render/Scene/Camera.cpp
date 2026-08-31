@@ -7,6 +7,10 @@ void Camera::SetPerspective(float fovYRadians, float aspectRatio, float nearPlan
     const float bottom = -top;
     const float right = top * aspectRatio;
     const float left = -right;
+    SetFrustum(left, right, bottom, top, nearPlane, farPlane);
+}
+
+void Camera::SetFrustum(float left, float right, float bottom, float top, float nearPlane, float farPlane) {
     projection_ = juce::Matrix3D<float>::fromFrustum(left, right, bottom, top, nearPlane, farPlane);
 }
 

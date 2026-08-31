@@ -126,6 +126,23 @@ Use `Debug` builds by default for normal development, testing, and troubleshooti
 - Do not assume `Release` just because a build is meant to be runnable.
 - When reporting a build result, name the configuration you actually built.
 
+### Incremental Editor Build Rule
+
+The Creation Engine editor is a large JUCE/OpenGL executable. Normal source
+iteration MUST use the incremental build entry point:
+
+```powershell
+.\scripts\Build-EditorIncremental.ps1
+```
+
+- Never pass `LinkIncremental=false` during normal iteration.
+- Never force a clean editor link merely to verify that a source edit was
+  picked up.
+- A clean/full editor build requires explicit, in-the-moment user approval.
+- Build standalone smoke-test targets only when their own source or linked
+  library changed; do not run the full CTest suite as routine editor
+  verification.
+
 ## Merge Rule
 
 Do not merge just because code exists locally.

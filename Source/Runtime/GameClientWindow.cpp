@@ -2,15 +2,22 @@
 
 #include <creation/ui/CreationSuiteLogos.h>
 
+#include "Scene/EngineSceneSerializer.h"
+
 namespace ce::runtime
 {
 
-GameClientContent::GameClientContent(int clientNumber)
+GameClientContent::GameClientContent(int clientNumber, juce::ValueTree sceneState,
+                                     juce::String gameName, juce::String sceneName)
     : clientNumber_(clientNumber), world_(), viewport_(world_)
 {
+    // A run client owns an isolated World, but it begins with the exact
+    // authored scene selected in the editor rather than a blank test world.
+    ce::scene::EngineSceneSerializer::restoreScene(world_, sceneState);
     addAndMakeVisible(viewport_);
     viewport_.EnableFirstPersonMode();
-    hud_.setText("CLIENT " + juce::String(clientNumber_) + "  |  LOCAL SESSION", juce::dontSendNotification);
+    hud_.setText("CLIENT " + juce::String(clientNumber_) + "  |  " + gameName + " / " + sceneName,
+                 juce::dontSendNotification);
     hud_.setColour(juce::Label::textColourId, juce::Colours::white);
     hud_.setColour(juce::Label::backgroundColourId, juce::Colour(0xaa10141a));
     hud_.setJustificationType(juce::Justification::centredLeft);
@@ -36,15 +43,16 @@ void GameClientContent::timerCallback()
     viewport_.repaint();
 }
 
-GameClientWindow::GameClientWindow(int clientNumber)
-    : DocumentWindow("Game Client " + juce::String(clientNumber),
+GameClientWindow::GameClientWindow(int clientNumber, juce::ValueTree sceneState,
+                                   juce::String gameName, juce::String sceneName)
+    : DocumentWindow(gameName + " - " + sceneName + " - Client " + juce::String(clientNumber),
                      juce::Colours::black,
                      DocumentWindow::allButtons)
 {
     setUsingNativeTitleBar(true);
     setResizable(true, true);
     setIcon(creation::ui::getSuiteLogoImage(creation::ui::SuiteLogoId::engine));
-    setContentOwned(new GameClientContent(clientNumber), true);
+    setContentOwned(new GameClientContent(clientNumber, sceneState, gameName, sceneName), true);
     centreWithSize(1280, 720);
     setVisible(true);
 }

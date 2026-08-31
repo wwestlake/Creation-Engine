@@ -4,6 +4,7 @@
 
 #include <creation/ui/CreationSuiteLogos.h>
 #include "Scene/EngineSceneSerializer.h"
+#include "Project/EngineGameDocument.h"
 
 namespace {
 constexpr juce::CommandID kRunGameClientCommand = 0x1001;
@@ -91,6 +92,11 @@ MainComponent::MainComponent()
         transformPanel_.SetSelectedEntity(entity);
         pbrMaterialPanel_.SetSelectedEntity(entity);
     };
+    gameScenePanel_.onGameSelected = [this](const juce::String& gameId) { selectGame(gameId); };
+    gameScenePanel_.onSceneSelected = [this](const juce::String& sceneId) { selectScene(sceneId); };
+    gameScenePanel_.onCreateGameRequested = [this] { createGame(); };
+    gameScenePanel_.onCreateSceneRequested = [this] { createScene(); };
+    gameScenePanel_.onSaveRequested = [this] { saveSessionToDisk(true); };
     hierarchyPanel_.onEntityDestroying = [this](entt::entity entity) {
         frustHost_.notifyObjectDestroyed(entity, static_cast<std::int64_t>(world_.CurrentTick()));
     };
@@ -105,6 +111,10 @@ MainComponent::MainComponent()
 
     setSize(1400, 900);
     startTimerHz(30);
+
+    juce::String projectError;
+    if (!ensureProjectSessionActive(projectError) && projectError.isNotEmpty())
+        headerBar_.setStatusText("Project setup: " + projectError);
 }
 
 MainComponent::~MainComponent() {
@@ -153,8 +163,15 @@ bool MainComponent::perform(const juce::ApplicationCommandTarget::InvocationInfo
 
 void MainComponent::openGameClient()
 {
+    if (!projectSession_.isValid() || activeGame_.id.isEmpty() || activeScene_.id.isEmpty()) {
+        headerBar_.setStatusText("Open a game and scene before running a client.");
+        return;
+    }
+    saveSessionToDisk(false);
     const int clientNumber = static_cast<int>(gameClients_.size()) + 1;
-    gameClients_.push_back(std::make_unique<ce::runtime::GameClientWindow>(clientNumber));
+    const auto sceneState = ce::scene::EngineSceneSerializer::serializeScene(world_);
+    gameClients_.push_back(std::make_unique<ce::runtime::GameClientWindow>(
+        clientNumber, sceneState, activeGame_.name, activeScene_.name));
     headerBar_.setStatusText("Running " + juce::String(gameClients_.size()) + " game client" + (gameClients_.size() == 1 ? "" : "s"));
 }
 
@@ -172,6 +189,7 @@ void MainComponent::initialiseDockingWorkspace()
     dockManager_ = std::make_unique<CreationDock::DockManager>(*this);
     addAndMakeVisible(*dockManager_);
     dockManager_->registerPanel("hierarchy", "Hierarchy", std::make_unique<NonOwningPanelHost>(hierarchyPanel_), CreationDock::DockTargetZone::Left);
+    dockManager_->registerPanel("game-scene", "Game & Scene", std::make_unique<NonOwningPanelHost>(gameScenePanel_), CreationDock::DockTargetZone::Left);
     dockManager_->registerPanel("viewport", "Scene Viewport", std::make_unique<NonOwningPanelHost>(viewport_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("transform", "Transform", std::make_unique<NonOwningPanelHost>(transformPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("materials-pbr", "Material Inspector", std::make_unique<NonOwningPanelHost>(pbrMaterialPanel_), CreationDock::DockTargetZone::Right);
@@ -248,7 +266,9 @@ void MainComponent::createNewProject()
         }
 
         options->headerBar_.setProjectLabel("Project: " + options->projectSession_.getManifest().projectName);
-        options->saveSessionToDisk(true);
+        juce::String activateError;
+        if (!options->openActiveGame(activateError))
+            options->headerBar_.setStatusText("Created project, but could not open its game: " + activateError);
         options->saveAppSettings();
         options->headerBar_.setStatusText("Created project: " + options->projectSession_.getManifest().projectName);
     }), true);
@@ -264,7 +284,10 @@ void MainComponent::openProject(const juce::String& projectId)
     }
 
     headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName);
-    loadSessionFromDisk();
+    if (!openActiveGame(err)) {
+        headerBar_.setStatusText("Project opened, but its game could not load: " + err);
+        return;
+    }
     saveAppSettings();
 }
 
@@ -277,13 +300,14 @@ void MainComponent::saveSessionToDisk(bool userInitiated)
         return;
     }
 
-    auto state = ce::scene::EngineSceneSerializer::serializeScene(world_);
-
-    if (auto xml = state.createXml())
-    {
-        auto xmlString = xml->toString();
-        juce::MemoryBlock xmlBlock(xmlString.toRawUTF8(), xmlString.getNumBytesAsUTF8());
-        projectSession_.writeEntry("session.xml", xmlBlock);
+    if (activeGame_.id.isEmpty() || activeScene_.id.isEmpty()) {
+        if (userInitiated) headerBar_.setStatusText("No active game scene to save.");
+        return;
+    }
+    juce::String sceneError;
+    if (!ce::project::EngineGameDocumentStore::saveScene(projectSession_, activeGame_, activeScene_, world_, sceneError)) {
+        headerBar_.setStatusText("Scene save failed: " + sceneError);
+        return;
     }
 
     juce::String commitError;
@@ -294,30 +318,153 @@ void MainComponent::saveSessionToDisk(bool userInitiated)
     }
 
     if (userInitiated)
-        headerBar_.setStatusText("Project saved: " + projectSession_.getManifest().projectName);
+        headerBar_.setStatusText("Saved " + activeGame_.name + " / " + activeScene_.name);
 }
 
 void MainComponent::loadSessionFromDisk()
 {
-    if (! projectSession_.isValid())
-        return;
+    juce::String error;
+    if (!openActiveGame(error) && error.isNotEmpty()) headerBar_.setStatusText("Scene load failed: " + error);
+}
 
-    juce::MemoryBlock sessionData;
-    if (projectSession_.readEntry("session.xml", sessionData))
-    {
-        auto xmlString = juce::String::createStringFromData(sessionData.getData(), (int) sessionData.getSize());
-        if (auto xml = juce::XmlDocument::parse(xmlString))
-        {
-            auto state = juce::ValueTree::fromXml(*xml);
-            if (ce::scene::EngineSceneSerializer::restoreScene(world_, state))
-            {
-                frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
-                hierarchyPanel_.Refresh();
-                transformPanel_.Refresh();
-                pbrMaterialPanel_.Refresh();
-            }
-        }
+bool MainComponent::openActiveGame(juce::String& errorMessage)
+{
+    if (!projectSession_.isValid()) {
+        errorMessage = "No Suite project is open.";
+        return false;
     }
+    juce::Array<ce::project::GameDocumentInfo> games;
+    if (!ce::project::EngineGameDocumentStore::ensureInitialGame(projectSession_, games, errorMessage)) return false;
+    if (games.isEmpty()) {
+        errorMessage = "The project does not contain an Engine game.";
+        return false;
+    }
+    juce::String settingsError;
+    const auto settings = creation::services::SuiteVfsJsonStore::loadJson("engine-settings.json", settingsError);
+    const auto* settingsObject = settings.getDynamicObject();
+    const auto lastGameId = settingsObject != nullptr ? settingsObject->getProperty("lastOpenedGameId").toString() : juce::String{};
+    const auto lastSceneId = settingsObject != nullptr ? settingsObject->getProperty("lastOpenedSceneId").toString() : juce::String{};
+    activeGame_ = games.getFirst();
+    for (const auto& game : games)
+        if (game.id == lastGameId) { activeGame_ = game; break; }
+    for (const auto& scene : activeGame_.scenes)
+        if (scene.id == lastSceneId) { activeScene_ = scene; break; }
+    if (activeScene_.id.isEmpty())
+        for (const auto& scene : activeGame_.scenes)
+            if (scene.id == activeGame_.entrySceneId) { activeScene_ = scene; break; }
+    if (activeScene_.id.isEmpty() && !activeGame_.scenes.isEmpty()) activeScene_ = activeGame_.scenes.getFirst();
+    if (!ce::project::EngineGameDocumentStore::loadScene(projectSession_, activeGame_, activeScene_, world_, errorMessage)) return false;
+    frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
+    hierarchyPanel_.Refresh();
+    transformPanel_.Refresh();
+    pbrMaterialPanel_.Refresh();
+    games_ = games;
+    refreshGameScenePanel();
+    headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName + " | " + activeGame_.name + " / " + activeScene_.name);
+    saveAppSettings();
+    return true;
+}
+
+void MainComponent::refreshGameScenePanel()
+{
+    gameScenePanel_.setDocuments(games_, activeGame_.id, activeScene_.id);
+    gameScenePanel_.setStatus(activeGame_.id.isEmpty() ? "No active game" : activeGame_.name + " / " + activeScene_.name);
+}
+
+void MainComponent::selectGame(const juce::String& gameId)
+{
+    for (const auto& game : games_) {
+        if (game.id != gameId) continue;
+        saveSessionToDisk(false);
+        activeGame_ = game;
+        activeScene_ = {};
+        for (const auto& scene : activeGame_.scenes)
+            if (scene.id == activeGame_.entrySceneId) { activeScene_ = scene; break; }
+        if (activeScene_.id.isEmpty() && !activeGame_.scenes.isEmpty()) activeScene_ = activeGame_.scenes.getFirst();
+        juce::String error;
+        if (!ce::project::EngineGameDocumentStore::loadScene(projectSession_, activeGame_, activeScene_, world_, error))
+            headerBar_.setStatusText("Could not open game: " + error);
+        else {
+            frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
+            refreshGameScenePanel();
+            saveAppSettings();
+        }
+        return;
+    }
+}
+
+void MainComponent::selectScene(const juce::String& sceneId)
+{
+    for (const auto& scene : activeGame_.scenes) {
+        if (scene.id != sceneId) continue;
+        saveSessionToDisk(false);
+        juce::String error;
+        if (!ce::project::EngineGameDocumentStore::loadScene(projectSession_, activeGame_, scene, world_, error))
+            headerBar_.setStatusText("Could not open scene: " + error);
+        else {
+            activeScene_ = scene;
+            frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
+            refreshGameScenePanel();
+            saveAppSettings();
+        }
+        return;
+    }
+}
+
+void MainComponent::createGame()
+{
+    auto* dialog = new juce::AlertWindow("New Game", "Name the game to add to this Suite project.", juce::MessageBoxIconType::QuestionIcon);
+    dialog->addTextEditor("name", "New Game");
+    dialog->addButton("Create", 1);
+    dialog->addButton("Cancel", 0);
+    auto safeThis = juce::Component::SafePointer<MainComponent>(this);
+    dialog->enterModalState(true, juce::ModalCallbackFunction::create([safeThis, dialog](int result) mutable {
+        std::unique_ptr<juce::AlertWindow> owned(dialog);
+        if (result != 1 || safeThis == nullptr) return;
+        ce::project::GameDocumentInfo game;
+        ce::project::SceneDocumentInfo scene;
+        juce::String error;
+        if (!ce::project::EngineGameDocumentStore::createGame(safeThis->projectSession_, owned->getTextEditorContents("name"),
+                                                               safeThis->world_, game, scene, error) ||
+            !safeThis->projectSession_.commit(error)) {
+            safeThis->headerBar_.setStatusText("Could not create game: " + error);
+            return;
+        }
+        safeThis->games_.add(game);
+        safeThis->activeGame_ = game;
+        safeThis->activeScene_ = scene;
+        safeThis->refreshGameScenePanel();
+        safeThis->saveAppSettings();
+        safeThis->headerBar_.setStatusText("Created " + game.name + " / " + scene.name);
+    }), true);
+}
+
+void MainComponent::createScene()
+{
+    if (activeGame_.id.isEmpty()) return;
+    auto* dialog = new juce::AlertWindow("New Scene", "Name the scene to add to this game.", juce::MessageBoxIconType::QuestionIcon);
+    dialog->addTextEditor("name", "New Scene");
+    dialog->addButton("Create", 1);
+    dialog->addButton("Cancel", 0);
+    auto safeThis = juce::Component::SafePointer<MainComponent>(this);
+    dialog->enterModalState(true, juce::ModalCallbackFunction::create([safeThis, dialog](int result) mutable {
+        std::unique_ptr<juce::AlertWindow> owned(dialog);
+        if (result != 1 || safeThis == nullptr) return;
+        ce::project::SceneDocumentInfo scene;
+        juce::String error;
+        if (!ce::project::EngineGameDocumentStore::createScene(safeThis->projectSession_, safeThis->activeGame_,
+                                                                owned->getTextEditorContents("name"), safeThis->world_, scene, error) ||
+            !safeThis->projectSession_.commit(error)) {
+            safeThis->headerBar_.setStatusText("Could not create scene: " + error);
+            return;
+        }
+        for (auto& game : safeThis->games_)
+            if (game.id == safeThis->activeGame_.id) game = safeThis->activeGame_;
+        safeThis->activeScene_ = scene;
+        safeThis->refreshGameScenePanel();
+        safeThis->saveAppSettings();
+        safeThis->headerBar_.setStatusText("Created scene: " + scene.name);
+    }), true);
 }
 
 bool MainComponent::ensureProjectSessionActive(juce::String& errorMessage)
@@ -335,7 +482,7 @@ bool MainComponent::ensureProjectSessionActive(juce::String& errorMessage)
             if (creation::assets::ProjectWorkspaceService::openProject(suiteSettings_, lastProjectId, projectSession_, errorMessage))
             {
                 headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName);
-                loadSessionFromDisk();
+                if (!openActiveGame(errorMessage)) return false;
                 return true;
             }
         }
@@ -349,7 +496,7 @@ bool MainComponent::ensureProjectSessionActive(juce::String& errorMessage)
         if (creation::assets::ProjectWorkspaceService::openProject(suiteSettings_, availableProjects.getFirst().projectId, projectSession_, errorMessage))
         {
             headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName);
-            loadSessionFromDisk();
+            if (!openActiveGame(errorMessage)) return false;
             return true;
         }
     }
@@ -363,6 +510,10 @@ void MainComponent::saveAppSettings()
     auto* object = new juce::DynamicObject();
     if (projectSession_.isValid())
         object->setProperty("lastOpenedProjectId", projectSession_.getProjectId());
+    if (activeGame_.id.isNotEmpty())
+        object->setProperty("lastOpenedGameId", activeGame_.id);
+    if (activeScene_.id.isNotEmpty())
+        object->setProperty("lastOpenedSceneId", activeScene_.id);
 
     juce::String errorMessage;
     creation::services::SuiteVfsJsonStore::saveJson("engine-settings.json", juce::var(object), errorMessage);

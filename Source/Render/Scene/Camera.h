@@ -10,6 +10,7 @@ namespace ce {
 class Camera final {
 public:
     void SetPerspective(float fovYRadians, float aspectRatio, float nearPlane, float farPlane);
+    void SetFrustum(float left, float right, float bottom, float top, float nearPlane, float farPlane);
     void SetLookAt(juce::Vector3D<float> eye, juce::Vector3D<float> target,
                     juce::Vector3D<float> up = juce::Vector3D<float>::yAxis());
 

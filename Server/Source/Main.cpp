@@ -4,6 +4,10 @@
 
 #include "engine/simulation.h"
 #include "engine/world.h"
+#include "Project/EngineGameDocument.h"
+
+#include <creation/assets/ProjectWorkspaceService.h>
+#include <creation/suite/SuiteSettings.h>
 
 namespace {
 
@@ -14,6 +18,9 @@ struct ServerConfig {
     // deterministic smoke-test mode for the host simulation clock.
     int ticks = -1;
     float dt = -1.0f; // <0: derive from tickRateHz.
+    juce::String projectId;
+    juce::String gameId;
+    juce::String sceneId;
 };
 
 // Minimal launch-parameter parsing, standing in for the fuller config-file
@@ -33,7 +40,35 @@ ServerConfig ParseArgs(const juce::ArgumentList& args) {
     if (auto index = args.indexOfOption("--dt"); index >= 0 && index + 1 < args.size()) {
         config.dt = static_cast<float>(args[index + 1].text.getDoubleValue());
     }
+    if (auto index = args.indexOfOption("--project"); index >= 0 && index + 1 < args.size()) config.projectId = args[index + 1].text;
+    if (auto index = args.indexOfOption("--game"); index >= 0 && index + 1 < args.size()) config.gameId = args[index + 1].text;
+    if (auto index = args.indexOfOption("--scene"); index >= 0 && index + 1 < args.size()) config.sceneId = args[index + 1].text;
     return config;
+}
+
+template <typename Document>
+const Document* FindDocument(const juce::Array<Document>& documents, const juce::String& idOrName)
+{
+    for (const auto& document : documents)
+        if (document.id == idOrName || document.name.equalsIgnoreCase(idOrName)) return &document;
+    return nullptr;
+}
+
+bool LoadAuthoredWorld(const ServerConfig& config, ce::engine::World& world, juce::String& error)
+{
+    if (config.projectId.isEmpty()) return true;
+    creation::suite::SuiteSettingsStore settingsStore;
+    const auto settings = settingsStore.load(error);
+    creation::assets::ProjectSession session;
+    if (!creation::assets::ProjectWorkspaceService::openProject(settings, config.projectId, session, error)) return false;
+    juce::Array<ce::project::GameDocumentInfo> games;
+    if (!ce::project::EngineGameDocumentStore::loadGames(session, games, error)) return false;
+    const auto* game = config.gameId.isEmpty() ? (games.isEmpty() ? nullptr : &games.getReference(0)) : FindDocument(games, config.gameId);
+    if (game == nullptr) { error = "The requested Engine game was not found."; return false; }
+    const auto* scene = config.sceneId.isEmpty()
+        ? FindDocument(game->scenes, game->entrySceneId) : FindDocument(game->scenes, config.sceneId);
+    if (scene == nullptr) { error = "The requested Engine scene was not found."; return false; }
+    return ce::project::EngineGameDocumentStore::loadScene(session, *game, *scene, world, error);
 }
 
 } // namespace
@@ -44,6 +79,11 @@ int main(int argc, char* argv[]) {
     const juce::ArgumentList args(argc, argv);
     ServerConfig config = ParseArgs(args);
     ce::engine::World world;
+    juce::String loadError;
+    if (!LoadAuthoredWorld(config, world, loadError)) {
+        std::cerr << "[server] failed to load authored world: " << loadError << std::endl;
+        return 2;
+    }
 
     const float stepDt = config.dt >= 0.0f ? config.dt : static_cast<float>(1.0 / config.tickRateHz);
 

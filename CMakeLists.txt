@@ -90,6 +90,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Main.cpp
     Source/MainComponent.h
     Source/MainComponent.cpp
+    Source/Project/EngineGameDocument.h
+    Source/Project/EngineGameDocument.cpp
     Source/Frust/EngineFrustHost.h
     Source/Frust/EngineFrustHost.cpp
     Source/Frust/EngineNodeLibraryLoader.h
@@ -141,6 +143,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/PlaceholderPanel.cpp
     Source/Views/HierarchyPanel.h
     Source/Views/HierarchyPanel.cpp
+    Source/Views/GameScenePanel.h
+    Source/Views/GameScenePanel.cpp
     Source/Views/TransformPanel.h
     Source/Views/TransformPanel.cpp
     Source/Views/MaterialsPanel.h
@@ -229,6 +233,10 @@ add_executable(CreationEngineFrustPluginSmoke
 
 if(MSVC)
     target_compile_options(CreationEngineEditor PRIVATE /MP1 /FS)
+    # Make the desired incremental Debug-link behavior explicit. The editor is
+    # large; normal iteration must never force a clean link for a one-file
+    # source change.
+    target_link_options(CreationEngineEditor PRIVATE "$<$<CONFIG:Debug>:/INCREMENTAL>")
 endif()
 target_include_directories(CreationEngineFrustPluginSmoke PRIVATE Source)
 target_link_libraries(CreationEngineFrustPluginSmoke PRIVATE
@@ -339,7 +347,12 @@ juce_generate_juce_header(CreationEngineServer)
 
 target_sources(CreationEngineServer PRIVATE
     Server/Source/Main.cpp
+    Source/Project/EngineGameDocument.h
+    Source/Project/EngineGameDocument.cpp
+    Source/Scene/EngineSceneSerializer.h
+    Source/Scene/EngineSceneSerializer.cpp
 )
+target_include_directories(CreationEngineServer PRIVATE Source)
 
 target_compile_definitions(CreationEngineServer PRIVATE
     JUCE_WEB_BROWSER=0
@@ -351,8 +364,11 @@ target_compile_definitions(CreationEngineServer PRIVATE
 target_link_libraries(CreationEngineServer PRIVATE
     engine_core
     node_system
+    creation_suite_asset_system
     juce::juce_core
     juce::juce_events
+    juce::juce_graphics
+    juce::juce_opengl
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags

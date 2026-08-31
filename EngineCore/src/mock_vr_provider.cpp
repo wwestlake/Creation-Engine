@@ -27,6 +27,7 @@ bool MockProvider::beginFrame(FrameState& frame)
     frame = {};
     frame.frameIndex = ++frameIndex_;
     frame.predictedDisplayTimeSeconds = static_cast<double>(elapsedSeconds_) + (1.0 / 90.0);
+    frame.shouldRender = true;
 
     constexpr std::array<float, 16> identityProjection {
         1.0f, 0.0f, 0.0f, 0.0f,

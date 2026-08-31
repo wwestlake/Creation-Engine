@@ -12,7 +12,7 @@ namespace ce::runtime
 class GameClientContent final : public juce::Component, private juce::Timer
 {
 public:
-    explicit GameClientContent(int clientNumber);
+    GameClientContent(int clientNumber, juce::ValueTree sceneState, juce::String gameName, juce::String sceneName);
     void resized() override;
     void paint(juce::Graphics& g) override;
 
@@ -31,7 +31,7 @@ private:
 class GameClientWindow final : public juce::DocumentWindow
 {
 public:
-    explicit GameClientWindow(int clientNumber);
+    GameClientWindow(int clientNumber, juce::ValueTree sceneState, juce::String gameName, juce::String sceneName);
     void closeButtonPressed() override;
 
 private:
