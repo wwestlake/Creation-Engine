@@ -31,6 +31,38 @@ std::array<float, 9> ExtractUpperLeft3x3(const juce::Matrix3D<float>& m) {
     return { m.mat[0], m.mat[1], m.mat[2], m.mat[4], m.mat[5], m.mat[6], m.mat[8], m.mat[9], m.mat[10] };
 }
 
+juce::Vector3D<float> RotateBy(const ce::engine::vr::Quaternion& q, const juce::Vector3D<float>& v) {
+    const float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
+    const float xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
+    const float wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
+    return { (1.0f - 2.0f * (yy + zz)) * v.x + 2.0f * (xy - wz) * v.y + 2.0f * (xz + wy) * v.z,
+             2.0f * (xy + wz) * v.x + (1.0f - 2.0f * (xx + zz)) * v.y + 2.0f * (yz - wx) * v.z,
+             2.0f * (xz - wy) * v.x + 2.0f * (yz + wx) * v.y + (1.0f - 2.0f * (xx + yy)) * v.z };
+}
+
+// The OpenXR pose is room-scale movement relative to the headset's tracking
+// origin.  It is not an editor-world position by itself: placing it directly
+// at {0, 0, 0} spawned the user inside the starter scene's center block.  Keep
+// a separate editor rig origin, then add real-world head movement on top of
+// it.  This is the foundation for the seated flying cart and the later
+// standing/walking mode; those modes will move the rig, never reinterpret the
+// physical tracking pose.
+const juce::Vector3D<float> kInitialVREditorRigPosition{ 0.0f, 1.6f, 5.0f };
+
+void ConfigureVRCamera(ce::Camera& camera, const ce::engine::vr::View& eye,
+                       const juce::Vector3D<float>& rigPosition = kInitialVREditorRigPosition) {
+    constexpr float nearPlane = 0.1f;
+    constexpr float farPlane = 100.0f;
+    const auto& frustum = eye.frustumTangents;
+    camera.SetFrustum(frustum[0] * nearPlane, frustum[1] * nearPlane,
+                      frustum[2] * nearPlane, frustum[3] * nearPlane, nearPlane, farPlane);
+    const juce::Vector3D<float> position = rigPosition + juce::Vector3D<float>{
+        eye.pose.position.x, eye.pose.position.y, eye.pose.position.z };
+    const auto forward = RotateBy(eye.pose.orientation, { 0.0f, 0.0f, -1.0f });
+    const auto up = RotateBy(eye.pose.orientation, { 0.0f, 1.0f, 0.0f });
+    camera.SetLookAt(position, position + forward, up);
+}
+
 } // namespace
 
 namespace ce {
@@ -100,6 +132,14 @@ void ViewportComponent::SeedDemoScene() {
     }
     hasSeededDemoScene_ = true;
 
+    // A project scene may already have been restored before this OpenGL
+    // context becomes ready. The standard room is a new-project template,
+    // not content to inject into every authored scene.
+    {
+        const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+        if (!world_.Registry().view<const scene::Name>().empty()) return;
+    }
+
     auto asset = assetCatalog_.Find("BoxTextured");
     if (asset.mesh == nullptr)
         asset = assetCatalog_.Find("Cube");
@@ -153,10 +193,18 @@ void ViewportComponent::newOpenGLContextCreated() {
     std::cout << "[render] newOpenGLContextCreated: GL_VERSION="
               << reinterpret_cast<const char*>(glGetString(GL_VERSION)) << std::endl;
 
-    // OpenXR session presentation is intentionally disabled until the scene
-    // renderer has a real per-eye pass. Creating a session without that pass
-    // can submit invalid compositor content and flash the headset display.
-    std::cout << "[vr] OpenXR presentation paused pending per-eye renderer." << std::endl;
+    // OpenXR is created only after JUCE has made this OpenGL context current.
+    // It remains optional so the editor still starts normally without a
+    // headset or an installed OpenXR runtime.
+    openXRProvider_ = std::make_unique<vr::OpenXRProvider>();
+    if (!openXRProvider_->initialize() ||
+        !openXRProvider_->initializeOpenGL(openGLContext_.getRawContext())) {
+        std::cout << "[vr] OpenXR unavailable; continuing in desktop mode." << std::endl;
+        openXRProvider_->shutdown();
+        openXRProvider_.reset();
+    } else {
+        std::cout << "[vr] OpenXR graphics session initialized." << std::endl;
+    }
 
     shaderComposer_ = std::make_unique<ShaderComposer>(juce::File(CE_SHADER_SOURCE_DIR));
 
@@ -190,7 +238,10 @@ void ViewportComponent::newOpenGLContextCreated() {
 }
 
 void ViewportComponent::renderOpenGL() {
-    constexpr bool vrFrameActive = false;
+    bool vrFrameActive = false;
+    if (openXRProvider_ != nullptr) {
+        vrFrameActive = openXRProvider_->beginFrame(vrFrame_);
+    }
     // Must be set every frame, not once at context creation: JUCE's own
     // OpenGLGraphicsContext composites this component's 2D paint() on the
     // same context immediately after this callback returns each frame,
@@ -209,8 +260,15 @@ void ViewportComponent::renderOpenGL() {
     glFrontFace(GL_CCW);
 
     const auto scale = static_cast<float>(openGLContext_.getRenderingScale());
-    glViewport(0, 0, juce::roundToInt(scale * static_cast<float>(getWidth())),
-               juce::roundToInt(scale * static_cast<float>(getHeight())));
+    if (vrFrameActive && vrFrame_.leftEye.renderTarget != 0) {
+        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(vrFrame_.leftEye.renderTarget));
+        glViewport(0, 0, static_cast<GLsizei>(vrFrame_.leftEye.renderWidth),
+                   static_cast<GLsizei>(vrFrame_.leftEye.renderHeight));
+    } else {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, juce::roundToInt(scale * static_cast<float>(getWidth())),
+                   juce::roundToInt(scale * static_cast<float>(getHeight())));
+    }
 
     glClearColor(0.05f, 0.05f, 0.07f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -230,6 +288,9 @@ void ViewportComponent::renderOpenGL() {
     const auto cameraPos = freeCamera_.Position();
     const auto cameraTarget = freeCamera_.Target();
     camera_.SetLookAt(cameraPos, cameraTarget);
+    if (vrFrameActive) {
+        ConfigureVRCamera(camera_, vrFrame_.leftEye);
+    }
 
     {
         const juce::ScopedLock lock(stateLock_);
@@ -292,15 +353,18 @@ void ViewportComponent::renderOpenGL() {
     // pointer. Resolve it only once the viewport owns a live GL context.
     auto unresolvedAssets = world_.Registry().view<const scene::MeshAssetReference>();
     for (const auto entity : unresolvedAssets) {
-        if (world_.Registry().all_of<scene::MeshRenderer>(entity)) {
-            continue;
-        }
+        if (const auto* existing = world_.Registry().try_get<scene::MeshRenderer>(entity);
+            existing != nullptr && existing->mesh != nullptr) continue;
         const auto asset = assetCatalog_.Find(unresolvedAssets.get<const scene::MeshAssetReference>(entity).assetId);
         if (asset.mesh != nullptr && asset.material != nullptr) {
-            world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ asset.mesh, asset.material });
+            if (auto* existing = world_.Registry().try_get<scene::MeshRenderer>(entity))
+                existing->mesh = asset.mesh;
+            else
+                world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ asset.mesh, asset.material });
         }
     }
 
+    auto drawMeshes = [&](const Camera& eyeCamera, const juce::Vector3D<float>& eyePosition) {
     auto drawView = world_.Registry().view<const scene::Transform, const scene::MeshRenderer>();
     for (auto entity : drawView) {
         const auto& transform = drawView.get<const scene::Transform>(entity);
@@ -324,10 +388,10 @@ void ViewportComponent::renderOpenGL() {
 
         program->use();
         program->setUniformMat4("uModel", model.mat, 1, GL_FALSE);
-        program->setUniformMat4("uView", camera_.ViewMatrix().mat, 1, GL_FALSE);
-        program->setUniformMat4("uProjection", camera_.ProjectionMatrix().mat, 1, GL_FALSE);
+        program->setUniformMat4("uView", eyeCamera.ViewMatrix().mat, 1, GL_FALSE);
+        program->setUniformMat4("uProjection", eyeCamera.ProjectionMatrix().mat, 1, GL_FALSE);
         program->setUniformMat3("uNormalMatrix", normalMatrix.data(), 1, GL_FALSE);
-        program->setUniform("uCameraPos", cameraPos.x, cameraPos.y, cameraPos.z);
+        program->setUniform("uCameraPos", eyePosition.x, eyePosition.y, eyePosition.z);
 
         // Runtime tint overrides leave the shared material unchanged.
         juce::Vector3D<float> tint{ 1.0f, 1.0f, 1.0f };
@@ -404,24 +468,24 @@ void ViewportComponent::renderOpenGL() {
 
         renderer.mesh->Draw();
     }
+    };
 
-    // The first compositor milestone presents the finished desktop scene to
-    // both headset eyes. This intentionally keeps one scene pass while the
-    // provider owns the OpenXR swapchains; the next renderer step will render
-    // the scene separately with each eye's pose and projection.
+    drawMeshes(camera_, camera_.Position());
+
     if (vrFrameActive) {
-        const auto copyEye = [](const engine::vr::View& eye) {
-            if (eye.renderTarget == 0 || eye.renderWidth == 0 || eye.renderHeight == 0)
-                return;
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(eye.renderTarget));
-            glBlitFramebuffer(0, 0, eye.renderWidth, eye.renderHeight,
-                              0, 0, eye.renderWidth, eye.renderHeight,
-                              GL_COLOR_BUFFER_BIT, GL_LINEAR);
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        };
-        copyEye(vrFrame_.leftEye);
-        copyEye(vrFrame_.rightEye);
+        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(vrFrame_.rightEye.renderTarget));
+        glViewport(0, 0, static_cast<GLsizei>(vrFrame_.rightEye.renderWidth),
+                   static_cast<GLsizei>(vrFrame_.rightEye.renderHeight));
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        ConfigureVRCamera(camera_, vrFrame_.rightEye);
+        if (gridProgram_ != nullptr) {
+            gridProgram_->use();
+            gridProgram_->setUniformMat4("uView", camera_.ViewMatrix().mat, 1, GL_FALSE);
+            gridProgram_->setUniformMat4("uProjection", camera_.ProjectionMatrix().mat, 1, GL_FALSE);
+            gridProgram_->setUniform("uColor", 0.2f, 0.24f, 0.32f);
+            gridRenderer_.Draw();
+        }
+        drawMeshes(camera_, camera_.Position());
     }
 
     LogGLErrors("draw");

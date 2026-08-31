@@ -17,7 +17,9 @@
 #include "Views/PlaceholderPanel.h"
 #include "Views/TransformPanel.h"
 #include "Views/ViewModeBar.h"
+#include "Views/GameScenePanel.h"
 #include "Runtime/GameClientWindow.h"
+#include "Project/EngineGameDocument.h"
 
 #include <creation/assets/ProjectSession.h>
 #include <creation/assets/ProjectWorkspaceService.h>
@@ -58,6 +60,12 @@ private:
     void openProject(const juce::String& projectId);
     void saveSessionToDisk(bool userInitiated = false);
     void loadSessionFromDisk();
+    bool openActiveGame(juce::String& errorMessage);
+    void selectGame(const juce::String& gameId);
+    void selectScene(const juce::String& sceneId);
+    void createGame();
+    void createScene();
+    void refreshGameScenePanel();
     bool ensureProjectSessionActive(juce::String& errorMessage);
     void saveAppSettings();
     void loadAppSettings();
@@ -65,6 +73,9 @@ private:
     creation::suite::SuiteSettings suiteSettings_;
     creation::suite::SuiteSettingsStore suiteSettingsStore_;
     creation::assets::ProjectSession projectSession_;
+    ce::project::GameDocumentInfo activeGame_;
+    ce::project::SceneDocumentInfo activeScene_;
+    juce::Array<ce::project::GameDocumentInfo> games_;
     bool projectDirty_ = false;
     juce::ApplicationCommandManager commandManager_;
 
@@ -85,6 +96,7 @@ private:
     // the constructor's initializer-list order.
     ce::ViewportComponent viewport_;
     ce::HierarchyPanel hierarchyPanel_;
+    ce::views::GameScenePanel gameScenePanel_;
     juce::Label inspectorTitle_ { {}, "Inspector" };
     juce::Label tickLabel_;
     juce::TextButton runGameButton_ { "Run Game Client" };

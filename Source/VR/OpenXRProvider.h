@@ -42,6 +42,7 @@ private:
     bool frameBegun_ = false;
 
     bool pollEvents();
+    bool endFrameWithoutLayers();
 };
 
 } // namespace ce::vr

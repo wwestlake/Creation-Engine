@@ -32,6 +32,10 @@ enum class Eye : std::uint8_t { left, right };
 struct View {
     Pose pose{};
     std::array<float, 16> projection{};
+    // Tangents of the runtime-supplied asymmetric frustum: left, right,
+    // bottom, top.  The renderer uses these directly rather than approximating
+    // a headset lens with a symmetric desktop field of view.
+    std::array<float, 4> frustumTangents{};
     // Opaque graphics target supplied by a provider. Zero means the view is
     // tracking-only and has no compositor render target.
     std::uintptr_t renderTarget = 0;
@@ -85,6 +89,10 @@ struct RenderTargetSize {
 struct FrameState {
     std::uint64_t frameIndex = 0;
     double predictedDisplayTimeSeconds = 0.0;
+    // The OpenXR runtime may keep the session synchronized while declining to
+    // display a particular frame. In that case the application must still end
+    // the frame, but must not acquire, render, or submit eye layers.
+    bool shouldRender = false;
     View leftEye{};
     View rightEye{};
     ControllerState leftController{};
