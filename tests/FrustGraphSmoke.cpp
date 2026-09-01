@@ -80,13 +80,13 @@ int main() {
     }
 
     const std::string legacy =
-        "celg 1\n"
+        "frgraph 1\n"
         "graph legacy\n"
         "node 1 Constant core 0 0\n"
         "pin 1 out 1 value data float\n";
     const auto migrated = DeserializeGraph(legacy, error);
     if (!migrated || migrated->Target() != GraphTarget::Behavior || !contains(SerializeGraph(*migrated), "frgraph 1\n")) {
-        std::cerr << "Legacy CEL graph migration failed: " << error << '\n';
+        std::cerr << "FRust graph validation failed: " << error << '\n';
         return 1;
     }
 

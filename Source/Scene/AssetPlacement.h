@@ -25,6 +25,7 @@ namespace ce::scene {
 // every other multi-component World mutation in this codebase (World's
 // own header comment explains why the lock exists).
 entt::entity PlaceAssetEntity(engine::World& world, const AssetCatalog::Asset& asset, const juce::String& name,
-                               engine::Vec3 position, entt::entity parent = entt::null);
+                               engine::Vec3 position, entt::entity parent = entt::null,
+                               const juce::String& durableAssetId = {}, const juce::String& durableVersionId = {});
 
 } // namespace ce::scene

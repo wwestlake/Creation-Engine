@@ -7,6 +7,9 @@
 #include "engine/world.h"
 #include "Import/ImporterRegistry.h"
 #include "Render/ViewportComponent.h"
+#include <creation/assets/ProjectSession.h>
+
+namespace creation::assets { class ProjectSession; }
 
 namespace ce {
 
@@ -39,7 +42,7 @@ namespace ce {
 class ImportPanel final : public juce::Component,
                            public juce::FileDragAndDropTarget {
 public:
-    ImportPanel(engine::World& world, ViewportComponent& viewport);
+    ImportPanel(engine::World& world, ViewportComponent& viewport, creation::assets::ProjectSession& projectSession);
 
     // Declared (not defaulted inline) and defined in the .cpp, after
     // AudioClipRow's full definition: audioClipRows_ is a
@@ -53,6 +56,8 @@ public:
     void fileDragEnter(const juce::StringArray& files, int x, int y) override;
     void fileDragExit(const juce::StringArray& files) override;
     void filesDropped(const juce::StringArray& files, int x, int y) override;
+
+    void SetProjectContent(creation::assets::ProjectSession* session, const juce::String& gameAssetRoot);
 
     void paint(juce::Graphics& g) override;
     void resized() override;

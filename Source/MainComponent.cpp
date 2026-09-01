@@ -5,9 +5,12 @@
 #include <creation/ui/CreationSuiteLogos.h>
 #include "Scene/EngineSceneSerializer.h"
 #include "Project/EngineGameDocument.h"
+#include "engine/foundation_gameplay.h"
 
 namespace {
 constexpr juce::CommandID kRunGameClientCommand = 0x1001;
+constexpr juce::CommandID kUndoInteractionCommand = 0x1002;
+constexpr juce::CommandID kRedoInteractionCommand = 0x1003;
 
 class NonOwningPanelHost final : public juce::Component
 {
@@ -21,16 +24,18 @@ private:
 }
 
 MainComponent::MainComponent()
-    : viewport_(world_),
+    : viewport_(world_, interactions_),
       hierarchyPanel_(world_, viewport_),
       transformPanel_(world_),
       pbrMaterialPanel_(world_),
-      importPanel_(world_, viewport_),
+      importPanel_(world_, viewport_, projectSession_),
       lightPanel_(viewport_) {
     commandManager_.registerAllCommandsForTarget(this);
     commandManager_.getKeyMappings()->addKeyPress(
         kRunGameClientCommand,
         juce::KeyPress('G', juce::ModifierKeys::ctrlModifier | juce::ModifierKeys::shiftModifier, 0));
+    commandManager_.getKeyMappings()->addKeyPress(kUndoInteractionCommand, juce::KeyPress('Z', juce::ModifierKeys::ctrlModifier, 0));
+    commandManager_.getKeyMappings()->addKeyPress(kRedoInteractionCommand, juce::KeyPress('Y', juce::ModifierKeys::ctrlModifier, 0));
     addKeyListener(commandManager_.getKeyMappings());
 
     juce::String suiteErr;
@@ -41,6 +46,13 @@ MainComponent::MainComponent()
         juce::Logger::writeToLog("Creation Engine FRust host: " + juce::String(frustError));
     }
     frustAutomationPanel_ = std::make_unique<ce::views::FrustLogicPanel>(frustHost_.nodeLibraries());
+    frustHost_.setSceneTransitionRequestHandler([this](const std::string& reference) {
+        const juce::String sceneReference(reference);
+        for (const auto& scene : activeGame_.scenes)
+            if (scene.id == sceneReference || scene.name == sceneReference) { pendingSceneTransitionId_ = scene.id; return; }
+    });
+    frustHost_.setActiveGameIdProvider([this] { return activeGame_.id.toStdString(); });
+    frustHost_.setActiveSceneIdProvider([this] { return activeScene_.id.toStdString(); });
 
     headerBar_.setAppTitle("Creation Engine");
     headerBar_.setLogoImage(creation::ui::getSuiteLogoImage(creation::ui::SuiteLogoId::engine));
@@ -77,7 +89,6 @@ MainComponent::MainComponent()
     headerBar_.onStop = [this] {
         SetPlaying(false);
         world_.ResetTick();
-        viewport_.ResetDemoEntityTransform();
         headerBar_.setStatusText("Stopped");
     };
     headerBar_.setStatusText("Editing");
@@ -89,6 +100,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(runGameButton_);
 
     hierarchyPanel_.onSelectionChanged = [this](entt::entity entity) {
+        interactions_.select(entity);
         transformPanel_.SetSelectedEntity(entity);
         pbrMaterialPanel_.SetSelectedEntity(entity);
     };
@@ -140,6 +152,8 @@ void MainComponent::resized() {
 void MainComponent::getAllCommands(juce::Array<juce::CommandID>& commands)
 {
     commands.add(kRunGameClientCommand);
+    commands.add(kUndoInteractionCommand);
+    commands.add(kRedoInteractionCommand);
 }
 
 void MainComponent::getCommandInfo(juce::CommandID commandID, juce::ApplicationCommandInfo& result)
@@ -148,6 +162,16 @@ void MainComponent::getCommandInfo(juce::CommandID commandID, juce::ApplicationC
     {
         result.setInfo("Run Game Client", "Open an isolated game client window", "Game", {});
         result.addDefaultKeypress('G', juce::ModifierKeys::ctrlModifier | juce::ModifierKeys::shiftModifier);
+    }
+    if (commandID == kUndoInteractionCommand)
+    {
+        result.setInfo("Undo", "Undo the last scene interaction", "Edit", {});
+        result.addDefaultKeypress('Z', juce::ModifierKeys::ctrlModifier);
+    }
+    if (commandID == kRedoInteractionCommand)
+    {
+        result.setInfo("Redo", "Redo the last scene interaction", "Edit", {});
+        result.addDefaultKeypress('Y', juce::ModifierKeys::ctrlModifier);
     }
 }
 
@@ -158,6 +182,8 @@ bool MainComponent::perform(const juce::ApplicationCommandTarget::InvocationInfo
         openGameClient();
         return true;
     }
+    if (info.commandID == kUndoInteractionCommand) return interactions_.undo();
+    if (info.commandID == kRedoInteractionCommand) return interactions_.redo();
     return false;
 }
 
@@ -219,6 +245,16 @@ void MainComponent::SetPlaying(bool playing) {
 }
 
 void MainComponent::timerCallback() {
+    if (const auto selection = interactions_.takeSelectionChange())
+        hierarchyPanel_.SelectEntity(*selection);
+    if (pendingSceneTransitionId_.isNotEmpty()) {
+        const auto requestedScene = pendingSceneTransitionId_;
+        pendingSceneTransitionId_.clear();
+        const bool resumeAfterTransition = isPlaying_;
+        if (resumeAfterTransition) SetPlaying(false);
+        selectScene(requestedScene);
+        if (resumeAfterTransition) SetPlaying(true);
+    }
     if (isPlaying_) {
         // GS6: runs every attached ScriptComponent's on_tick (and
         // on_start, on an entity's first playing tick) before advancing
@@ -227,6 +263,7 @@ void MainComponent::timerCallback() {
         // server genuinely execute scripts identically. 1/30s matches
         // this timer's own 30 Hz rate (startTimerHz(30) below).
         ce::engine::Simulation::Step(world_, 1.0f / 30.0f);
+        ce::engine::FoundationGameplay::Step(world_, {}, 1.0f / 30.0f);
         frustHost_.tick(static_cast<std::int64_t>(world_.CurrentTick()));
     }
     tickLabel_.setText("tick " + juce::String(world_.CurrentTick()), juce::dontSendNotification);
@@ -353,7 +390,9 @@ bool MainComponent::openActiveGame(juce::String& errorMessage)
         for (const auto& scene : activeGame_.scenes)
             if (scene.id == activeGame_.entrySceneId) { activeScene_ = scene; break; }
     if (activeScene_.id.isEmpty() && !activeGame_.scenes.isEmpty()) activeScene_ = activeGame_.scenes.getFirst();
+    importPanel_.SetProjectContent(&projectSession_, activeGame_.assetRoot());
     if (!ce::project::EngineGameDocumentStore::loadScene(projectSession_, activeGame_, activeScene_, world_, errorMessage)) return false;
+    viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
     frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
     hierarchyPanel_.Refresh();
     transformPanel_.Refresh();
@@ -381,10 +420,12 @@ void MainComponent::selectGame(const juce::String& gameId)
         for (const auto& scene : activeGame_.scenes)
             if (scene.id == activeGame_.entrySceneId) { activeScene_ = scene; break; }
         if (activeScene_.id.isEmpty() && !activeGame_.scenes.isEmpty()) activeScene_ = activeGame_.scenes.getFirst();
+        importPanel_.SetProjectContent(&projectSession_, activeGame_.assetRoot());
         juce::String error;
         if (!ce::project::EngineGameDocumentStore::loadScene(projectSession_, activeGame_, activeScene_, world_, error))
             headerBar_.setStatusText("Could not open game: " + error);
         else {
+            viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
             frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
             refreshGameScenePanel();
             saveAppSettings();
@@ -403,6 +444,7 @@ void MainComponent::selectScene(const juce::String& sceneId)
             headerBar_.setStatusText("Could not open scene: " + error);
         else {
             activeScene_ = scene;
+            viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
             frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
             refreshGameScenePanel();
             saveAppSettings();
@@ -425,7 +467,7 @@ void MainComponent::createGame()
         ce::project::SceneDocumentInfo scene;
         juce::String error;
         if (!ce::project::EngineGameDocumentStore::createGame(safeThis->projectSession_, owned->getTextEditorContents("name"),
-                                                               safeThis->world_, game, scene, error) ||
+                                                               game, scene, error) ||
             !safeThis->projectSession_.commit(error)) {
             safeThis->headerBar_.setStatusText("Could not create game: " + error);
             return;
@@ -433,6 +475,7 @@ void MainComponent::createGame()
         safeThis->games_.add(game);
         safeThis->activeGame_ = game;
         safeThis->activeScene_ = scene;
+        safeThis->importPanel_.SetProjectContent(&safeThis->projectSession_, safeThis->activeGame_.assetRoot());
         safeThis->refreshGameScenePanel();
         safeThis->saveAppSettings();
         safeThis->headerBar_.setStatusText("Created " + game.name + " / " + scene.name);
@@ -453,7 +496,7 @@ void MainComponent::createScene()
         ce::project::SceneDocumentInfo scene;
         juce::String error;
         if (!ce::project::EngineGameDocumentStore::createScene(safeThis->projectSession_, safeThis->activeGame_,
-                                                                owned->getTextEditorContents("name"), safeThis->world_, scene, error) ||
+                                                                owned->getTextEditorContents("name"), scene, error) ||
             !safeThis->projectSession_.commit(error)) {
             safeThis->headerBar_.setStatusText("Could not create scene: " + error);
             return;

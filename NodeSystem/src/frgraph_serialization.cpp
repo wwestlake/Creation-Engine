@@ -172,7 +172,6 @@ std::unique_ptr<Graph> DeserializeGraph(const std::string& text, std::string& er
     std::string line;
     int lineNo = 0;
     bool sawHeader = false;
-    bool legacyCelg = false;
     GraphTarget target = GraphTarget::Behavior;
     std::unique_ptr<Graph> graph;
 
@@ -192,19 +191,15 @@ std::unique_ptr<Graph> DeserializeGraph(const std::string& text, std::string& er
         std::string keyword;
         tok >> keyword;
 
-        if (keyword == "frgraph" || keyword == "celg") {
+        if (keyword == "frgraph") {
             int version = 0;
             if (!(tok >> version) || version != 1) {
                 return fail("expected 'frgraph 1' header");
             }
             sawHeader = true;
-            legacyCelg = keyword == "celg";
         } else if (keyword == "target") {
             if (!sawHeader) {
                 return fail("'target' line before 'frgraph' header");
-            }
-            if (legacyCelg) {
-                return fail("legacy celg files cannot declare a graph target");
             }
             std::string targetText;
             if (!(tok >> targetText)) {

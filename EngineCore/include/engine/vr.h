@@ -49,6 +49,7 @@ struct ControllerState {
     bool selectPressed = false;
     bool gripPressed = false;
     bool menuPressed = false;
+    bool primaryPressed = false;
     Vec3 thumbstick{};
 };
 

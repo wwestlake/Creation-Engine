@@ -1,0 +1,14 @@
+{
+  "formatVersion": 1,
+  "id": "com.lagdaemon.creation-engine",
+  "version": "1.0.1",
+  "title": "Creation Engine Pack",
+  "defaultScene": "scenes/DefaultScene.xml",
+  "assets": [
+    { "id": "Cube", "kind": "procedural-mesh", "generator": "cube", "title": "Cube" },
+    { "id": "Sphere", "kind": "procedural-mesh", "generator": "uv-sphere", "title": "Sphere" },
+    { "id": "BoxTextured", "kind": "model", "title": "Textured Box", "payload": "models/BoxTextured/BoxTextured.gltf" },
+    { "id": "SimpleSkin", "kind": "model", "title": "Simple Skin", "payload": "models/SimpleSkin/SimpleSkin.gltf" },
+    { "id": "DefaultScene", "kind": "scene", "title": "Default Scene" }
+  ]
+}

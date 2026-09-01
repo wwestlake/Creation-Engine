@@ -9,6 +9,7 @@
 
 #include "Scene/AssetPlacement.h"
 #include "Scene/Components.h"
+#include "Scene/TransformHierarchy.h"
 
 namespace ce {
 
@@ -220,6 +221,12 @@ void HierarchyPanel::NotifySelected(entt::entity entity) {
     }
 }
 
+void HierarchyPanel::SelectEntity(entt::entity entity) {
+    if (selectedEntity_ == entity) return;
+    NotifySelected(entity);
+    Refresh();
+}
+
 void HierarchyPanel::UpdateActionButtonState() {
     const bool hasSelection = selectedEntity_ != entt::null;
     duplicateButton_.setEnabled(hasSelection);
@@ -418,7 +425,19 @@ bool HierarchyPanel::Reparent(entt::entity entity, entt::entity newParent) {
         }
     }
 
+    juce::Vector3D<float> worldPosition;
+    if (registry.all_of<scene::Transform>(entity)) {
+        worldPosition = scene::MatrixTranslation(scene::WorldModelMatrix(registry, entity));
+    }
+
     registry.emplace_or_replace<scene::Parent>(entity, scene::Parent{ newParent });
+
+    if (registry.all_of<scene::Transform>(entity)) {
+        const auto parentWorld = newParent == entt::null
+            ? juce::Matrix3D<float>()
+            : scene::WorldModelMatrix(registry, newParent);
+        registry.get<scene::Transform>(entity).position = scene::ToVec3(scene::InverseTransformPoint(parentWorld, worldPosition));
+    }
     return true;
 }
 

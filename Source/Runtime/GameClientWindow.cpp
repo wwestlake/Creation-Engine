@@ -1,6 +1,7 @@
 #include "GameClientWindow.h"
 
 #include <creation/ui/CreationSuiteLogos.h>
+#include "engine/foundation_gameplay.h"
 
 #include "Scene/EngineSceneSerializer.h"
 
@@ -9,7 +10,7 @@ namespace ce::runtime
 
 GameClientContent::GameClientContent(int clientNumber, juce::ValueTree sceneState,
                                      juce::String gameName, juce::String sceneName)
-    : clientNumber_(clientNumber), world_(), viewport_(world_)
+    : clientNumber_(clientNumber), world_(), viewport_(world_, interactions_)
 {
     // A run client owns an isolated World, but it begins with the exact
     // authored scene selected in the editor rather than a blank test world.
@@ -39,7 +40,10 @@ void GameClientContent::paint(juce::Graphics& g)
 void GameClientContent::timerCallback()
 {
     if (playing_)
+    {
+        engine::FoundationGameplay::Step(world_, {}, 1.0f / 30.0f);
         engine::Simulation::Step(world_, 1.0f / 30.0f);
+    }
     viewport_.repaint();
 }
 

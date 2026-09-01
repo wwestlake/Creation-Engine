@@ -2,6 +2,7 @@
 
 #include <mutex>
 
+#include "Assets/ProjectContentAssetStore.h"
 #include "Render/Import/GltfLoader.h"
 #include "Render/ViewportComponent.h"
 #include "Scene/AnimationSlicer.h"
@@ -70,8 +71,8 @@ void ApplyAnimationImportOptions(LoadedModel& model, const AnimationImportOption
 } // namespace
 
 ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportContext& context) {
-    if (context.catalog == nullptr || context.viewport == nullptr || context.world == nullptr) {
-        return ImportResult::Failed("glTF import needs a live world, asset catalog, and viewport.");
+    if (context.catalog == nullptr || context.viewport == nullptr || context.world == nullptr || context.projectSession == nullptr) {
+        return ImportResult::Failed("glTF import needs an open game, world, asset catalog, and viewport.");
     }
 
     LoadedModel model;
@@ -84,6 +85,13 @@ ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportConte
         ApplyAnimationImportOptions(model, context.animationOptions, animationNote);
     }
 
+    creation::assets::AssetDescriptor sourceDescriptor;
+    juce::String persistenceError;
+    if (! assets::ProjectContentAssetStore::importSource(*context.projectSession, context.gameAssetRoot, sourceFile,
+                                                          creation::assets::AssetKind::render, "Model",
+                                                          { "model", "gltf" }, sourceDescriptor, persistenceError))
+        return ImportResult::Failed("Could not store glTF source in project content: " + persistenceError);
+
     const juce::String assetName = sourceFile.getFileNameWithoutExtension();
 
     bool added = false;
@@ -93,6 +101,9 @@ ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportConte
     if (!added) {
         return ImportResult::Failed("Failed to build GPU resources for " + sourceFile.getFileName() + ".");
     }
+    if (! context.catalog->SetSourceIdentity(assetName, sourceDescriptor.id, sourceDescriptor.versionId) ||
+        ! context.catalog->AddAlias(sourceDescriptor.id, assetName))
+        return ImportResult::Failed("The imported model could not be registered with its project asset identity.");
 
     // Drop the model straight into the scene rather than only staging it
     // in the catalog for a manual "+ Add" follow-up -- a dragged-in file
@@ -102,10 +113,11 @@ ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportConte
     const auto asset = context.catalog->Find(assetName);
     {
         std::lock_guard<std::mutex> lock(context.world->RegistryMutex());
-        scene::PlaceAssetEntity(*context.world, asset, assetName, scene::ToVec3(context.viewport->SpawnPosition()));
+        scene::PlaceAssetEntity(*context.world, asset, assetName, scene::ToVec3(context.viewport->SpawnPosition()),
+                                entt::null, sourceDescriptor.id, sourceDescriptor.versionId);
     }
 
-    return ImportResult::Ok(assetName + " imported and placed in the scene." + animationNote);
+    return ImportResult::Ok(assetName + " stored in project content and placed in the scene." + animationNote);
 }
 
 } // namespace ce::import
