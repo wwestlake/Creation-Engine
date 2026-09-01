@@ -9,6 +9,7 @@
 #include "Render/Scene/Animation.h"
 #include "Scene/AnimationSampler.h"
 #include "Scene/Components.h"
+#include "Scene/TransformHierarchy.h"
 
 using namespace juce::gl;
 
@@ -367,7 +368,6 @@ void ViewportComponent::renderOpenGL() {
     auto drawMeshes = [&](const Camera& eyeCamera, const juce::Vector3D<float>& eyePosition) {
     auto drawView = world_.Registry().view<const scene::Transform, const scene::MeshRenderer>();
     for (auto entity : drawView) {
-        const auto& transform = drawView.get<const scene::Transform>(entity);
         const auto& renderer = drawView.get<const scene::MeshRenderer>(entity);
         if (!renderer.mesh || !renderer.material) {
             continue;
@@ -383,7 +383,9 @@ void ViewportComponent::renderOpenGL() {
             continue;
         }
 
-        const auto model = scene::ToModelMatrix(transform);
+        // Transform is local to the entity's parent. Folders are transparent
+        // and parent objects establish the coordinate space for descendants.
+        const auto model = scene::WorldModelMatrix(world_.Registry(), entity);
         const auto normalMatrix = ExtractUpperLeft3x3(model);
 
         program->use();

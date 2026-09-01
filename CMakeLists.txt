@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 set(CREATION_ENGINE_VERSION "0.0.1" CACHE STRING "Creation Engine product version")
-project(CreationEngine VERSION ${CREATION_ENGINE_VERSION} LANGUAGES CXX)
+project(CreationEngine VERSION ${CREATION_ENGINE_VERSION} LANGUAGES C CXX)
 
 find_path(CREATION_OPENXR_INCLUDE_DIR NAMES openxr/openxr.h)
 find_library(CREATION_OPENXR_LOADER_LIBRARY NAMES openxr_loader)
@@ -41,6 +41,8 @@ endif()
 # NodeSystem is language-neutral graph infrastructure. It remains in the
 # Engine while FRust visual automation is introduced on top of it.
 add_subdirectory(NodeSystem)
+add_library(creation_engine_ufbx STATIC third_party/ufbx/ufbx.c)
+target_include_directories(creation_engine_ufbx PUBLIC third_party/ufbx)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/NodeEditorUI/CMakeLists.txt")
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/NodeEditorUI"
                      "${CMAKE_CURRENT_BINARY_DIR}/CreationSuiteSharedNodeEditorUI")
@@ -124,6 +126,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Render/Shaders/ShaderComposer.cpp
     Source/Render/Import/GltfLoader.h
     Source/Render/Import/GltfLoader.cpp
+    Source/Render/Import/FbxLoader.h
+    Source/Render/Import/FbxLoader.cpp
     Source/Render/Import/ObjLoader.h
     Source/Render/Import/ObjLoader.cpp
     Source/Render/Scene/Light.h
@@ -139,6 +143,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/FrustLogicPanel.cpp
     Source/Runtime/GameClientWindow.h
     Source/Runtime/GameClientWindow.cpp
+    Source/Character/CharacterDefinition.h
+    Source/Character/CharacterDefinition.cpp
     Source/Views/PlaceholderPanel.h
     Source/Views/PlaceholderPanel.cpp
     Source/Views/HierarchyPanel.h
@@ -169,6 +175,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Import/ImporterRegistry.cpp
     Source/Import/Importers/GltfAssetImporter.h
     Source/Import/Importers/GltfAssetImporter.cpp
+    Source/Import/Importers/FbxAssetImporter.h
+    Source/Import/Importers/FbxAssetImporter.cpp
     Source/Import/Importers/ObjAssetImporter.h
     Source/Import/Importers/ObjAssetImporter.cpp
     Source/Import/Importers/AudioAssetImporter.h
@@ -213,6 +221,7 @@ target_link_libraries(CreationEngineEditor PRIVATE
     creation_suite_ui
     creation_suite_ui_assets
     creation_suite_frust_plugin_runtime
+    creation_engine_ufbx
     CreationDock
     creation_suite_node_editor_ui
     juce::juce_gui_extra

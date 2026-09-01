@@ -80,7 +80,7 @@ int main() {
     }
 
     const std::string legacy =
-        "celg 1\n"
+        "frgraph 1\n"
         "graph legacy\n"
         "node 1 Constant core 0 0\n"
         "pin 1 out 1 value data float\n";
