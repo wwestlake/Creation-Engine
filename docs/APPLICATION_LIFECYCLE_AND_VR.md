@@ -18,10 +18,15 @@ Every pass at Creation Engine so far has produced real, working features with no
 
 ### 2.1 First launch — no VFS configured
 
-This is a **suite-level** concern, not Engine-specific (per the existing Storage Boundary Rule: the VFS root pointer lives in `suite-settings.json`, shared by every app). Scope for this document: what Engine does once that root exists, and what it needs from the suite-level first-run flow to hand off cleanly.
+This is a **suite-level** concern, not Engine-specific — it happens once, on the very first launch of *any* app in the suite, not per-app (per the existing Storage Boundary Rule: the VFS root pointer lives in `suite-settings.json`, shared by every app).
 
-* On launch, Engine checks for a configured `suiteVfsRoot`. If none exists, Engine defers to the suite-level "designate a VFS location" flow (already the documented ownership boundary — confirm in Part 4 whether that flow currently exists standalone or needs to be built).
-* Once a VFS root exists but Engine has never been opened in it before: Engine has no project to resume. It should present the suite's project picker/creation flow, not silently invent one.
+**Confirmed by code audit (2026-09-01): this flow does not exist today.** `suiteVfsRoot` empty silently falls back to `Documents\Creation Suite\` (`SuiteStoragePaths.cpp`) with no prompt and no user awareness. This is the wrong behavior and is being replaced, not extended.
+
+**Required behavior:**
+
+* The very first time the user launches *any* app in the suite, before anything else happens, the app asks the user to supply a VFS location. This is a one-time, suite-wide gate — not per-app, not skippable, not silently defaulted.
+* After that initial setup, **there is no filesystem fallback of any kind.** If the configured VFS location cannot be found — unset, folder missing, drive unplugged, whatever the cause — that is an **error state**, not a silent default. Alert the user and offer exactly two options: locate the VFS manually (repoint to a folder) or quit. The app does not proceed in a degraded/fallback filesystem mode under any circumstance.
+* Once a VFS root exists but Engine specifically has never been opened in it before: Engine has no project to resume and should present the suite's project picker/creation flow, not silently invent one.
 
 ### 2.2 First project, first scene
 
@@ -64,7 +69,7 @@ Hand tracking, controller ray/grab interaction fidelity, comfort options (vignet
 
 These need an answer before or during implementation, not assumptions baked in silently:
 
-1. Does a suite-level "first-run: designate VFS location" flow already exist as a real, working feature today, or does 2.1 need it built from scratch?
+1. ~~Does a suite-level "first-run: designate VFS location" flow already exist?~~ **Answered 2026-09-01: no, it does not exist.** §2.1 now states the required behavior directly: one-time suite-wide prompt on first launch of any app, hard error-and-recover (locate manually or quit) on any subsequent failure to find it, zero filesystem fallback ever.
 2. Is `lastProjectId` genuinely shared suite-wide across all apps today, or does each app currently keep its own copy of that concept? (Confirm before treating 2.3's fallback logic as already correct.)
 3. Should the VR Enabled/Disabled + Initialize-on-Startup settings live in the existing suite-wide settings store, or is a VR-specific store appropriate given it's genuinely Engine's own hardware concern for now?
 4. What counts as "cheap detection" on this project's supported OpenXR runtimes in practice — is there a real lightweight probe available, or does even a minimal check require touching the runtime enough that "cheap" is aspirational? Needs a spike, not a guess.
@@ -83,7 +88,7 @@ Patterns this design draws on directly:
 Tracked as GitHub issues under an epic on this repo, added to the Creation Suite Road Map board:
 
 * **Epic: Application Lifecycle & VR Subsystem**
-  1. Confirm/build suite-level first-run VFS designation hand-off (resolves Open Question 1)
+  1. Build the suite-level first-run VFS prompt + hard error-and-recover flow (remove the silent filesystem fallback in `SuiteStoragePaths.cpp`)
   2. Confirm and, if needed, unify "last opened project" as genuinely suite-wide (resolves Open Question 2)
   3. Implement scene/game load fallback chain (2.3) with visible error reporting on every failure branch
   4. Formalize the scene-content rule (2.4) — add a lint/review checklist item, not just a doc statement
