@@ -182,8 +182,6 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/TransportLookAndFeel.cpp
     Source/Views/TransportBar.h
     Source/Views/TransportBar.cpp
-    Source/Views/ViewModeBar.h
-    Source/Views/ViewModeBar.cpp
     Source/Views/FrustLogicPanel.h
     Source/Views/FrustLogicPanel.cpp
     Source/Runtime/GameClientWindow.h
@@ -194,8 +192,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/PlaceholderPanel.cpp
     Source/Views/HierarchyPanel.h
     Source/Views/HierarchyPanel.cpp
-    Source/Views/GameScenePanel.h
-    Source/Views/GameScenePanel.cpp
+    Source/Views/ExplorerPanel.h
+    Source/Views/ExplorerPanel.cpp
     Source/Views/TransformPanel.h
     Source/Views/TransformPanel.cpp
     Source/Views/MaterialsPanel.h

@@ -11,6 +11,36 @@ namespace {
 constexpr juce::CommandID kRunGameClientCommand = 0x1001;
 constexpr juce::CommandID kUndoInteractionCommand = 0x1002;
 constexpr juce::CommandID kRedoInteractionCommand = 0x1003;
+constexpr juce::CommandID kNewGameCommand = 0x1004;
+constexpr juce::CommandID kNewSceneCommand = 0x1005;
+constexpr juce::CommandID kSaveCommand = 0x1006;
+constexpr juce::CommandID kImportCommand = 0x1007;
+constexpr juce::CommandID kNewProjectCommand = 0x1008;
+constexpr juce::CommandID kOpenProjectBrowserCommand = 0x1009;
+
+// menuItemSelected's ids for the View menu's "jump to panel" entries and the
+// Help menu's About box -- plain PopupMenu ids, not routed through the
+// ApplicationCommandManager (there's nothing to give these a keyboard
+// shortcut or an enabled/disabled state, unlike the File/Edit commands above).
+constexpr int kViewPanelItemIdBase = 9000;
+constexpr int kViewResetLayoutItemId = 8999;
+constexpr int kHelpAboutItemId = 8998;
+
+struct DockPanelMenuEntry { const char* id; const char* label; };
+constexpr DockPanelMenuEntry kDockPanelMenuEntries[] = {
+    { "explorer", "Explorer" },
+    { "hierarchy", "Hierarchy" },
+    { "viewport", "Scene Viewport" },
+    { "transform", "Transform" },
+    { "materials-pbr", "Material Inspector" },
+    { "lighting", "Lighting" },
+    { "logic", "FRust Logic" },
+    { "materials", "Materials" },
+    { "assets", "Assets & Import" },
+    { "server", "Server" },
+    { "settings", "Settings" },
+    { "runtime-status", "Runtime Status" },
+};
 
 class NonOwningPanelHost final : public juce::Component
 {
@@ -26,7 +56,7 @@ private:
 MainComponent::MainComponent()
     : viewport_(world_, interactions_),
       hierarchyPanel_(world_, viewport_),
-      transformPanel_(world_),
+      transformPanel_(world_, interactions_),
       pbrMaterialPanel_(world_),
       importPanel_(world_, viewport_, projectSession_),
       lightPanel_(viewport_) {
@@ -93,8 +123,16 @@ MainComponent::MainComponent()
     };
     headerBar_.setStatusText("Editing");
 
-    addAndMakeVisible(viewModeBar_);
-    viewModeBar_.onModeSelected = [this](ce::WorkspaceMode mode) { SetActiveMode(mode); };
+    menuBar_ = std::make_unique<juce::MenuBarComponent>(static_cast<juce::MenuBarModel*>(this));
+    // No suite-wide dark LookAndFeel is set here either (see Creation
+    // Station's MainComponent for the same fix/comment) -- without explicit
+    // colours MenuBarComponent's default LookAndFeel_V4 scheme renders dark
+    // text on a dark bar, invisible against this app's navy chrome.
+    menuBar_->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff1c2230));
+    menuBar_->setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff2a3244));
+    menuBar_->setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+    menuBar_->setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    addAndMakeVisible(*menuBar_);
     runGameButton_.onClick = [this] { openGameClient(); };
     runGameButton_.setTooltip("Open an isolated game client window. Click again for another local multiplayer client.");
     addAndMakeVisible(runGameButton_);
@@ -104,11 +142,11 @@ MainComponent::MainComponent()
         transformPanel_.SetSelectedEntity(entity);
         pbrMaterialPanel_.SetSelectedEntity(entity);
     };
-    gameScenePanel_.onGameSelected = [this](const juce::String& gameId) { selectGame(gameId); };
-    gameScenePanel_.onSceneSelected = [this](const juce::String& sceneId) { selectScene(sceneId); };
-    gameScenePanel_.onCreateGameRequested = [this] { createGame(); };
-    gameScenePanel_.onCreateSceneRequested = [this] { createScene(); };
-    gameScenePanel_.onSaveRequested = [this] { saveSessionToDisk(true); };
+    explorerPanel_.onGameSelected = [this](const juce::String& gameId) { selectGame(gameId); };
+    explorerPanel_.onSceneSelected = [this](const juce::String& sceneId) { selectScene(sceneId); };
+    explorerPanel_.onCreateGameRequested = [this] { createGame(); };
+    explorerPanel_.onCreateSceneRequested = [this] { createScene(); };
+    explorerPanel_.onSaveRequested = [this] { saveSessionToDisk(true); };
     hierarchyPanel_.onEntityDestroying = [this](entt::entity entity) {
         frustHost_.notifyObjectDestroyed(entity, static_cast<std::int64_t>(world_.CurrentTick()));
     };
@@ -118,7 +156,7 @@ MainComponent::MainComponent()
 
     initialiseDockingWorkspace();
 
-    SetActiveMode(ce::WorkspaceMode::Scene);
+    dockManager_->activatePanel("viewport");
     SetPlaying(false);
 
     setSize(1400, 900);
@@ -143,7 +181,7 @@ void MainComponent::resized() {
     auto bounds = getLocalBounds();
 
     headerBar_.setBounds(bounds.removeFromTop(96));
-    viewModeBar_.setBounds(bounds.removeFromTop(56));
+    if (menuBar_ != nullptr) menuBar_->setBounds(bounds.removeFromTop(28));
     runGameButton_.setBounds(getWidth() - 170, 105, 158, 34);
 
     if (dockManager_ != nullptr) dockManager_->setBounds(bounds);
@@ -154,6 +192,12 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& commands)
     commands.add(kRunGameClientCommand);
     commands.add(kUndoInteractionCommand);
     commands.add(kRedoInteractionCommand);
+    commands.add(kNewGameCommand);
+    commands.add(kNewSceneCommand);
+    commands.add(kSaveCommand);
+    commands.add(kImportCommand);
+    commands.add(kNewProjectCommand);
+    commands.add(kOpenProjectBrowserCommand);
 }
 
 void MainComponent::getCommandInfo(juce::CommandID commandID, juce::ApplicationCommandInfo& result)
@@ -173,6 +217,24 @@ void MainComponent::getCommandInfo(juce::CommandID commandID, juce::ApplicationC
         result.setInfo("Redo", "Redo the last scene interaction", "Edit", {});
         result.addDefaultKeypress('Y', juce::ModifierKeys::ctrlModifier);
     }
+    if (commandID == kNewGameCommand)
+        result.setInfo("New Game", "Add a new game to this Suite project", "File", {});
+    if (commandID == kNewSceneCommand)
+    {
+        result.setInfo("New Scene", "Add a new scene to the active game", "File", {});
+        result.setActive(!activeGame_.id.isEmpty());
+    }
+    if (commandID == kSaveCommand)
+    {
+        result.setInfo("Save", "Save the active game and scene", "File", {});
+        result.addDefaultKeypress('S', juce::ModifierKeys::ctrlModifier);
+    }
+    if (commandID == kImportCommand)
+        result.setInfo("Import...", "Bring the Assets & Import panel to the front", "File", {});
+    if (commandID == kNewProjectCommand)
+        result.setInfo("New Project...", "Create a new Suite project for Creation Engine", "Project", {});
+    if (commandID == kOpenProjectBrowserCommand)
+        result.setInfo("Open Project Browser...", "Browse and switch Suite projects", "Project", {});
 }
 
 bool MainComponent::perform(const juce::ApplicationCommandTarget::InvocationInfo& info)
@@ -184,7 +246,87 @@ bool MainComponent::perform(const juce::ApplicationCommandTarget::InvocationInfo
     }
     if (info.commandID == kUndoInteractionCommand) return interactions_.undo();
     if (info.commandID == kRedoInteractionCommand) return interactions_.redo();
+    if (info.commandID == kNewGameCommand) { createGame(); return true; }
+    if (info.commandID == kNewSceneCommand) { createScene(); return true; }
+    if (info.commandID == kSaveCommand) { saveSessionToDisk(true); return true; }
+    if (info.commandID == kImportCommand)
+    {
+        if (dockManager_ != nullptr) dockManager_->activatePanel("assets");
+        return true;
+    }
+    if (info.commandID == kNewProjectCommand) { createNewProject(); return true; }
+    if (info.commandID == kOpenProjectBrowserCommand) { suiteShellController_.showProjectBrowser(); return true; }
     return false;
+}
+
+juce::StringArray MainComponent::getMenuBarNames()
+{
+    return { "File", "Edit", "View", "Project", "Help" };
+}
+
+juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce::String&)
+{
+    juce::PopupMenu menu;
+
+    if (topLevelMenuIndex == 0) // File
+    {
+        menu.addCommandItem(&commandManager_, kNewGameCommand);
+        menu.addCommandItem(&commandManager_, kNewSceneCommand);
+        menu.addSeparator();
+        menu.addCommandItem(&commandManager_, kSaveCommand);
+        menu.addSeparator();
+        menu.addCommandItem(&commandManager_, kImportCommand);
+        return menu;
+    }
+
+    if (topLevelMenuIndex == 1) // Edit
+    {
+        menu.addCommandItem(&commandManager_, kUndoInteractionCommand);
+        menu.addCommandItem(&commandManager_, kRedoInteractionCommand);
+        return menu;
+    }
+
+    if (topLevelMenuIndex == 2) // View
+    {
+        int itemId = kViewPanelItemIdBase;
+        for (const auto& entry : kDockPanelMenuEntries)
+            menu.addItem(itemId++, entry.label);
+        menu.addSeparator();
+        menu.addItem(kViewResetLayoutItemId, "Reset Layout");
+        return menu;
+    }
+
+    if (topLevelMenuIndex == 3) // Project
+    {
+        menu.addCommandItem(&commandManager_, kNewProjectCommand);
+        menu.addCommandItem(&commandManager_, kOpenProjectBrowserCommand);
+        return menu;
+    }
+
+    menu.addItem(kHelpAboutItemId, "About Creation Engine"); // Help
+    return menu;
+}
+
+void MainComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
+{
+    if (topLevelMenuIndex == 2) // View
+    {
+        if (menuItemID == kViewResetLayoutItemId)
+        {
+            if (dockManager_ != nullptr) dockManager_->resetLayout();
+            return;
+        }
+        const auto index = menuItemID - kViewPanelItemIdBase;
+        if (index >= 0 && index < static_cast<int>(std::size(kDockPanelMenuEntries)) && dockManager_ != nullptr)
+            dockManager_->activatePanel(kDockPanelMenuEntries[static_cast<std::size_t>(index)].id);
+        return;
+    }
+
+    if (menuItemID == kHelpAboutItemId)
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon, "Creation Engine",
+                                               "Creation Engine\nPart of Creation Suite.");
+    }
 }
 
 void MainComponent::openGameClient()
@@ -201,21 +343,12 @@ void MainComponent::openGameClient()
     headerBar_.setStatusText("Running " + juce::String(gameClients_.size()) + " game client" + (gameClients_.size() == 1 ? "" : "s"));
 }
 
-void MainComponent::SetActiveMode(ce::WorkspaceMode mode) {
-    activeMode_ = mode;
-
-    viewModeBar_.SetActiveMode(mode);
-    if (dockManager_ == nullptr) return;
-    static constexpr const char* panelIds[] = { "viewport", "logic", "materials", "assets", "server", "settings" };
-    dockManager_->activatePanel(panelIds[static_cast<std::size_t>(mode)]);
-}
-
 void MainComponent::initialiseDockingWorkspace()
 {
     dockManager_ = std::make_unique<CreationDock::DockManager>(*this);
     addAndMakeVisible(*dockManager_);
     dockManager_->registerPanel("hierarchy", "Hierarchy", std::make_unique<NonOwningPanelHost>(hierarchyPanel_), CreationDock::DockTargetZone::Left);
-    dockManager_->registerPanel("game-scene", "Game & Scene", std::make_unique<NonOwningPanelHost>(gameScenePanel_), CreationDock::DockTargetZone::Left);
+    dockManager_->registerPanel("explorer", "Explorer", std::make_unique<NonOwningPanelHost>(explorerPanel_), CreationDock::DockTargetZone::Left);
     dockManager_->registerPanel("viewport", "Scene Viewport", std::make_unique<NonOwningPanelHost>(viewport_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("transform", "Transform", std::make_unique<NonOwningPanelHost>(transformPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("materials-pbr", "Material Inspector", std::make_unique<NonOwningPanelHost>(pbrMaterialPanel_), CreationDock::DockTargetZone::Right);
@@ -398,16 +531,16 @@ bool MainComponent::openActiveGame(juce::String& errorMessage)
     transformPanel_.Refresh();
     pbrMaterialPanel_.Refresh();
     games_ = games;
-    refreshGameScenePanel();
+    refreshExplorerPanel();
     headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName + " | " + activeGame_.name + " / " + activeScene_.name);
     saveAppSettings();
     return true;
 }
 
-void MainComponent::refreshGameScenePanel()
+void MainComponent::refreshExplorerPanel()
 {
-    gameScenePanel_.setDocuments(games_, activeGame_.id, activeScene_.id);
-    gameScenePanel_.setStatus(activeGame_.id.isEmpty() ? "No active game" : activeGame_.name + " / " + activeScene_.name);
+    explorerPanel_.setDocuments(games_, activeGame_.id, activeScene_.id);
+    explorerPanel_.setStatus(activeGame_.id.isEmpty() ? "No active game" : activeGame_.name + " / " + activeScene_.name);
 }
 
 void MainComponent::selectGame(const juce::String& gameId)
@@ -427,7 +560,7 @@ void MainComponent::selectGame(const juce::String& gameId)
         else {
             viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
             frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
-            refreshGameScenePanel();
+            refreshExplorerPanel();
             saveAppSettings();
         }
         return;
@@ -446,7 +579,7 @@ void MainComponent::selectScene(const juce::String& sceneId)
             activeScene_ = scene;
             viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
             frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
-            refreshGameScenePanel();
+            refreshExplorerPanel();
             saveAppSettings();
         }
         return;
@@ -476,7 +609,7 @@ void MainComponent::createGame()
         safeThis->activeGame_ = game;
         safeThis->activeScene_ = scene;
         safeThis->importPanel_.SetProjectContent(&safeThis->projectSession_, safeThis->activeGame_.assetRoot());
-        safeThis->refreshGameScenePanel();
+        safeThis->refreshExplorerPanel();
         safeThis->saveAppSettings();
         safeThis->headerBar_.setStatusText("Created " + game.name + " / " + scene.name);
     }), true);
@@ -504,7 +637,7 @@ void MainComponent::createScene()
         for (auto& game : safeThis->games_)
             if (game.id == safeThis->activeGame_.id) game = safeThis->activeGame_;
         safeThis->activeScene_ = scene;
-        safeThis->refreshGameScenePanel();
+        safeThis->refreshExplorerPanel();
         safeThis->saveAppSettings();
         safeThis->headerBar_.setStatusText("Created scene: " + scene.name);
     }), true);
