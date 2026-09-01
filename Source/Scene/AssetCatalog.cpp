@@ -74,8 +74,16 @@ bool AssetCatalog::LoadAssetPack(const juce::String& packId, const juce::String&
             if (declared.payload.isEmpty() || ! LoadGltf(cacheDirectory.getChildFile(declared.payload), model) ||
                 model.primitives.empty() || ! AddFromModel(cacheKey, model))
             {
-                errorMessage = "Could not decode model " + declared.id + " from Asset Pack " + packId + ".";
-                return false;
+                // One broken optional model must not take down the whole pack --
+                // scenes that never reference this asset (e.g. the default
+                // starter scene, which only uses the procedural Cube/Sphere)
+                // would otherwise fail to render anything at all over an asset
+                // they never asked for. Log it and keep going; assets already
+                // registered above (procedural meshes processed earlier in this
+                // loop) remain usable either way.
+                std::cout << "[catalog] could not decode model " << declared.id << " from Asset Pack " << packId
+                          << "; continuing without it." << std::endl;
+                continue;
             }
             SetSourceIdentity(cacheKey, declared.id, {}, packId, version);
             if (Find(declared.id).mesh == nullptr)

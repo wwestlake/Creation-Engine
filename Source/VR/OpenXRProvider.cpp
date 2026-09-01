@@ -1,12 +1,21 @@
 #include "VR/OpenXRProvider.h"
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
+
+// LogVR() below uses juce::File/String/FileOutputStream unconditionally, even
+// when OpenXR itself is unavailable, so juce_core must not be gated behind
+// CE_HAS_OPENXR. juce_opengl.h happens to pull it in transitively, which
+// masked this on machines where an OpenXR SDK is present -- it broke as soon
+// as CE_HAS_OPENXR was 0 and that include disappeared.
+#include <juce_core/juce_core.h>
 
 #if CE_HAS_OPENXR
 #include <juce_opengl/juce_opengl.h>
@@ -27,9 +36,9 @@
 #include <windows.h>
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
-#endif
 
 using namespace juce::gl;
+#endif
 
 namespace ce::vr {
 
@@ -39,7 +48,13 @@ enum InputAction : std::size_t { gripPoseAction, aimPoseAction, thumbstickAction
 
 void LogVR(const std::string& message)
 {
-    std::cerr << "[vr] " << message << std::endl;
+    // yyyy-MM-dd HH:mm:ss.SSS, local time -- this file is append-only across
+    // every launch (never truncated), so without a timestamp there is no way
+    // to tell a fresh attempt's lines apart from an old one's once the text
+    // happens to repeat, which it usually does.
+    const auto timestamp = juce::Time::getCurrentTime().formatted("%Y-%m-%d %H:%M:%S");
+    const auto line = "[" + timestamp + "] [vr] " + juce::String(message);
+    std::cerr << line << std::endl;
     // Diagnostics belong with the launched Engine binary, never in a
     // machine-specific user directory. The shared debug executable therefore
     // writes under its configured D: location, while an installed build keeps
@@ -49,7 +64,7 @@ void LogVR(const std::string& message)
     if (!logDirectory.createDirectory()) return;
     const auto logFile = logDirectory.getChildFile("openxr-diagnostics.log");
     if (auto stream = std::unique_ptr<juce::FileOutputStream>(logFile.createOutputStream(true)))
-        stream->writeText("[vr] " + juce::String(message) + "\n", false, false, "UTF-8");
+        stream->writeText(line + "\n", false, false, "UTF-8");
 }
 
 #if CE_HAS_OPENXR
@@ -81,15 +96,38 @@ bool OpenXRProvider::initialize()
     createInfo.enabledExtensionCount = 1;
     createInfo.enabledExtensionNames = extensions;
     XrInstance instance = XR_NULL_HANDLE;
+    LogVR("xrCreateInstance: requesting apiVersion=" + std::to_string(XR_CURRENT_API_VERSION) +
+          ", extensions=[" + XR_KHR_OPENGL_ENABLE_EXTENSION_NAME + "]");
     const auto createResult = xrCreateInstance(&createInfo, &instance);
     if (createResult != XR_SUCCESS) {
         LogXrResult(XR_NULL_HANDLE, "xrCreateInstance", createResult);
         return false;
     }
+    XrInstanceProperties instanceProps{XR_TYPE_INSTANCE_PROPERTIES};
+    if (xrGetInstanceProperties(instance, &instanceProps) == XR_SUCCESS) {
+        LogVR(std::string("xrCreateInstance succeeded -- runtime: ") + instanceProps.runtimeName +
+              " " + std::to_string(XR_VERSION_MAJOR(instanceProps.runtimeVersion)) + "." +
+              std::to_string(XR_VERSION_MINOR(instanceProps.runtimeVersion)) + "." +
+              std::to_string(XR_VERSION_PATCH(instanceProps.runtimeVersion)));
+    }
     XrSystemGetInfo systemInfo{XR_TYPE_SYSTEM_GET_INFO};
     systemInfo.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
     XrSystemId system = XR_NULL_SYSTEM_ID;
-    const auto systemResult = xrGetSystem(instance, &systemInfo, &system);
+    // XR_ERROR_FORM_FACTOR_UNAVAILABLE is a known-transient result while a
+    // runtime is still finishing its own session handshake (e.g. Quest Link
+    // freshly launching this process) -- retry briefly before treating it as
+    // "no headset" rather than failing on the very first, possibly premature,
+    // query.
+    XrResult systemResult = XR_ERROR_FORM_FACTOR_UNAVAILABLE;
+    constexpr int maxAttempts = 10;
+    for (int attempt = 1; attempt <= maxAttempts; ++attempt) {
+        systemResult = xrGetSystem(instance, &systemInfo, &system);
+        LogVR("xrGetSystem attempt " + std::to_string(attempt) + "/" + std::to_string(maxAttempts) +
+              " -> " + std::to_string(static_cast<int>(systemResult)));
+        if (systemResult == XR_SUCCESS) break;
+        if (systemResult != XR_ERROR_FORM_FACTOR_UNAVAILABLE) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    }
     if (systemResult != XR_SUCCESS) {
         LogXrResult(instance, "xrGetSystem", systemResult);
         xrDestroyInstance(instance);

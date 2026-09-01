@@ -10,7 +10,7 @@ class EngineAssetPack final
 {
 public:
     static constexpr const char* packId = "com.lagdaemon.creation-engine";
-    static constexpr const char* version = "1.0.1";
+    static constexpr const char* version = "1.0.2";
 
     static bool ensureInstalled(juce::String& errorMessage);
     static bool readDefaultScene(juce::MemoryBlock& sceneData, juce::String& errorMessage);
