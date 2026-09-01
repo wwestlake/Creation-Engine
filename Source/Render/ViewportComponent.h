@@ -82,6 +82,13 @@ public:
     void AddPointLight();
     void RemovePointLight(int index);
 
+    void SeedDemoScene();
+
+    // Called on Stop (see MainComponent's transport wiring) — resets the
+    // seeded demo entity's transform, giving Stop a real, visible effect
+    // instead of just freezing the tick counter.
+    void ResetDemoEntityTransform();
+
     void EnableFirstPersonMode() { freeCamera_.EnableFirstPersonMode(); }
 
     // Catalog access for SC5's "+ Add" menu (HierarchyPanel) to list/look
@@ -181,6 +188,17 @@ private:
     GLsizei vrCartVertexCount_ = 0;
     std::unique_ptr<ShaderComposer> shaderComposer_;
     scene::AssetCatalog assetCatalog_;
+    bool hasSeededDemoScene_ = false;
+    entt::entity demoEntity_ = entt::null;
+
+    // Tracks the World tick the demo spin was last applied for, so the
+    // spin write only happens when the tick actually advances (i.e. while
+    // playing) rather than unconditionally every rendered frame. Without
+    // this, the render thread would stomp any inspector edit to the demo
+    // entity's rotation back to the spin value on the very next frame,
+    // even while paused/editing — max() as the initial sentinel so the
+    // very first frame (real tick 0) still counts as "changed."
+    engine::Tick lastSpinTick_ = std::numeric_limits<engine::Tick>::max();
     bool desktopTransformDrag_ = false;
     float desktopDragDistance_ = 0.0f;
 

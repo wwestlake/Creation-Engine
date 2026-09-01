@@ -268,6 +268,14 @@ juce::Vector3D<float> ViewportComponent::SpawnPosition(float distance) const {
     return lastCameraPosition_ + lastCameraForward_ * distance;
 }
 
+void ViewportComponent::ResetDemoEntityTransform() {
+    const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+    if (demoEntity_ == entt::null || !world_.Registry().valid(demoEntity_)) {
+        return;
+    }
+    world_.Registry().get<scene::Transform>(demoEntity_) = scene::Transform{};
+}
+
 void ViewportComponent::ResolveProjectAssets(const creation::assets::ProjectSession& session,
                                              const creation::suite::SuiteSettings& settings)
 {
@@ -785,10 +793,12 @@ void ViewportComponent::newOpenGLContextCreated() {
         return;
     }
 
+    SeedDemoScene();
+
     gridRenderer_.Build(10.0f, 1.0f);
     gridProgram_ = shaderComposer_->GetProgram(openGLContext_, "programs/grid.vert", "programs/grid.frag");
 
-    LogGLErrors("catalog load + grid");
+    LogGLErrors("catalog load + scene seed + grid");
 
     lastFrameTimeSeconds_ = juce::Time::getMillisecondCounterHiRes() / 1000.0;
     std::cout << "[render] newOpenGLContextCreated: done" << std::endl;
@@ -955,6 +965,26 @@ void ViewportComponent::renderOpenGL() {
     // panels on the message thread genuinely touch the same registry
     // concurrently with this render loop.
     const std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
+
+    // Demo-only: spins the seeded demo entity's Transform based on the
+    // World's tick count rather than wall-clock time, so the spin
+    // actually stops when the transport is paused/stopped (World::
+    // AdvanceTick() is gated on play state in MainComponent's timer) —
+    // an editor "playing" a paused simulation should look paused. Only
+    // writes when the tick has actually changed since the last frame
+    // (not unconditionally every frame): the inspector edits the same
+    // Transform from the message thread, and an unconditional per-frame
+    // write here would stomp any edit made while paused right back to
+    // the spin value on the very next frame.
+    const auto currentTick = world_.CurrentTick();
+    if (currentTick != lastSpinTick_) {
+        lastSpinTick_ = currentTick;
+        if (demoEntity_ != entt::null && world_.Registry().valid(demoEntity_) &&
+            world_.Registry().all_of<scene::Transform>(demoEntity_)) {
+            const float spinRadians = 0.5f * (static_cast<float>(currentTick) / 30.0f);
+            world_.Registry().get<scene::Transform>(demoEntity_).eulerRotationRadians.y = spinRadians;
+        }
+    }
 
     // Object definitions persist an asset identifier rather than a GPU
     // pointer. Resolve it only once the viewport owns a live GL context.
