@@ -16,15 +16,33 @@ if (NOT CREATION_ENGINE_AGENT_NAME)
     set(CREATION_ENGINE_AGENT_NAME "dev")
 endif()
 
-find_path(CREATION_OPENXR_INCLUDE_DIR NAMES openxr/openxr.h)
-find_library(CREATION_OPENXR_LOADER_LIBRARY NAMES openxr_loader)
-if (CREATION_OPENXR_INCLUDE_DIR AND CREATION_OPENXR_LOADER_LIBRARY)
-    set(CREATION_ENGINE_HAS_OPENXR 1)
-    message(STATUS "Creation Engine: OpenXR runtime support enabled")
-else()
-    set(CREATION_ENGINE_HAS_OPENXR 0)
-    message(STATUS "Creation Engine: OpenXR runtime support disabled (optional dependency not found)")
+# Shared across every suite agent workspace -- not vcpkg-managed, a single
+# manually-provisioned OpenXR SDK all three workspaces are meant to build
+# against. Passed as a HINTS path so a plain `cmake -S . -B build` finds it
+# with no extra flags in any workspace; still overridable via
+# -DCREATION_OPENXR_INCLUDE_DIR/-DCREATION_OPENXR_LOADER_LIBRARY if it's ever
+# provisioned somewhere else.
+set(CREATION_OPENXR_SHARED_DEPS_ROOT "D:/CreationSuite-Workspaces/openxr-deps/x64-windows")
+find_path(CREATION_OPENXR_INCLUDE_DIR NAMES openxr/openxr.h
+    HINTS "${CREATION_OPENXR_SHARED_DEPS_ROOT}/include")
+find_library(CREATION_OPENXR_LOADER_LIBRARY NAMES openxr_loader
+    HINTS "${CREATION_OPENXR_SHARED_DEPS_ROOT}/lib")
+
+# OpenXR/VR support is a required capability of Creation Engine, not an
+# optional extra -- it must not silently disable itself when the shared SDK
+# location isn't found. Fail loudly and say exactly what to fix, rather than
+# quietly building a VR-incapable editor that looks fine until someone puts
+# a headset on.
+if (NOT CREATION_OPENXR_INCLUDE_DIR OR NOT CREATION_OPENXR_LOADER_LIBRARY)
+    message(FATAL_ERROR
+        "Creation Engine requires the OpenXR SDK and did not find it. "
+        "Expected it at ${CREATION_OPENXR_SHARED_DEPS_ROOT} (shared across "
+        "every suite agent workspace). If it has moved, reconfigure with "
+        "-DCREATION_OPENXR_INCLUDE_DIR=<path>/include "
+        "-DCREATION_OPENXR_LOADER_LIBRARY=<path>/lib/openxr_loader.lib.")
 endif()
+set(CREATION_ENGINE_HAS_OPENXR 1)
+message(STATUS "Creation Engine: OpenXR runtime support enabled (${CREATION_OPENXR_INCLUDE_DIR})")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
