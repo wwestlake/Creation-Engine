@@ -212,10 +212,16 @@ void ViewportComponent::SeedDemoScene() {
 
     // A project scene may already have been restored before this OpenGL
     // context becomes ready. The standard room is a new-project template,
-    // not content to inject into every authored scene.
+    // not content to inject into every authored scene. Checked via
+    // SceneFlags rather than Name: EngineSceneSerializer::restoreScene
+    // only attaches Name when the saved entity actually had one (e.g. an
+    // unnamed FBX-imported mesh won't), so a Name-based check can read a
+    // just-restored scene as empty and wrongly reseed the demo room on
+    // top of it. SceneFlags is unconditionally attached to every entity,
+    // by both restoreScene and this function's own addMesh lambda below.
     {
         const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
-        if (!world_.Registry().view<const scene::Name>().empty()) return;
+        if (!world_.Registry().view<const scene::SceneFlags>().empty()) return;
     }
 
     // The starter scene is intentionally built only from the procedural
