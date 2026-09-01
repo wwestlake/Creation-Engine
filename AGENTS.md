@@ -28,6 +28,15 @@ This workspace is a development/evaluation environment by default.
 - Resolve locations through the suite settings/bootstrap system, shared storage helpers, configuration, or explicit user choice where appropriate.
 - If code still depends on a specific filesystem layout, treat that as technical debt to remove rather than a pattern to extend.
 
+## Scene Content Rule
+
+No C++ code may generate or synthesize scene content as a substitute for real, authored data.
+
+- All "default" or "starter" scene content (a new project's starter room, a template scene) must be authored data (an XML scene document, same as any user-authored scene) loaded through the same VFS-backed scene-restore path everything else uses -- never a function that procedurally builds entities in C++.
+- If a scene fails to load or resolve, that is a visible, reported error state with a defined fallback chain (see `docs/APPLICATION_LIFECYCLE_AND_VR.md` §2.3) -- not an opportunity to draw a procedural room instead.
+- Review checklist item: any PR that adds code creating entities/meshes/transforms outside a scene-load or explicit user-authoring path (import, editor tool, node execution) should be treated as a Scene Content Rule violation until proven otherwise.
+- Violated and fixed 2026-09-01: `ViewportComponent::SeedDemoScene()` unconditionally (behind a guard that was itself broken) hardcoded a cube/sphere/wall/physics-ball room in C++ on every OpenGL context creation, fighting the real, already-correct `CopyDefaultScene()`-based lifecycle and making a genuinely-loaded VFS scene look like it had never loaded at all. Removed entirely rather than patched. See `docs/APPLICATION_LIFECYCLE_AND_VR.md` for the full lifecycle this protects.
+
 ## Shared Ownership Rule
 
 `shared/` is the highest-risk collision area in this workspace.
