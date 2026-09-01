@@ -43,11 +43,27 @@ git submodule update --init --recursive
 
 Requires CMake 3.22+, Visual Studio 2022, and C++20.
 
+The FRustLang submodule's own compiler build needs Flex and Bison. On a
+**fresh checkout on a new machine/workspace**, CMake will not find them on
+its own -- pass their location explicitly on first configure (only needed
+once; it's cached after that):
+
 ```powershell
 $env:JUCE_DIR = "D:\JUCE2\JUCE"
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+    -DFLEX_EXECUTABLE="D:/tools/winflexbison/win_flex.exe" `
+    -DBISON_EXECUTABLE="D:/tools/winflexbison/win_bison.exe" `
+    -DFRUST_WINFLEXBISON_DIR="D:/tools/winflexbison"
 cmake --build build --config Debug --parallel 1 -- /m:1 /p:LinkIncremental=false
 ```
+
+Adjust the `D:/tools/winflexbison` path to wherever WinFlexBison actually
+lives on that machine. This mirrors the `windows-vcpkg` CMake preset already
+defined in `third_party/FrustLang/projects/01_language_paradigms/02_functional/CMakePresets.json`
+for FRustLang's own standalone build -- that preset is not consulted when
+building Creation Engine itself (CreationEngine configures at its own root,
+not through FRustLang's preset file), which is why this has to be repeated
+here explicitly for every fresh Creation Engine checkout.
 
 The Engine CMake project discovers the FRustLang submodule and builds the
 shared FRust plugin runtime. A built editor copies `EngineLifecycle.frust`
