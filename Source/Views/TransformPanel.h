@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 
 #include "engine/world.h"
+#include "Interaction/EditorInteraction.h"
 
 namespace ce {
 
@@ -20,7 +21,7 @@ namespace ce {
 // changed in the editor" already enforced for hierarchy reparenting.
 class TransformPanel final : public juce::Component {
 public:
-    explicit TransformPanel(engine::World& world);
+    TransformPanel(engine::World& world, interaction::EditorInteraction& interactions);
 
     void SetSelectedEntity(entt::entity entity);
 
@@ -34,12 +35,14 @@ public:
     void resized() override;
     void paint(juce::Graphics& g) override;
 
-    static constexpr int kPreferredHeight = 292;
+    static constexpr int kPreferredHeight = 360;
 
 private:
     void PushToRegistry();
     bool AnySliderBeingDragged() const;
     void SetEditorsVisible(bool visible);
+    void RefreshModeButtons();
+    void PushSnapSettings();
 
     // AI5: shows Play/Pause for the selected entity's scene::Animator, if
     // it has one -- separate visibility from SetEditorsVisible above,
@@ -50,11 +53,26 @@ private:
     void SetAnimationControlsVisible(bool visible);
 
     engine::World& world_;
+    interaction::EditorInteraction& interactions_;
     entt::entity selectedEntity_ = entt::null;
     bool locked_ = false;
 
     juce::Label titleLabel_{ {}, "Transform" };
     juce::Label noSelectionLabel_{ {}, "No entity selected" };
+
+    // GizmoMode is one-shot state, not per-selected-entity, so these stay
+    // visible/enabled regardless of SetEditorsVisible below -- you pick a
+    // mode/space/snap setting before or between selections, not just while
+    // something's selected.
+    juce::TextButton moveModeButton_{ "Move" };
+    juce::TextButton scaleModeButton_{ "Scale" };
+    juce::TextButton rotateModeButton_{ "Rotate" };
+    juce::TextButton spaceToggleButton_{ "World" };
+
+    juce::ToggleButton gridSnapToggle_{ "Grid snap (cm)" };
+    juce::Slider gridSnapSlider_{ juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+    juce::ToggleButton angleSnapToggle_{ "Angle snap (deg)" };
+    juce::Slider angleSnapSlider_{ juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
 
     juce::Label positionLabel_{ {}, "Position (X / Y / Z)" };
     juce::Slider positionXSlider_{ juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };

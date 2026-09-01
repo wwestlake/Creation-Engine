@@ -12,13 +12,55 @@ constexpr int kLabelHeight = 16;
 constexpr int kSliderHeight = 22;
 } // namespace
 
-TransformPanel::TransformPanel(engine::World& world) : world_(world) {
+TransformPanel::TransformPanel(engine::World& world, interaction::EditorInteraction& interactions)
+    : world_(world), interactions_(interactions) {
     titleLabel_.setFont(juce::Font(juce::FontOptions(15.0f)).boldened());
     titleLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
     addAndMakeVisible(titleLabel_);
 
     noSelectionLabel_.setColour(juce::Label::textColourId, juce::Colours::grey);
     addAndMakeVisible(noSelectionLabel_);
+
+    // Mode/space/snap controls: one-shot clicks and typed values, applied
+    // directly to EditorInteraction with no locking concerns -- unlike the
+    // continuous per-frame gizmo drag this class's siblings deal with, see
+    // EditorInteraction.h's own header comment for why that distinction
+    // matters here.
+    for (auto* button : { &moveModeButton_, &scaleModeButton_, &rotateModeButton_ }) {
+        button->setClickingTogglesState(false);
+        addAndMakeVisible(button);
+    }
+    moveModeButton_.onClick = [this] { interactions_.setGizmoMode(interaction::GizmoMode::position); RefreshModeButtons(); };
+    scaleModeButton_.onClick = [this] { interactions_.setGizmoMode(interaction::GizmoMode::scale); RefreshModeButtons(); };
+    rotateModeButton_.onClick = [this] { interactions_.setGizmoMode(interaction::GizmoMode::rotate); RefreshModeButtons(); };
+
+    spaceToggleButton_.onClick = [this] {
+        const bool nowLocal = interactions_.transformSpace() == interaction::TransformSpace::world;
+        interactions_.setTransformSpace(nowLocal ? interaction::TransformSpace::local : interaction::TransformSpace::world);
+        spaceToggleButton_.setButtonText(nowLocal ? "Local" : "World");
+    };
+    addAndMakeVisible(spaceToggleButton_);
+    RefreshModeButtons();
+
+    gridSnapToggle_.setColour(juce::ToggleButton::textColourId, juce::Colours::lightgrey);
+    gridSnapToggle_.setToggleState(interactions_.snapSettings().enabled, juce::dontSendNotification);
+    gridSnapToggle_.onClick = [this] { PushSnapSettings(); };
+    addAndMakeVisible(gridSnapToggle_);
+
+    gridSnapSlider_.setRange(0.01, 500.0);
+    gridSnapSlider_.setValue(interactions_.snapSettings().translationMeters * 100.0, juce::dontSendNotification);
+    gridSnapSlider_.onValueChange = [this] { PushSnapSettings(); };
+    addAndMakeVisible(gridSnapSlider_);
+
+    angleSnapToggle_.setColour(juce::ToggleButton::textColourId, juce::Colours::lightgrey);
+    angleSnapToggle_.setToggleState(interactions_.angleSnapSettings().enabled, juce::dontSendNotification);
+    angleSnapToggle_.onClick = [this] { PushSnapSettings(); };
+    addAndMakeVisible(angleSnapToggle_);
+
+    angleSnapSlider_.setRange(0.1, 90.0);
+    angleSnapSlider_.setValue(interactions_.angleSnapSettings().degrees, juce::dontSendNotification);
+    angleSnapSlider_.onValueChange = [this] { PushSnapSettings(); };
+    addAndMakeVisible(angleSnapSlider_);
 
     for (auto* label : { &positionLabel_, &rotationLabel_, &scaleLabel_ }) {
         label->setColour(juce::Label::textColourId, juce::Colours::lightgrey);
@@ -161,6 +203,31 @@ void TransformPanel::Refresh() {
     }
 }
 
+void TransformPanel::RefreshModeButtons() {
+    const auto mode = interactions_.gizmoMode();
+    moveModeButton_.setColour(juce::TextButton::buttonColourId,
+                              mode == interaction::GizmoMode::position ? juce::Colour(0xff3a6ea8) : juce::Colour(0xff2a2f3a));
+    scaleModeButton_.setColour(juce::TextButton::buttonColourId,
+                               mode == interaction::GizmoMode::scale ? juce::Colour(0xff3a6ea8) : juce::Colour(0xff2a2f3a));
+    rotateModeButton_.setColour(juce::TextButton::buttonColourId,
+                                mode == interaction::GizmoMode::rotate ? juce::Colour(0xff3a6ea8) : juce::Colour(0xff2a2f3a));
+    // Local/world space only means anything for the move gizmo (see
+    // EditorInteraction.h's beginTranslation comment) -- disabled rather
+    // than hidden elsewhere so its state doesn't look like it silently
+    // reset when you switch modes and back.
+    spaceToggleButton_.setEnabled(mode == interaction::GizmoMode::position);
+}
+
+void TransformPanel::PushSnapSettings() {
+    auto& snap = interactions_.snapSettings();
+    snap.enabled = gridSnapToggle_.getToggleState();
+    snap.translationMeters = static_cast<float>(gridSnapSlider_.getValue()) / 100.0f;
+
+    auto& angleSnap = interactions_.angleSnapSettings();
+    angleSnap.enabled = angleSnapToggle_.getToggleState();
+    angleSnap.degrees = static_cast<float>(angleSnapSlider_.getValue());
+}
+
 void TransformPanel::PushToRegistry() {
     if (selectedEntity_ == entt::null || locked_) {
         return;
@@ -263,6 +330,25 @@ void TransformPanel::resized() {
     auto bounds = getLocalBounds();
 
     titleLabel_.setBounds(bounds.removeFromTop(20));
+
+    auto modeRow = bounds.removeFromTop(kSliderHeight + 4);
+    const int modeButtonWidth = modeRow.getWidth() * 3 / 8;
+    moveModeButton_.setBounds(modeRow.removeFromLeft(modeButtonWidth));
+    scaleModeButton_.setBounds(modeRow.removeFromLeft(modeButtonWidth));
+    rotateModeButton_.setBounds(modeRow.removeFromLeft(modeButtonWidth));
+    spaceToggleButton_.setBounds(modeRow);
+    bounds.removeFromTop(kRowGap);
+
+    auto gridSnapRow = bounds.removeFromTop(kSliderHeight);
+    gridSnapToggle_.setBounds(gridSnapRow.removeFromLeft(gridSnapRow.getWidth() / 2));
+    gridSnapSlider_.setBounds(gridSnapRow);
+    bounds.removeFromTop(kRowGap);
+
+    auto angleSnapRow = bounds.removeFromTop(kSliderHeight);
+    angleSnapToggle_.setBounds(angleSnapRow.removeFromLeft(angleSnapRow.getWidth() / 2));
+    angleSnapSlider_.setBounds(angleSnapRow);
+    bounds.removeFromTop(kRowGap);
+
     noSelectionLabel_.setBounds(bounds.removeFromTop(kLabelHeight));
 
     positionLabel_.setBounds(bounds.removeFromTop(kLabelHeight));

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 
 #include <JuceHeader.h>
 
@@ -8,12 +9,18 @@
 
 namespace ce::views
 {
-// Shared authoring state for the desktop dock today and a future spatial VR
-// panel. It exposes game/scene selection and commands, never VFS details.
-class GameScenePanel final : public juce::Component
+// The engine-level resource explorer: a Games -> Scenes tree scoped to this
+// app's own documents. Distinct from the suite-level Asset Manager (reached
+// via the header bar's Project menu), which handles cross-app asset browsing
+// -- this panel only knows about the game/scene structure Creation Engine
+// itself authors. Replaces the old GameScenePanel (flat game/scene combo
+// boxes); same callback surface, so it drops into MainComponent's existing
+// wiring directly.
+class ExplorerPanel final : public juce::Component
 {
 public:
-    GameScenePanel();
+    ExplorerPanel();
+    ~ExplorerPanel() override;
 
     void setDocuments(const juce::Array<project::GameDocumentInfo>& games,
                       const juce::String& activeGameId, const juce::String& activeSceneId);
@@ -28,17 +35,18 @@ public:
     std::function<void()> onSaveRequested;
 
 private:
-    void rebuildScenes();
+    class RootItem;
+    class GameItem;
+    class SceneItem;
 
-    juce::Array<project::GameDocumentInfo> games_;
-    juce::ComboBox gameSelector_;
-    juce::ComboBox sceneSelector_;
+    juce::Label titleLabel_{ {}, "Explorer" };
+    juce::TreeView tree_;
+    std::unique_ptr<RootItem> root_;
     juce::TextButton newGameButton_ { "New Game" };
     juce::TextButton newSceneButton_ { "New Scene" };
     juce::TextButton saveButton_ { "Save" };
     juce::Label status_;
-    bool synchronizing_ = false;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GameScenePanel)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ExplorerPanel)
 };
 } // namespace ce::views

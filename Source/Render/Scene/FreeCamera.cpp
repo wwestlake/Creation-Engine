@@ -13,68 +13,67 @@ FreeCamera::~FreeCamera() {
 }
 
 juce::Vector3D<float> FreeCamera::Forward() const {
-    const float yaw = yaw_.load(std::memory_order_relaxed);
-    const float pitch = pitch_.load(std::memory_order_relaxed);
-    return { std::sin(yaw) * std::cos(pitch), std::sin(pitch), -std::cos(yaw) * std::cos(pitch) };
+    return { std::sin(yaw_) * std::cos(pitch_), std::sin(pitch_), -std::cos(yaw_) * std::cos(pitch_) };
 }
 
 juce::Vector3D<float> FreeCamera::FlatForward() const {
-    const float yaw = yaw_.load(std::memory_order_relaxed);
-    return { std::sin(yaw), 0.0f, -std::cos(yaw) };
+    return { std::sin(yaw_), 0.0f, -std::cos(yaw_) };
 }
 
+// JUCE-side: entry only. Nothing here reads mouse position or touches
+// the cursor -- Update() takes over entirely once isLooking_ flips true.
 void FreeCamera::mouseDown(const juce::MouseEvent& event) {
     viewport_.grabKeyboardFocus();
-    if (!event.mods.isRightButtonDown()) {
-        return;
-    }
-
+    if (!event.mods.isRightButtonDown()) return;
     isLooking_.store(true, std::memory_order_relaxed);
-    lastDragScreenPos_ = event.getScreenPosition().toFloat();
-    viewport_.setMouseCursor(juce::MouseCursor::NoCursor);
-    event.source.enableUnboundedMouseMovement(true);
-}
-
-void FreeCamera::mouseDrag(const juce::MouseEvent& event) {
-    if (!isLooking_.load(std::memory_order_relaxed)) {
-        return;
-    }
-
-    const auto currentPos = event.getScreenPosition().toFloat();
-    const auto delta = currentPos - lastDragScreenPos_;
-    lastDragScreenPos_ = currentPos;
-
-    constexpr float sensitivity = 0.005f;
-    yaw_.store(yaw_.load(std::memory_order_relaxed) + delta.x * sensitivity, std::memory_order_relaxed);
-    pitch_.store(
-        juce::jlimit(-1.5f, 1.5f, pitch_.load(std::memory_order_relaxed) - delta.y * sensitivity),
-        std::memory_order_relaxed);
-}
-
-void FreeCamera::mouseUp(const juce::MouseEvent& event) {
-    if (event.mods.isRightButtonDown()) {
-        return; // a different button was released; still right-dragging.
-    }
-    if (!isLooking_.exchange(false, std::memory_order_relaxed)) {
-        return; // wasn't looking, nothing to clean up.
-    }
-
-    viewport_.setMouseCursor(juce::MouseCursor::NormalCursor);
-    event.source.enableUnboundedMouseMovement(false);
 }
 
 void FreeCamera::Update(float deltaSeconds) {
+    const bool flaggedLooking = isLooking_.load(std::memory_order_relaxed);
+
+    if (flaggedLooking && !wasLookingLastFrame_) {
+        // Just entered (mouseDown set the flag since last frame): hide
+        // the cursor and anchor it at the viewport centre as this
+        // frame's reference point for the delta below.
+        viewport_.setMouseCursor(juce::MouseCursor::NoCursor);
+        lastMouseScreenPos_ = viewport_.getScreenBounds().getCentre().toFloat();
+        juce::Desktop::getInstance().setMousePosition(lastMouseScreenPos_.toInt());
+    } else if (flaggedLooking && !juce::ModifierKeys::getCurrentModifiersRealtime().isRightButtonDown()) {
+        // Still flagged as looking, but the OS says the button is
+        // actually up -- the real release, caught here instead of
+        // waiting on a JUCE mouseUp that might not arrive while the
+        // cursor is hidden. Nothing to restore: yaw_/pitch_/position_
+        // just stop changing, the camera is already exactly where it is.
+        isLooking_.store(false, std::memory_order_relaxed);
+        viewport_.setMouseCursor(juce::MouseCursor::NormalCursor);
+    }
+
+    const bool isLooking = isLooking_.load(std::memory_order_relaxed);
+    if (isLooking) {
+        const auto currentPos = juce::Desktop::getMousePosition().toFloat();
+        const auto delta = currentPos - lastMouseScreenPos_;
+        constexpr float sensitivity = 0.005f;
+        yaw_ += delta.x * sensitivity;
+        pitch_ = juce::jlimit(-1.5f, 1.5f, pitch_ - delta.y * sensitivity);
+        // Re-anchor to the viewport centre every frame so the cursor
+        // never actually reaches a real screen edge during a long look.
+        const auto centre = viewport_.getScreenBounds().getCentre().toFloat();
+        juce::Desktop::getInstance().setMousePosition(centre.toInt());
+        lastMouseScreenPos_ = centre;
+    }
+    wasLookingLastFrame_ = isLooking;
+
     const bool firstPerson = firstPersonMode_.load(std::memory_order_relaxed);
-    if (!firstPerson && !isLooking_.load(std::memory_order_relaxed)) {
+    if (!firstPerson && !isLooking) {
         return;
     }
 
     // isKeyCurrentlyDown polls real OS key state, not JUCE focus/event
-    // routing — without this check, WASD typed into some other app
+    // routing -- without this check, WASD typed into some other app
     // entirely (this chat, a browser, whatever has focus) still moves the
     // camera as long as isLooking_ is (still) true. isForegroundProcess()
     // is JUCE's own mechanism for "is my app actually the active one right
-    // now" — exactly the guard needed here.
+    // now" -- exactly the guard needed here.
     if (!juce::Process::isForegroundProcess()) {
         return;
     }
@@ -82,7 +81,7 @@ void FreeCamera::Update(float deltaSeconds) {
         return;
     }
 
-    // W/S fly along the camera's actual look direction (pitch included) —
+    // W/S fly along the camera's actual look direction (pitch included) --
     // looking up and pressing W climbs, not just walks-while-level. A/D
     // strafing stays derived from the flat (yaw-only) forward, since
     // strafing shouldn't gain a vertical component just because you're

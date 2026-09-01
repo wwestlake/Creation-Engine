@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -47,10 +48,11 @@ namespace ce {
 // Mesh/Material/Texture2D assets those components reference.
 //
 // juce::OpenGLContext runs renderOpenGL() on its own background thread,
-// separate from the message thread these editing methods are called
-// from. Two locks, two different things:
-//   - stateLock_ (juce::CriticalSection) guards sunLight_/pointLights_ —
-//     plain members, nothing to do with the ECS registry.
+// separate from the message thread mouseDown/mouseDrag/mouseUp arrive on.
+// Two locks, two different things:
+//   - stateLock_ (juce::CriticalSection) guards sunLight_/pointLights_/
+//     lastCameraPosition_/lastCameraForward_ — plain members, nothing to
+//     do with the ECS registry.
 //   - world_.RegistryMutex() (std::mutex, owned by World itself so every
 //     class touching the shared World uses the same lock) guards every
 //     access to world_.Registry() — entities, Transforms, and the Mesh/
@@ -60,6 +62,25 @@ namespace ce {
 //     exercised race without the lock, not a hypothetical.
 // Either way: copy in, copy out, never hand back a live reference the UI
 // thread could hold onto while the render thread is mid-frame.
+//
+// Gizmo picking/dragging deliberately does NOT follow the "share via
+// RegistryMutex" rule above, for the same reason FreeCamera's WASD/look
+// input doesn't: RegistryMutex is also locked by this same render thread
+// every single frame just to draw the gizmo (updateDesktopTransformGizmo,
+// below), so a continuous stream of message-thread lock acquisitions
+// during a drag (one per mouse-move, far more than 60/sec) fights the
+// render thread for that same lock and reliably hangs the app. Camera
+// look/fly never had this problem because it never crosses threads at
+// all -- FreeCamera reads raw input state (atomics) and does all its
+// actual position math from inside Update(), called from here on the
+// render thread. Gizmo interaction follows the same shape: mouseDown/
+// mouseDrag/mouseUp (below) only record where the mouse is and whether
+// the button is down, as atomics; updateDesktopTransformDrag(), called
+// once per frame from renderOpenGL() alongside updateDesktopTransformGizmo(),
+// does the actual ray cast, hit test, and EditorInteraction calls -- all
+// on the render thread, so RegistryMutex is never contended by two
+// threads during a drag, only ever touched by the one that already owns
+// it every frame regardless.
 class ViewportComponent final : public juce::Component,
                                  private juce::OpenGLRenderer {
 public:
@@ -121,6 +142,7 @@ private:
 
     void updateVREditorRig(float deltaSeconds);
     void updateVRInteraction();
+    void updateDesktopTransformDrag();
     void updateDesktopTransformGizmo();
     void uploadVRWands();
     void uploadVRTransformGizmo();
@@ -134,6 +156,10 @@ private:
     [[nodiscard]] TranslationHandle desktopGizmoHandle(const juce::Vector3D<float>& origin,
                                                         const juce::Vector3D<float>& direction) const;
     [[nodiscard]] interaction::TranslationConstraint constraintFor(TranslationHandle handle) const;
+    // xAxis/yAxis/zAxis -> 0/1/2, free -> -1 (uniform scale / free-move),
+    // anything else (the position-only plane handles) -> -2, not
+    // meaningful outside position mode.
+    [[nodiscard]] static int HandleAxisIndex(TranslationHandle handle);
 
     engine::World& world_;
     interaction::EditorInteraction& interactions_;
@@ -158,6 +184,12 @@ private:
         juce::Vector3D<float> center;
         float scale = 1.0f;
         TranslationHandle hovered = TranslationHandle::none;
+        // World unit axes by default; recomputed each frame from the
+        // selected entity's own rotation when GizmoMode::position and
+        // TransformSpace::local are both active -- position mode only,
+        // see EditorInteraction.h's beginTranslation comment for why
+        // scale/rotate aren't included here yet.
+        std::array<juce::Vector3D<float>, 3> positionAxes{{ { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } }};
     };
     std::array<VRWandRay, 2> vrWands_{};
     std::array<TranslationHandle, 2> vrHoveredHandles_{};
@@ -181,8 +213,20 @@ private:
     GLsizei vrCartVertexCount_ = 0;
     std::unique_ptr<ShaderComposer> shaderComposer_;
     scene::AssetCatalog assetCatalog_;
+
+    // Written from mouseDown/mouseDrag/mouseUp (message thread), read once
+    // per frame from updateDesktopTransformDrag() (render thread) -- see
+    // the class comment above for why this is atomics-only, no mutex.
+    std::atomic<bool> desktopMouseButtonDown_{ false };
+    std::atomic<float> desktopMouseX_{ 0.0f };
+    std::atomic<float> desktopMouseY_{ 0.0f };
+
+    // Render-thread-only state below: never touched from mouseDown/
+    // mouseDrag/mouseUp, only from updateDesktopTransformDrag().
+    bool desktopMouseWasDown_ = false;
     bool desktopTransformDrag_ = false;
     float desktopDragDistance_ = 0.0f;
+    int desktopRotationAxisIndex_ = -1;
 
     mutable juce::CriticalSection stateLock_;
     DirectionalLight sunLight_;

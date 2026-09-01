@@ -67,7 +67,8 @@ juce::String ShaderComposer::ResolveIncludes(const juce::String& source, std::ve
 }
 
 juce::String ShaderComposer::ComposeSource(const juce::String& entryRelativePath,
-                                            const std::vector<juce::String>& defines) {
+                                            const std::vector<juce::String>& defines,
+                                            const juce::String& materialSource) {
     juce::String raw;
     if (!ReadTextByRelativePath(entryRelativePath, raw)) {
         std::cout << "[shader] ERROR: entry file not found: " << entryRelativePath << std::endl;
@@ -85,7 +86,8 @@ juce::String ShaderComposer::ComposeSource(const juce::String& entryRelativePath
     const juce::String rest = lines.joinIntoString("\n");
 
     std::vector<juce::String> alreadyIncluded{ entryRelativePath };
-    const juce::String resolvedRest = ResolveIncludes(rest, alreadyIncluded);
+    juce::String resolvedRest = ResolveIncludes(rest, alreadyIncluded);
+    resolvedRest = resolvedRest.replace("//$MATERIAL_SOURCE$", materialSource);
 
     juce::String defineBlock;
     for (const auto& define : defines) {
@@ -98,13 +100,20 @@ juce::String ShaderComposer::ComposeSource(const juce::String& entryRelativePath
 juce::OpenGLShaderProgram* ShaderComposer::GetProgram(const juce::OpenGLContext& context,
                                                         const juce::String& vertexEntry,
                                                         const juce::String& fragmentEntry,
-                                                        const std::vector<juce::String>& defines) {
+                                                        const std::vector<juce::String>& defines,
+                                                        const juce::String& materialSource) {
     std::vector<juce::String> sortedDefines = defines;
     std::sort(sortedDefines.begin(), sortedDefines.end());
 
     juce::String keyString = vertexEntry + "|" + fragmentEntry;
     for (const auto& define : sortedDefines) {
         keyString << "|" << define;
+    }
+    // materialSource is per-call generated text, not a path -- a content
+    // hash identifies it uniquely (and cheaply) for cache-keying purposes,
+    // same idea as defines above but for text instead of short tokens.
+    if (materialSource.isNotEmpty()) {
+        keyString << "|material:" << static_cast<juce::int64>(materialSource.hashCode64());
     }
     const std::string key = keyString.toStdString();
 
@@ -115,8 +124,8 @@ juce::OpenGLShaderProgram* ShaderComposer::GetProgram(const juce::OpenGLContext&
 
     std::cout << "[shader] compiling: " << key << std::endl;
 
-    const juce::String vertexSource = ComposeSource(vertexEntry, sortedDefines);
-    const juce::String fragmentSource = ComposeSource(fragmentEntry, sortedDefines);
+    const juce::String vertexSource = ComposeSource(vertexEntry, sortedDefines, materialSource);
+    const juce::String fragmentSource = ComposeSource(fragmentEntry, sortedDefines, materialSource);
     if (vertexSource.isEmpty() || fragmentSource.isEmpty()) {
         std::cout << "[shader] ERROR: source composition failed for " << key << std::endl;
         return nullptr;

@@ -17,8 +17,7 @@
 #include "Views/MaterialsPanel.h"
 #include "Views/PlaceholderPanel.h"
 #include "Views/TransformPanel.h"
-#include "Views/ViewModeBar.h"
-#include "Views/GameScenePanel.h"
+#include "Views/ExplorerPanel.h"
 #include "Runtime/GameClientWindow.h"
 #include "Project/EngineGameDocument.h"
 
@@ -27,16 +26,19 @@
 #include <creation/suite/SuiteSettings.h>
 
 // The editor and the runtime are the same executable in different modes
-// (capabilities spec, section 1). The top-level shell (TransportBar +
-// ViewModeBar) mirrors Creation Station's — same color scheme, same tab-
-// row/transport-bar structure — with Creation Engine's own tabs (Scene/
-// Materials/Assets/Server/Settings) and a Play/Pause/Stop transport for
-// the simulation itself (spec 3.3's "play-in-viewport") rather than an
-// audio transport. Only Scene has a real panel today; the rest are
-// PlaceholderPanel stand-ins until their own milestones land.
+// (capabilities spec, section 1). The top-level shell is a header bar, a
+// real menu bar (File/Edit/View/Project/Help, mirroring Creation Station's
+// MainComponent-as-MenuBarModel pattern), and the docking workspace itself
+// — switching between Scene/Logic/Materials/Assets/Server/Settings is just
+// clicking that panel's dock tab or picking it from the View menu; there is
+// no separate mode-tab row. A Play/Pause/Stop transport on the header bar
+// drives the simulation itself (spec 3.3's "play-in-viewport"). Not every
+// dock panel has a real editor yet; some are still PlaceholderPanel
+// stand-ins until their own milestones land.
 class MainComponent final : public juce::Component,
                             private juce::Timer,
-                            public juce::ApplicationCommandTarget
+                            public juce::ApplicationCommandTarget,
+                            private juce::MenuBarModel
 {
 public:
     MainComponent();
@@ -50,9 +52,12 @@ public:
     void getCommandInfo(juce::CommandID commandID, juce::ApplicationCommandInfo& result) override;
     bool perform(const juce::ApplicationCommandTarget::InvocationInfo& info) override;
 
+    juce::StringArray getMenuBarNames() override;
+    juce::PopupMenu getMenuForIndex(int topLevelMenuIndex, const juce::String& menuName) override;
+    void menuItemSelected(int menuItemID, int topLevelMenuIndex) override;
+
 private:
     void timerCallback() override;
-    void SetActiveMode(ce::WorkspaceMode mode);
     void SetPlaying(bool playing);
     void initialiseDockingWorkspace();
     void openGameClient();
@@ -66,7 +71,7 @@ private:
     void selectScene(const juce::String& sceneId);
     void createGame();
     void createScene();
-    void refreshGameScenePanel();
+    void refreshExplorerPanel();
     bool ensureProjectSessionActive(juce::String& errorMessage);
     void saveAppSettings();
     void loadAppSettings();
@@ -88,8 +93,7 @@ private:
 
     CreationSuiteHeaderBar headerBar_;
     creation::ui::SuiteShellController suiteShellController_;
-    ce::ViewModeBar viewModeBar_;
-    ce::WorkspaceMode activeMode_ = ce::WorkspaceMode::Scene;
+    std::unique_ptr<juce::MenuBarComponent> menuBar_;
 
     // --- Scene mode content ---
     // viewport_ must be declared (and therefore constructed) before
@@ -99,7 +103,7 @@ private:
     // the constructor's initializer-list order.
     ce::ViewportComponent viewport_;
     ce::HierarchyPanel hierarchyPanel_;
-    ce::views::GameScenePanel gameScenePanel_;
+    ce::views::ExplorerPanel explorerPanel_;
     juce::Label inspectorTitle_ { {}, "Inspector" };
     juce::Label tickLabel_;
     juce::TextButton runGameButton_ { "Run Game Client" };
@@ -108,8 +112,8 @@ private:
 
     // Selection-driven per-entity PBR editor (albedo/metallic/roughness),
     // replacing the old viewport-global roughness/metallic slider pair.
-    // Not to be confused with materialsPanel_ below (the WorkspaceMode::
-    // Materials tab's future node-based material editor).
+    // Not to be confused with materialsPanel_ below (the "Materials" dock
+    // panel's future node-based material editor).
     ce::MaterialsPanel pbrMaterialPanel_;
 
     ce::LightPanel lightPanel_;

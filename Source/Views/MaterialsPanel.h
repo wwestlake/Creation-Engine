@@ -25,10 +25,10 @@ namespace ce {
 // one introduced here; a "make unique"/instance-material action is a
 // natural follow-up, not built.
 //
-// Distinct from MainComponent's `materialsPanel_` (the WorkspaceMode::
-// Materials tab's future node-based material editor, still a
-// PlaceholderPanel) -- this is the small per-entity PBR numeric editor
-// living in Scene mode's inspector sidebar, next to LightPanel.
+// Distinct from MainComponent's `materialsPanel_` (the "Materials" dock
+// panel's future node-based material editor, still a PlaceholderPanel) --
+// this is the small per-entity PBR numeric editor docked next to
+// LightPanel in the scene inspector.
 class MaterialsPanel final : public juce::Component {
 public:
     explicit MaterialsPanel(engine::World& world);
