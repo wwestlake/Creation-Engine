@@ -9,6 +9,8 @@
 #include "Render/ViewportComponent.h"
 #include <creation/assets/ProjectSession.h>
 
+namespace creation::assets { class ProjectSession; }
+
 namespace ce {
 
 // AI1/AI2: the Import Hub shell. Accepts files dragged in from the OS
@@ -54,6 +56,8 @@ public:
     void fileDragEnter(const juce::StringArray& files, int x, int y) override;
     void fileDragExit(const juce::StringArray& files) override;
     void filesDropped(const juce::StringArray& files, int x, int y) override;
+
+    void SetProjectContent(creation::assets::ProjectSession* session, const juce::String& gameAssetRoot);
 
     void paint(juce::Graphics& g) override;
     void resized() override;

@@ -65,7 +65,21 @@ juce::ValueTree EngineSceneSerializer::serializeScene(ce::engine::World& world)
         }
 
         if (auto* meshAsset = reg.try_get<MeshAssetReference>(entity))
+        {
             entityNode.setProperty("meshAssetId", meshAsset->assetId, nullptr);
+            entityNode.setProperty("meshAssetVersionId", meshAsset->versionId, nullptr);
+            entityNode.setProperty("meshPackId", meshAsset->packId, nullptr);
+            entityNode.setProperty("meshPackVersion", meshAsset->packVersion, nullptr);
+        }
+
+        if (auto* tint = reg.try_get<engine::Tint>(entity))
+        {
+            juce::ValueTree tintNode("Tint");
+            tintNode.setProperty("r", tint->color.x, nullptr);
+            tintNode.setProperty("g", tint->color.y, nullptr);
+            tintNode.setProperty("b", tint->color.z, nullptr);
+            entityNode.addChild(tintNode, -1, nullptr);
+        }
 
         if (auto* objectDefinition = reg.try_get<ObjectDefinitionRef>(entity))
             entityNode.setProperty("objectDefinitionId", objectDefinition->definitionId, nullptr);
@@ -152,7 +166,20 @@ bool EngineSceneSerializer::restoreScene(ce::engine::World& world, const juce::V
 
         const auto meshAssetId = entityNode.getProperty("meshAssetId").toString();
         if (meshAssetId.isNotEmpty())
-            reg.emplace<MeshAssetReference>(entity, MeshAssetReference{ meshAssetId });
+            reg.emplace<MeshAssetReference>(entity, MeshAssetReference{
+                meshAssetId,
+                entityNode.getProperty("meshAssetVersionId").toString(),
+                entityNode.getProperty("meshPackId").toString(),
+                entityNode.getProperty("meshPackVersion").toString() });
+
+        if (const auto tintNode = entityNode.getChildWithName("Tint"); tintNode.isValid())
+        {
+            engine::Tint tint;
+            tint.color.x = static_cast<float>(tintNode.getProperty("r", 1.0));
+            tint.color.y = static_cast<float>(tintNode.getProperty("g", 1.0));
+            tint.color.z = static_cast<float>(tintNode.getProperty("b", 1.0));
+            reg.emplace<engine::Tint>(entity, tint);
+        }
 
         const auto objectDefinitionId = entityNode.getProperty("objectDefinitionId").toString();
         if (objectDefinitionId.isNotEmpty())

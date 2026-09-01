@@ -62,6 +62,9 @@ struct MeshRenderer {
 // embedding GPU resources, and the viewport resolves it through AssetCatalog.
 struct MeshAssetReference {
     juce::String assetId;
+    juce::String versionId;
+    juce::String packId;
+    juce::String packVersion;
 };
 
 // Identity and authored behavior remain on the entity rather than inside a

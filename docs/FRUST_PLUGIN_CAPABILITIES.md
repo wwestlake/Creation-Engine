@@ -11,6 +11,12 @@ capabilities registered by `EngineFrustHost`.
 | `engine_current_tick` | `() -> i64` | Reads the authoritative simulation tick. |
 | `engine_first_transform_entity` | `() -> i64` | Returns the first entity with an Engine transform, or `-1`. |
 | `engine_set_position_x` | `(entity: i64, position_x: i64) -> i64` | Sets an entity X position and returns `1` on success. |
+| `engine_active_game_id` | `() -> String` | Returns the active Game ID. |
+| `engine_active_scene_id` | `() -> String` | Returns the active Scene ID. |
+| `engine_request_scene_transition` | `(scene_reference: String) -> i64` | Queues a transition to a Scene in the active Game. The reference can be the Scene ID or its authored name. |
+
+Scene references are direct FRust strings. There are no hashes, numeric tokens,
+or encoded identifiers in this API.
 
 Entity values are opaque Engine entity identifiers. Plugins must treat them as
 handles and pass them back to Engine capabilities rather than deriving their

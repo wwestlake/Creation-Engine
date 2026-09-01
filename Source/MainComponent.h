@@ -8,6 +8,7 @@
 #include "engine/simulation.h"
 #include "engine/world.h"
 #include "Frust/EngineFrustHost.h"
+#include "Interaction/EditorInteraction.h"
 #include "Render/ViewportComponent.h"
 #include "Views/HierarchyPanel.h"
 #include "Views/ImportPanel.h"
@@ -75,11 +76,13 @@ private:
     creation::assets::ProjectSession projectSession_;
     ce::project::GameDocumentInfo activeGame_;
     ce::project::SceneDocumentInfo activeScene_;
+    juce::String pendingSceneTransitionId_;
     juce::Array<ce::project::GameDocumentInfo> games_;
     bool projectDirty_ = false;
     juce::ApplicationCommandManager commandManager_;
 
     ce::engine::World world_;
+    ce::interaction::EditorInteraction interactions_ { world_ };
     ce::frust::EngineFrustHost frustHost_ { world_ };
     bool isPlaying_ = false;
 

@@ -10,7 +10,7 @@ namespace ce::runtime
 
 GameClientContent::GameClientContent(int clientNumber, juce::ValueTree sceneState,
                                      juce::String gameName, juce::String sceneName)
-    : clientNumber_(clientNumber), world_(), viewport_(world_)
+    : clientNumber_(clientNumber), world_(), viewport_(world_, interactions_)
 {
     // A run client owns an isolated World, but it begins with the exact
     // authored scene selected in the editor rather than a blank test world.

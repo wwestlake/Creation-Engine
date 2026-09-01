@@ -1,5 +1,6 @@
 #include "Import/Importers/TextureAssetImporter.h"
 
+#include "Assets/ProjectContentAssetStore.h"
 #include "Render/GL/Texture2D.h"
 #include "Render/Scene/Material.h"
 #include "Render/Scene/Mesh.h"
@@ -11,11 +12,18 @@
 namespace ce::import {
 
 ImportResult TextureAssetImporter::Import(const juce::File& sourceFile, ImportContext& context) {
-    if (context.catalog == nullptr || context.viewport == nullptr) {
-        return ImportResult::Failed("Texture import needs a live asset catalog and viewport.");
+    if (context.catalog == nullptr || context.viewport == nullptr || context.projectSession == nullptr) {
+        return ImportResult::Failed("Texture import needs an open game, asset catalog, and viewport.");
     }
 
     const juce::String assetName = sourceFile.getFileNameWithoutExtension();
+
+    creation::assets::AssetDescriptor sourceDescriptor;
+    juce::String persistenceError;
+    if (! assets::ProjectContentAssetStore::importSource(*context.projectSession, context.gameAssetRoot, sourceFile,
+                                                          creation::assets::AssetKind::render, "Texture",
+                                                          { "texture" }, sourceDescriptor, persistenceError))
+        return ImportResult::Failed("Could not store texture source in project content: " + persistenceError);
 
     bool added = false;
     context.viewport->RunOnGLThread(
@@ -44,7 +52,10 @@ ImportResult TextureAssetImporter::Import(const juce::File& sourceFile, ImportCo
     if (!added) {
         return ImportResult::Failed("Failed to decode " + sourceFile.getFileName() + " (see log for details).");
     }
-    return ImportResult::Ok(assetName + " imported as a textured cube -- available in the \"+ Add\" menu.");
+    if (! context.catalog->SetSourceIdentity(assetName, sourceDescriptor.id, sourceDescriptor.versionId) ||
+        ! context.catalog->AddAlias(sourceDescriptor.id, assetName))
+        return ImportResult::Failed("The imported texture could not be registered with its project asset identity.");
+    return ImportResult::Ok(assetName + " stored in project content as a textured cube -- available in the \"+ Add\" menu.");
 }
 
 } // namespace ce::import

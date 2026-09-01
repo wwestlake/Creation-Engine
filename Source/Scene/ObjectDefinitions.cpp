@@ -70,7 +70,8 @@ entt::entity instantiateDefinition(engine::World& world, const ObjectDefinitionC
     registry.emplace<ObjectState>(entity, ObjectState{ definition.defaultState });
     registry.emplace<BehaviorAttachments>(entity, BehaviorAttachments{ definition.behaviorPods });
     if (definition.meshAssetId.isNotEmpty()) {
-        registry.emplace<MeshAssetReference>(entity, MeshAssetReference{ definition.meshAssetId });
+        registry.emplace<MeshAssetReference>(entity, MeshAssetReference{
+            definition.meshAssetId, definition.meshAssetVersionId, definition.meshPackId, definition.meshPackVersion });
     }
     result.entities.push_back(entity);
 
@@ -134,6 +135,9 @@ juce::ValueTree ObjectDefinitionCatalog::serialize() const
         node.setProperty("id", definition.id, nullptr);
         node.setProperty("displayName", definition.displayName, nullptr);
         node.setProperty("meshAssetId", definition.meshAssetId, nullptr);
+        node.setProperty("meshAssetVersionId", definition.meshAssetVersionId, nullptr);
+        node.setProperty("meshPackId", definition.meshPackId, nullptr);
+        node.setProperty("meshPackVersion", definition.meshPackVersion, nullptr);
         node.addChild(serializeTransform(definition.initialTransform, "InitialTransform"), -1, nullptr);
 
         juce::ValueTree state("DefaultState");
@@ -179,6 +183,9 @@ bool ObjectDefinitionCatalog::restore(const juce::ValueTree& state, juce::String
         definition.id = node.getProperty("id").toString();
         definition.displayName = node.getProperty("displayName").toString();
         definition.meshAssetId = node.getProperty("meshAssetId").toString();
+        definition.meshAssetVersionId = node.getProperty("meshAssetVersionId").toString();
+        definition.meshPackId = node.getProperty("meshPackId").toString();
+        definition.meshPackVersion = node.getProperty("meshPackVersion").toString();
         definition.initialTransform = restoreTransform(node.getChildWithName("InitialTransform"));
 
         const auto defaultState = node.getChildWithName("DefaultState");

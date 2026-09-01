@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -45,6 +46,13 @@ public:
     void tick(std::int64_t tick);
     void endPlay(std::int64_t tick);
     void notifyObjectDestroyed(entt::entity entity, std::int64_t tick);
+
+    // Game and scene references cross the FRust boundary as UTF-8 names/IDs,
+    // never as encoded numeric tokens. The owner of the running game resolves
+    // them against its current scene catalog.
+    void setSceneTransitionRequestHandler(std::function<void(const std::string&)> handler);
+    void setActiveGameIdProvider(std::function<std::string()> provider);
+    void setActiveSceneIdProvider(std::function<std::string()> provider);
     [[nodiscard]] bool isLoaded() const noexcept;
     [[nodiscard]] bool isObjectBehaviorLoaded(const std::string& podId) const noexcept;
     [[nodiscard]] const node_system::NodeLibraryRegistry& nodeLibraries() const noexcept { return nodeLibraries_; }
@@ -54,6 +62,9 @@ private:
     static std::int64_t firstTransformEntity();
     static std::int64_t currentObjectEntity();
     static std::int64_t setPositionX(std::int64_t entityId, std::int64_t positionX);
+    static std::int64_t requestSceneTransition(const char* sceneReference);
+    static const char* activeGameId();
+    static const char* activeSceneId();
     [[nodiscard]] static std::string behaviorKey(const std::string& podId);
     [[nodiscard]] std::vector<std::pair<std::int64_t, std::string>> attachedObjectBehaviors() const;
     void ensureObjectLifecycle(std::int64_t entityId, const std::string& podId, std::int64_t tick);
@@ -74,6 +85,9 @@ private:
     node_system::NodeLibraryRegistry nodeLibraries_;
     std::int64_t activeObjectEntityId = -1;
     bool playActive = false;
+    std::function<void(const std::string&)> sceneTransitionRequestHandler;
+    std::function<std::string()> activeGameIdProvider;
+    std::function<std::string()> activeSceneIdProvider;
     std::unordered_map<std::int64_t, ObjectLifecycle> objectLifecycles;
 };
 } // namespace ce::frust

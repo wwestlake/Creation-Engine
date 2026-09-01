@@ -83,6 +83,12 @@ add_custom_command(TARGET CreationEngineEditor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/EngineLifecycle.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodes.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodesLibrary.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/EnginePack" "$<TARGET_FILE_DIR:CreationEngineEditor>/EnginePack"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/EnginePack" "D:/CreationSuite-Workspaces/codex-$<LOWER_CASE:$<CONFIG>>-bin/EnginePack"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/models" "$<TARGET_FILE_DIR:CreationEngineEditor>/EnginePack/models"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/models" "D:/CreationSuite-Workspaces/codex-$<LOWER_CASE:$<CONFIG>>-bin/EnginePack/models"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/packages" "$<TARGET_FILE_DIR:CreationEngineEditor>/EnginePack/packages"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/packages" "D:/CreationSuite-Workspaces/codex-$<LOWER_CASE:$<CONFIG>>-bin/EnginePack/packages"
     COMMENT "Copying CreationEngineEditor to the shared codex bin directory"
 )
 
@@ -94,10 +100,18 @@ target_sources(CreationEngineEditor PRIVATE
     Source/MainComponent.cpp
     Source/Project/EngineGameDocument.h
     Source/Project/EngineGameDocument.cpp
+    Source/Assets/EngineAssetPack.h
+    Source/Assets/EngineAssetPack.cpp
+    Source/Assets/AssetPackStore.h
+    Source/Assets/AssetPackStore.cpp
+    Source/Assets/ProjectContentAssetStore.h
+    Source/Assets/ProjectContentAssetStore.cpp
     Source/Frust/EngineFrustHost.h
     Source/Frust/EngineFrustHost.cpp
     Source/Frust/EngineNodeLibraryLoader.h
     Source/Frust/EngineNodeLibraryLoader.cpp
+    Source/Interaction/EditorInteraction.h
+    Source/Interaction/EditorInteraction.cpp
     Source/Branding.h
     Source/Branding.cpp
     Source/Render/ViewportComponent.h

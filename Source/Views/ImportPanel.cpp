@@ -138,6 +138,12 @@ ImportPanel::ImportPanel(engine::World& world, ViewportComponent& viewport,
     addAndMakeVisible(addSliceButton_);
 }
 
+void ImportPanel::SetProjectContent(creation::assets::ProjectSession* session, const juce::String& gameAssetRoot)
+{
+    context_.projectSession = session;
+    context_.gameAssetRoot = gameAssetRoot;
+}
+
 bool ImportPanel::isInterestedInFileDrag(const juce::StringArray& files) {
     for (const auto& path : files) {
         if (registry_.FindFor(juce::File(path)) != nullptr) {

@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 
+#include "Interaction/EditorInteraction.h"
 #include "Render/ViewportComponent.h"
 #include "engine/simulation.h"
 #include "engine/world.h"
@@ -21,6 +22,7 @@ private:
 
     int clientNumber_;
     engine::World world_;
+    interaction::EditorInteraction interactions_{ world_ };
     ViewportComponent viewport_;
     juce::Label hud_;
     bool playing_ = true;

@@ -1,7 +1,7 @@
 #include "Project/EngineGameDocument.h"
 
+#include "Assets/EngineAssetPack.h"
 #include "Scene/EngineSceneSerializer.h"
-#include "Scene/Components.h"
 
 namespace ce::project
 {
@@ -50,29 +50,50 @@ GameDocumentInfo ReadGameInfo(const juce::ValueTree& node)
     game.entrySceneId = node.getProperty("entrySceneId").toString();
     for (const auto child : node)
         if (child.hasType("Scene")) game.scenes.add(ReadSceneInfo(child));
+    if (const auto requiredPacks = node.getChildWithName("RequiredPacks"); requiredPacks.isValid())
+        for (const auto packNode : requiredPacks)
+            if (packNode.hasType("Pack"))
+                game.requiredPacks.add({ packNode.getProperty("packId").toString(),
+                                         packNode.getProperty("version").toString() });
     return game;
 }
 
-void CreateStandardStarterScene(ce::engine::World& world)
+// A new game scene is a project-owned copy of the authored Default Scene in
+// the Creation Engine Pack. C++ only reads and stores authored scene data.
+bool CopyDefaultScene(creation::assets::ProjectSession& session,
+                      const GameDocumentInfo& game,
+                      const SceneDocumentInfo& scene,
+                      juce::String& error)
 {
-    std::lock_guard<std::mutex> lock(world.RegistryMutex());
-    auto addBox = [&](const char* name, engine::Vec3 position, engine::Vec3 scale) {
-        const auto entity = world.CreateEntity();
-        scene::Transform transform;
-        transform.position = position;
-        transform.scale = scale;
-        auto& registry = world.Registry();
-        registry.emplace<scene::Name>(entity, scene::Name{ name });
-        registry.emplace<scene::Transform>(entity, transform);
-        registry.emplace<scene::MeshAssetReference>(entity, scene::MeshAssetReference{ "Cube" });
-        registry.emplace<scene::SceneFlags>(entity, scene::SceneFlags{});
-    };
-    addBox("Center Block", { 0.0f, 0.5f, 0.0f }, { 1.0f, 1.0f, 1.0f });
-    addBox("Floor", { 0.0f, -0.5f, 0.0f }, { 10.0f, 0.1f, 10.0f });
-    addBox("North Wall", { 0.0f, 2.0f, -10.0f }, { 10.0f, 2.5f, 0.1f });
-    addBox("South Wall", { 0.0f, 2.0f, 10.0f }, { 10.0f, 2.5f, 0.1f });
-    addBox("West Wall", { -10.0f, 2.0f, 0.0f }, { 0.1f, 2.5f, 10.0f });
-    addBox("East Wall", { 10.0f, 2.0f, 0.0f }, { 0.1f, 2.5f, 10.0f });
+    juce::MemoryBlock defaultSceneData;
+    if (! ce::assets::EngineAssetPack::readDefaultScene(defaultSceneData, error)) return false;
+
+    const auto xml = juce::XmlDocument::parse(juce::String::createStringFromData(
+        defaultSceneData.getData(), static_cast<int>(defaultSceneData.getSize())));
+    if (xml == nullptr)
+    {
+        error = "The Creation Engine Pack Default Scene is not valid scene data.";
+        return false;
+    }
+
+    auto sceneTree = juce::ValueTree::fromXml(*xml);
+    if (! sceneTree.hasType("CreationEngineScene"))
+    {
+        error = "The Creation Engine Pack Default Scene has the wrong document type.";
+        return false;
+    }
+
+    juce::ValueTree document("CreationEngineSceneDocument");
+    document.setProperty("gameId", game.id, nullptr);
+    document.setProperty("sceneId", scene.id, nullptr);
+    document.setProperty("sceneName", scene.name, nullptr);
+    document.addChild(sceneTree, -1, nullptr);
+    if (! session.writeEntry(game.scenePath(scene.id), ToMemory(document)))
+    {
+        error = "Could not create scene from the Creation Engine Pack Default Scene.";
+        return false;
+    }
+    return true;
 }
 
 juce::ValueTree WriteGameInfo(const GameDocumentInfo& game)
@@ -87,6 +108,15 @@ juce::ValueTree WriteGameInfo(const GameDocumentInfo& game)
         sceneNode.setProperty("name", scene.name, nullptr);
         node.addChild(sceneNode, -1, nullptr);
     }
+    juce::ValueTree requiredPacks("RequiredPacks");
+    for (const auto& pack : game.requiredPacks)
+    {
+        juce::ValueTree packNode("Pack");
+        packNode.setProperty("packId", pack.packId, nullptr);
+        packNode.setProperty("version", pack.version, nullptr);
+        requiredPacks.addChild(packNode, -1, nullptr);
+    }
+    node.addChild(requiredPacks, -1, nullptr);
     return node;
 }
 } // namespace
@@ -140,22 +170,18 @@ bool EngineGameDocumentStore::ensureInitialGame(creation::assets::ProjectSession
     GameDocumentInfo game;
     game.id = NewId();
     game.name = "Game";
+    game.requiredPacks.add({ ce::assets::EngineAssetPack::packId, ce::assets::EngineAssetPack::version });
     SceneDocumentInfo scene{ NewId(), "Main" };
     game.entrySceneId = scene.id;
     game.scenes.add(scene);
 
-    // Greenfield Engine projects start with explicit documents. There is no
-    // compatibility path for the obsolete unnamed-session format.
-    ce::engine::World starterWorld;
-    CreateStandardStarterScene(starterWorld);
-    if (!saveScene(session, game, scene, starterWorld, errorMessage)) return false;
+    if (! CopyDefaultScene(session, game, scene, errorMessage)) return false;
     games.add(game);
     return saveGames(session, games, errorMessage);
 }
 
 bool EngineGameDocumentStore::createGame(creation::assets::ProjectSession& session,
                                          const juce::String& name,
-                                         ce::engine::World& initialWorld,
                                          GameDocumentInfo& createdGame,
                                          SceneDocumentInfo& createdScene,
                                          juce::String& errorMessage)
@@ -164,10 +190,11 @@ bool EngineGameDocumentStore::createGame(creation::assets::ProjectSession& sessi
     if (!ensureInitialGame(session, games, errorMessage)) return false;
     createdGame.id = NewId();
     createdGame.name = name.trim().isEmpty() ? "New Game" : name.trim();
+    createdGame.requiredPacks.add({ ce::assets::EngineAssetPack::packId, ce::assets::EngineAssetPack::version });
     createdScene = { NewId(), "Main" };
     createdGame.entrySceneId = createdScene.id;
     createdGame.scenes.add(createdScene);
-    if (!saveScene(session, createdGame, createdScene, initialWorld, errorMessage)) return false;
+    if (! CopyDefaultScene(session, createdGame, createdScene, errorMessage)) return false;
     games.add(createdGame);
     return saveGames(session, games, errorMessage);
 }
@@ -175,12 +202,11 @@ bool EngineGameDocumentStore::createGame(creation::assets::ProjectSession& sessi
 bool EngineGameDocumentStore::createScene(creation::assets::ProjectSession& session,
                                           GameDocumentInfo& game,
                                           const juce::String& name,
-                                          ce::engine::World& initialWorld,
                                           SceneDocumentInfo& createdScene,
                                           juce::String& errorMessage)
 {
     createdScene = { NewId(), name.trim().isEmpty() ? "New Scene" : name.trim() };
-    if (!saveScene(session, game, createdScene, initialWorld, errorMessage)) return false;
+    if (! CopyDefaultScene(session, game, createdScene, errorMessage)) return false;
     game.scenes.add(createdScene);
     juce::Array<GameDocumentInfo> games;
     if (!loadGames(session, games, errorMessage)) return false;

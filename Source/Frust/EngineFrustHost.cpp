@@ -26,6 +26,9 @@ EngineFrustHost::EngineFrustHost(engine::World& worldToHost)
     runtime.registerHostFunction("engine_first_transform_entity", reinterpret_cast<void*>(&EngineFrustHost::firstTransformEntity));
     runtime.registerHostFunction("engine_current_object_entity", reinterpret_cast<void*>(&EngineFrustHost::currentObjectEntity));
     runtime.registerHostFunction("engine_set_position_x", reinterpret_cast<void*>(&EngineFrustHost::setPositionX));
+    runtime.registerHostFunction("engine_request_scene_transition", reinterpret_cast<void*>(&EngineFrustHost::requestSceneTransition));
+    runtime.registerHostFunction("engine_active_game_id", reinterpret_cast<void*>(&EngineFrustHost::activeGameId));
+    runtime.registerHostFunction("engine_active_scene_id", reinterpret_cast<void*>(&EngineFrustHost::activeSceneId));
 }
 
 EngineFrustHost::~EngineFrustHost()
@@ -156,6 +159,21 @@ void EngineFrustHost::notifyObjectDestroyed(entt::entity entity, std::int64_t ti
     objectLifecycles.erase(found);
 }
 
+void EngineFrustHost::setSceneTransitionRequestHandler(std::function<void(const std::string&)> handler)
+{
+    sceneTransitionRequestHandler = std::move(handler);
+}
+
+void EngineFrustHost::setActiveGameIdProvider(std::function<std::string()> provider)
+{
+    activeGameIdProvider = std::move(provider);
+}
+
+void EngineFrustHost::setActiveSceneIdProvider(std::function<std::string()> provider)
+{
+    activeSceneIdProvider = std::move(provider);
+}
+
 bool EngineFrustHost::isLoaded() const noexcept
 {
     return runtime.isLoaded();
@@ -211,6 +229,27 @@ std::int64_t EngineFrustHost::setPositionX(std::int64_t entityId, std::int64_t p
 
     registry.get<engine::Transform>(entity).position.x = static_cast<float>(positionX);
     return 1;
+}
+
+std::int64_t EngineFrustHost::requestSceneTransition(const char* sceneReference)
+{
+    if (activeHost == nullptr || !activeHost->sceneTransitionRequestHandler || sceneReference == nullptr || *sceneReference == '\0') return 0;
+    activeHost->sceneTransitionRequestHandler(sceneReference);
+    return 1;
+}
+
+const char* EngineFrustHost::activeGameId()
+{
+    static thread_local std::string value;
+    value = (activeHost != nullptr && activeHost->activeGameIdProvider) ? activeHost->activeGameIdProvider() : std::string{};
+    return value.c_str();
+}
+
+const char* EngineFrustHost::activeSceneId()
+{
+    static thread_local std::string value;
+    value = (activeHost != nullptr && activeHost->activeSceneIdProvider) ? activeHost->activeSceneIdProvider() : std::string{};
+    return value.c_str();
 }
 
 std::string EngineFrustHost::behaviorKey(const std::string& podId)
