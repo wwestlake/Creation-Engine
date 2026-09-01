@@ -6,6 +6,7 @@
 add_library(engine_core STATIC
     src/world.cpp
     src/simulation.cpp
+    src/foundation_gameplay.cpp
     src/mock_vr_provider.cpp
 )
 target_include_directories(engine_core PUBLIC include)

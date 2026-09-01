@@ -86,7 +86,7 @@ int main() {
         "pin 1 out 1 value data float\n";
     const auto migrated = DeserializeGraph(legacy, error);
     if (!migrated || migrated->Target() != GraphTarget::Behavior || !contains(SerializeGraph(*migrated), "frgraph 1\n")) {
-        std::cerr << "Legacy CEL graph migration failed: " << error << '\n';
+        std::cerr << "FRust graph validation failed: " << error << '\n';
         return 1;
     }
 

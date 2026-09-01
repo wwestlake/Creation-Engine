@@ -64,9 +64,8 @@ public:
         std::shared_ptr<std::vector<AnimationClip>> animationClips;
     };
 
-    // Loads the built-in demo set: a procedural cube, a procedural
-    // sphere, and the BoxTextured glTF asset read through vfs (expects
-    // assets/packages/base.zip already mounted).
+    // Loads the built-in primitives (always available) and optional bundled
+    // demo content from the project VFS when present.
     void LoadBuiltins(creation::assets::VirtualFileSystem& vfs);
 
     // Builds a Mesh/Material (and texture/Skeleton, if the model has

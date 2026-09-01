@@ -6,6 +6,7 @@
 #include <mutex>
 
 #include "engine/core_components.h"
+#include "engine/gameplay_components.h"
 #include "Render/Scene/Animation.h"
 #include "Scene/AnimationSampler.h"
 #include "Scene/Components.h"
@@ -141,35 +142,49 @@ void ViewportComponent::SeedDemoScene() {
         if (!world_.Registry().view<const scene::Name>().empty()) return;
     }
 
-    auto asset = assetCatalog_.Find("BoxTextured");
-    if (asset.mesh == nullptr)
-        asset = assetCatalog_.Find("Cube");
-    if (asset.mesh == nullptr) {
+    // The starter scene is intentionally built only from the procedural
+    // primitive catalog. Store/bundled content can enrich it later, but the
+    // first playable room must work in a fresh project with no downloads.
+    const auto cube = assetCatalog_.Find("Cube");
+    const auto sphere = assetCatalog_.Find("Sphere");
+    if (cube.mesh == nullptr || sphere.mesh == nullptr) {
         std::cout << "[scene] no cube asset in catalog; starter room will be empty." << std::endl;
         return;
     }
 
     const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
-    auto addBox = [&](const char* name, engine::Vec3 position, engine::Vec3 scale) {
+    auto addMesh = [&](const char* name, const scene::AssetCatalog::Asset& meshAsset,
+                       engine::Vec3 position, engine::Vec3 scale) {
         const auto entity = world_.CreateEntity();
         scene::Transform transform;
         transform.position = position;
         transform.scale = scale;
         world_.Registry().emplace<scene::Name>(entity, scene::Name{ name });
         world_.Registry().emplace<scene::Transform>(entity, transform);
-        world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ asset.mesh, asset.material });
+        world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ meshAsset.mesh, meshAsset.material });
         world_.Registry().emplace<scene::SceneFlags>(entity, scene::SceneFlags{});
         return entity;
     };
 
-    demoEntity_ = addBox("Center Block", { 0.0f, 0.5f, 0.0f }, { 1.0f, 1.0f, 1.0f });
-    addBox("Floor", { 0.0f, -0.5f, 0.0f }, { 10.0f, 0.1f, 10.0f });
-    addBox("North Wall", { 0.0f, 2.0f, -10.0f }, { 10.0f, 2.5f, 0.1f });
-    addBox("South Wall", { 0.0f, 2.0f, 10.0f }, { 10.0f, 2.5f, 0.1f });
-    addBox("West Wall", { -10.0f, 2.0f, 0.0f }, { 0.1f, 2.5f, 10.0f });
-    addBox("East Wall", { 10.0f, 2.0f, 0.0f }, { 0.1f, 2.5f, 10.0f });
+    demoEntity_ = addMesh("Center Block", cube, { 0.0f, 0.5f, 0.0f }, { 1.0f, 1.0f, 1.0f });
+    addMesh("Floor", cube, { 0.0f, -0.5f, 0.0f }, { 10.0f, 0.1f, 10.0f });
+    addMesh("North Wall", cube, { 0.0f, 2.0f, -10.0f }, { 10.0f, 2.5f, 0.1f });
+    addMesh("South Wall", cube, { 0.0f, 2.0f, 10.0f }, { 10.0f, 2.5f, 0.1f });
+    addMesh("West Wall", cube, { -10.0f, 2.0f, 0.0f }, { 0.1f, 2.5f, 10.0f });
+    addMesh("East Wall", cube, { 10.0f, 2.0f, 0.0f }, { 0.1f, 2.5f, 10.0f });
+    addMesh("Box A", cube, { -3.0f, 0.75f, -2.0f }, { 1.5f, 1.5f, 1.5f });
+    addMesh("Box B", cube, { 3.0f, 0.5f, -1.0f }, { 1.0f, 1.0f, 1.0f });
 
-    std::cout << "[scene] seeded starter room: floor, four walls, center block" << std::endl;
+    for (int index = 0; index < 4; ++index)
+    {
+        const auto ball = addMesh((std::string("Physics Ball ") + std::to_string(index + 1)).c_str(),
+                                  sphere, { -2.0f + static_cast<float>(index) * 1.35f,
+                                            3.0f + static_cast<float>(index) * 0.7f, 1.5f },
+                                  { 0.5f, 0.5f, 0.5f });
+        world_.Registry().emplace<engine::RigidBody>(ball, engine::RigidBody{ {}, 0.5f, -9.8f, 0.72f, true });
+    }
+
+    std::cout << "[scene] seeded starter room: floor, walls, boxes, glass placeholders, physics balls" << std::endl;
 }
 
 juce::Vector3D<float> ViewportComponent::SpawnPosition(float distance) const {

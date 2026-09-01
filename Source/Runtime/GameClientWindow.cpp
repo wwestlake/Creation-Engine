@@ -1,6 +1,7 @@
 #include "GameClientWindow.h"
 
 #include <creation/ui/CreationSuiteLogos.h>
+#include "engine/foundation_gameplay.h"
 
 #include "Scene/EngineSceneSerializer.h"
 
@@ -39,7 +40,10 @@ void GameClientContent::paint(juce::Graphics& g)
 void GameClientContent::timerCallback()
 {
     if (playing_)
+    {
+        engine::FoundationGameplay::Step(world_, {}, 1.0f / 30.0f);
         engine::Simulation::Step(world_, 1.0f / 30.0f);
+    }
     viewport_.repaint();
 }
 
