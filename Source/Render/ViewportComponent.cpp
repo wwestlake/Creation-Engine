@@ -904,9 +904,20 @@ void ViewportComponent::renderOpenGL() {
         if (const auto* existing = world_.Registry().try_get<scene::MeshRenderer>(entity);
             existing != nullptr && existing->mesh != nullptr) continue;
         const auto& reference = unresolvedAssets.get<const scene::MeshAssetReference>(entity);
-        const auto asset = assetCatalog_.Find(reference.packId.isNotEmpty()
-            ? scene::AssetCatalog::PackAssetKey(reference.packId, reference.packVersion, reference.assetId)
-            : reference.assetId);
+        // Try the exact pack-qualified identity first. A reference saved
+        // against an older pack version (packId set, but that exact
+        // version's manifest is no longer materialized on this machine --
+        // EngineAssetPack::version bumps over time) would otherwise never
+        // resolve even though the currently-installed pack registers the
+        // same asset under its plain engine name as an alias (see
+        // AssetCatalog::LoadAssetPack's AddAlias call). Fall back to that
+        // plain name so a stale pack-version reference still renders.
+        auto asset = reference.packId.isNotEmpty()
+            ? assetCatalog_.Find(scene::AssetCatalog::PackAssetKey(reference.packId, reference.packVersion, reference.assetId))
+            : assetCatalog_.Find(reference.assetId);
+        if (asset.mesh == nullptr && reference.packId.isNotEmpty()) {
+            asset = assetCatalog_.Find(reference.assetId);
+        }
         if (asset.mesh != nullptr && asset.material != nullptr) {
             if (auto* existing = world_.Registry().try_get<scene::MeshRenderer>(entity))
                 existing->mesh = asset.mesh;
