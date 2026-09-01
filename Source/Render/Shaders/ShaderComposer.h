@@ -36,22 +36,35 @@ namespace ce {
 //     on a second include).
 //   - `defines` are injected as `#define KEY VALUE` lines immediately
 //     after the version line, before any included content.
+//   - A line reading exactly `//$MATERIAL_SOURCE$` (a host template's
+//     material-injection point) is replaced with `materialSource` verbatim
+//     -- this is how a compiled material graph's generated GLSL
+//     (ce::material::CompileMaterialGraph's declarations + evaluateFunction)
+//     gets into a host shader like programs/material_host.frag, the same
+//     shape Unreal's MaterialTemplate.ush uses for the same purpose, just
+//     one marker instead of many. Absent/empty when the entry has no such
+//     marker or the caller passes nothing.
 class ShaderComposer final {
 public:
     explicit ShaderComposer(juce::File shaderRoot);
     ShaderComposer(creation::assets::VirtualFileSystem& vfs, juce::String vfsRootPrefix);
 
     // vertexEntry/fragmentEntry: paths relative to the shader root, e.g.
-    // "programs/pbr_lit.vert" / "programs/pbr_lit.frag". Returns a linked
-    // program from the cache (compiling/linking + logging on a miss), or
-    // nullptr if compilation/linking failed (also logged).
+    // "programs/pbr_lit.vert" / "programs/pbr_lit.frag". materialSource, if
+    // given, fills the entry's `//$MATERIAL_SOURCE$` marker (see class
+    // comment) -- since it's per-call generated content rather than a
+    // path, the cache key hashes its text instead of naming it. Returns a
+    // linked program from the cache (compiling/linking + logging on a
+    // miss), or nullptr if compilation/linking failed (also logged).
     juce::OpenGLShaderProgram* GetProgram(const juce::OpenGLContext& context, const juce::String& vertexEntry,
                                            const juce::String& fragmentEntry,
-                                           const std::vector<juce::String>& defines = {});
+                                           const std::vector<juce::String>& defines = {},
+                                           const juce::String& materialSource = {});
 
 private:
     bool ReadTextByRelativePath(const juce::String& relativePath, juce::String& outText) const;
-    juce::String ComposeSource(const juce::String& entryRelativePath, const std::vector<juce::String>& defines);
+    juce::String ComposeSource(const juce::String& entryRelativePath, const std::vector<juce::String>& defines,
+                               const juce::String& materialSource);
     juce::String ResolveIncludes(const juce::String& source, std::vector<juce::String>& alreadyIncluded);
 
     juce::File shaderRoot_;                            // valid in disk mode, ignored otherwise.
