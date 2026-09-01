@@ -5,6 +5,7 @@
 #include <cmath>
 #include <iostream>
 #include <mutex>
+#include <optional>
 
 #include "engine/core_components.h"
 #include "engine/gameplay_components.h"
@@ -113,6 +114,72 @@ bool RayAxisAlignedBoxHit(const juce::Vector3D<float>& rayOrigin, const juce::Ve
     distance = enter > 0.0f ? enter : exit;
     surfaceNormal = enter > 0.0f ? enterNormal : -rayDirection;
     return distance <= 8.0f;
+}
+
+constexpr float kPlaneHandleInner = 0.18f;
+constexpr float kPlaneHandleOuter = 0.50f;
+
+// The 4 corners of a plane-constraint gizmo handle: an axis-aligned
+// square in the (axisA, axisB) plane, offset away from center so it
+// doesn't overlap the single-axis arrows or the free-move cube. Shared
+// between rendering (uploadVRTransformGizmo) and hit-testing
+// (desktopGizmoHandle) so the two can't drift apart from each other.
+std::array<juce::Vector3D<float>, 4> PlaneHandleQuad(const juce::Vector3D<float>& center, float scale,
+                                                     const juce::Vector3D<float>& axisA,
+                                                     const juce::Vector3D<float>& axisB) {
+    return { center + (axisA + axisB) * (kPlaneHandleInner * scale),
+             center + (axisA * kPlaneHandleOuter + axisB * kPlaneHandleInner) * scale,
+             center + (axisA + axisB) * (kPlaneHandleOuter * scale),
+             center + (axisA * kPlaneHandleInner + axisB * kPlaneHandleOuter) * scale };
+}
+
+// Intersects the ray with the plane the handle quad lies in (normal =
+// axisA x axisB), then checks the hit point's local (axisA, axisB)
+// coordinates against the same bounds PlaneHandleQuad used to build it —
+// equivalent to testing against the quad itself, without needing a
+// separate triangle/polygon intersection routine.
+bool RayPlaneHandleHit(const juce::Vector3D<float>& rayOrigin, const juce::Vector3D<float>& rayDirection,
+                       const juce::Vector3D<float>& center, float scale,
+                       const juce::Vector3D<float>& axisA, const juce::Vector3D<float>& axisB,
+                       float& distance) {
+    const auto normal = (axisA ^ axisB).normalised();
+    const float denominator = normal * rayDirection;
+    if (std::abs(denominator) < 0.0001f) return false;
+    const float t = ((center - rayOrigin) * normal) / denominator;
+    if (t <= 0.0f) return false;
+    const auto local = (rayOrigin + rayDirection * t) - center;
+    const float u = (local * axisA) / scale;
+    const float v = (local * axisB) / scale;
+    if (u < kPlaneHandleInner || u > kPlaneHandleOuter || v < kPlaneHandleInner || v > kPlaneHandleOuter)
+        return false;
+    distance = t;
+    return true;
+}
+
+// Intersects the ray with the plane perpendicular to `axis` through
+// `center`, and returns the hit point's angle around that plane (via an
+// arbitrary but consistent (u, v) basis built from axis). Used both to
+// hit-test a rotation ring (paired with a radius check the caller does
+// itself) and, during an active rotation drag, to track how far the
+// mouse has swept around it since the grab started -- same angle
+// definition either way, so a drag's continuous updates line up with
+// where it was first grabbed.
+bool RingAngle(const juce::Vector3D<float>& rayOrigin, const juce::Vector3D<float>& rayDirection,
+              const juce::Vector3D<float>& center, const juce::Vector3D<float>& axis, float& angleOut,
+              float& distanceFromCentreOut)
+{
+    const auto normal = axis.normalised();
+    const float denominator = normal * rayDirection;
+    if (std::abs(denominator) < 0.0001f) return false;
+    const float t = ((center - rayOrigin) * normal) / denominator;
+    if (t <= 0.0f) return false;
+    const auto local = (rayOrigin + rayDirection * t) - center;
+    distanceFromCentreOut = local.length();
+    const auto helper = std::abs(normal.y) < 0.9f ? juce::Vector3D<float>{ 0.0f, 1.0f, 0.0f } : juce::Vector3D<float>{ 1.0f, 0.0f, 0.0f };
+    const auto u = (normal ^ helper).normalised();
+    const auto v = (normal ^ u).normalised();
+    angleOut = std::atan2(local * v, local * u);
+    return true;
 }
 
 // The OpenXR pose is room-scale movement relative to the headset's tracking
@@ -332,19 +399,55 @@ ViewportComponent::TranslationHandle ViewportComponent::desktopGizmoHandle(
     if (vrTransformGizmo_.entity == entt::null) return TranslationHandle::none;
     const auto& center = vrTransformGizmo_.center;
     const float size = vrTransformGizmo_.scale;
+    const auto mode = interactions_.gizmoMode();
+
+    // The centre handle: free-move in position mode, uniform scale in
+    // scale mode. Meaningless in rotate mode, but harmless to leave
+    // testable there too since nothing renders it in that mode.
     const auto toCenter = center - origin;
     const float centerDistance = toCenter * direction;
     if (centerDistance > 0.0f && (toCenter - direction * centerDistance).length() < size * 0.13f)
         return TranslationHandle::free;
+
+    // positionAxes is world-aligned unless GizmoMode::position + local
+    // space are both active (see updateDesktopTransformGizmo); scale and
+    // rotate modes below intentionally don't consult it yet.
+    const auto& worldOrLocal = mode == interaction::GizmoMode::position
+                                  ? vrTransformGizmo_.positionAxes
+                                  : std::array<juce::Vector3D<float>, 3>{{ { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } }};
     const std::array<std::pair<TranslationHandle, juce::Vector3D<float>>, 3> axes{{
-        { TranslationHandle::xAxis, { 1.0f, 0.0f, 0.0f } },
-        { TranslationHandle::yAxis, { 0.0f, 1.0f, 0.0f } },
-        { TranslationHandle::zAxis, { 0.0f, 0.0f, 1.0f } }
+        { TranslationHandle::xAxis, worldOrLocal[0] },
+        { TranslationHandle::yAxis, worldOrLocal[1] },
+        { TranslationHandle::zAxis, worldOrLocal[2] }
     }};
+
+    if (mode == interaction::GizmoMode::rotate) {
+        for (const auto& [handle, axis] : axes) {
+            float angle = 0.0f, distanceFromCentre = 0.0f;
+            if (!RingAngle(origin, direction, center, axis, angle, distanceFromCentre)) continue;
+            if (std::abs(distanceFromCentre - size) > size * 0.22f) continue;
+            return handle;
+        }
+        return TranslationHandle::none;
+    }
+
     for (const auto& [handle, axis] : axes) {
         float rayDistance = 0.0f;
         if (RaySegmentDistance(origin, direction, center + axis * (size * 0.18f), center + axis * size, rayDistance) < size * 0.12f)
             return handle;
+    }
+
+    if (mode == interaction::GizmoMode::position) {
+        const std::array<std::tuple<TranslationHandle, juce::Vector3D<float>, juce::Vector3D<float>>, 3> planes{{
+            { TranslationHandle::xyPlane, axes[0].second, axes[1].second },
+            { TranslationHandle::xzPlane, axes[0].second, axes[2].second },
+            { TranslationHandle::yzPlane, axes[1].second, axes[2].second }
+        }};
+        for (const auto& [handle, axisA, axisB] : planes) {
+            float planeDistance = 0.0f;
+            if (RayPlaneHandleHit(origin, direction, center, size, axisA, axisB, planeDistance))
+                return handle;
+        }
     }
     return TranslationHandle::none;
 }
@@ -358,41 +461,132 @@ void ViewportComponent::updateDesktopTransformGizmo()
     const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
     auto& registry = world_.Registry();
     if (!registry.valid(selected) || !registry.all_of<scene::Transform>(selected)) return;
+    const auto& transform = registry.get<scene::Transform>(selected);
     vrTransformGizmo_.entity = selected;
-    vrTransformGizmo_.center = scene::ToJuceVector3D(registry.get<scene::Transform>(selected).position);
+    vrTransformGizmo_.center = scene::ToJuceVector3D(transform.position);
     vrTransformGizmo_.scale = 0.8f;
+    if (interactions_.gizmoMode() == interaction::GizmoMode::position &&
+        interactions_.transformSpace() == interaction::TransformSpace::local) {
+        const auto rotation = juce::Matrix3D<float>::rotation(scene::ToJuceVector3D(transform.eulerRotationRadians));
+        vrTransformGizmo_.positionAxes = {{ { rotation.mat[0], rotation.mat[1], rotation.mat[2] },
+                                            { rotation.mat[4], rotation.mat[5], rotation.mat[6] },
+                                            { rotation.mat[8], rotation.mat[9], rotation.mat[10] } }};
+    }
 }
 
 void ViewportComponent::mouseDown(const juce::MouseEvent& event)
 {
     if (!event.mods.isLeftButtonDown() || event.mods.isRightButtonDown()) return;
     grabKeyboardFocus();
-    juce::Vector3D<float> origin, direction;
-    if (!desktopRay(event.position, origin, direction)) return;
-    const auto handle = desktopGizmoHandle(origin, direction);
-    if (handle != TranslationHandle::none && vrTransformGizmo_.entity != entt::null) {
-        desktopDragDistance_ = juce::jmax(0.2f, (vrTransformGizmo_.center - origin).length());
-        if (interactions_.beginTranslation(vrTransformGizmo_.entity, scene::ToVec3(origin + direction * desktopDragDistance_), constraintFor(handle)))
-            desktopTransformDrag_ = true;
-        return;
-    }
-    float hitDistance = 0.0f;
-    interactions_.select(desktopPick(origin, direction, hitDistance));
+    // Record where/that the mouse went down; the actual ray cast, hit
+    // test, and EditorInteraction calls happen once per frame on the
+    // render thread (updateDesktopTransformDrag) -- see the class comment
+    // in the header for why.
+    desktopMouseX_.store(event.position.x, std::memory_order_relaxed);
+    desktopMouseY_.store(event.position.y, std::memory_order_relaxed);
+    desktopMouseButtonDown_.store(true, std::memory_order_relaxed);
 }
 
 void ViewportComponent::mouseDrag(const juce::MouseEvent& event)
 {
-    if (!desktopTransformDrag_) return;
-    juce::Vector3D<float> origin, direction;
-    if (desktopRay(event.position, origin, direction))
-        interactions_.updateTranslation(scene::ToVec3(origin + direction * desktopDragDistance_));
+    desktopMouseX_.store(event.position.x, std::memory_order_relaxed);
+    desktopMouseY_.store(event.position.y, std::memory_order_relaxed);
 }
 
 void ViewportComponent::mouseUp(const juce::MouseEvent&)
 {
-    if (!desktopTransformDrag_) return;
-    desktopTransformDrag_ = false;
-    interactions_.endGrab();
+    desktopMouseButtonDown_.store(false, std::memory_order_relaxed);
+}
+
+// Render-thread-only: called once per frame from renderOpenGL(). Reads the
+// atomics mouseDown/mouseDrag/mouseUp write, and does everything that used
+// to live directly in those message-thread callbacks -- ray cast, gizmo
+// hit test, select, and the begin/update/end EditorInteraction calls.
+int ViewportComponent::HandleAxisIndex(TranslationHandle handle) {
+    switch (handle) {
+        case TranslationHandle::xAxis: return 0;
+        case TranslationHandle::yAxis: return 1;
+        case TranslationHandle::zAxis: return 2;
+        case TranslationHandle::free: return -1;
+        default: return -2;
+    }
+}
+
+void ViewportComponent::updateDesktopTransformDrag()
+{
+    const bool isDown = desktopMouseButtonDown_.load(std::memory_order_relaxed);
+    const juce::Point<float> screenPos{ desktopMouseX_.load(std::memory_order_relaxed),
+                                        desktopMouseY_.load(std::memory_order_relaxed) };
+    const auto mode = interactions_.gizmoMode();
+
+    if (isDown && !desktopMouseWasDown_) {
+        // Press: hit-test the gizmo handles first; if nothing hit, fall
+        // back to plain object selection, same behaviour as before.
+        juce::Vector3D<float> origin, direction;
+        if (desktopRay(screenPos, origin, direction)) {
+            const auto handle = desktopGizmoHandle(origin, direction);
+            const auto axisIndex = HandleAxisIndex(handle);
+            if (handle != TranslationHandle::none && vrTransformGizmo_.entity != entt::null &&
+                mode == interaction::GizmoMode::rotate && axisIndex >= 0) {
+                const std::array<juce::Vector3D<float>, 3> rotateAxes{{
+                    { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } }};
+                float angle = 0.0f, distanceFromCentre = 0.0f;
+                if (RingAngle(origin, direction, vrTransformGizmo_.center, rotateAxes[static_cast<std::size_t>(axisIndex)], angle, distanceFromCentre) &&
+                    interactions_.beginRotation(vrTransformGizmo_.entity, axisIndex, angle)) {
+                    desktopTransformDrag_ = true;
+                    desktopRotationAxisIndex_ = axisIndex;
+                }
+            } else if (handle != TranslationHandle::none && vrTransformGizmo_.entity != entt::null &&
+                      mode == interaction::GizmoMode::scale && axisIndex != -2) {
+                desktopDragDistance_ = juce::jmax(0.2f, (vrTransformGizmo_.center - origin).length());
+                if (interactions_.beginScale(vrTransformGizmo_.entity, axisIndex,
+                        scene::ToVec3(origin + direction * desktopDragDistance_)))
+                    desktopTransformDrag_ = true;
+            } else if (handle != TranslationHandle::none && vrTransformGizmo_.entity != entt::null &&
+                      mode == interaction::GizmoMode::position) {
+                desktopDragDistance_ = juce::jmax(0.2f, (vrTransformGizmo_.center - origin).length());
+                // Single-axis handles only: pass the axis direction actually
+                // drawn/hit-tested (world or the entity's local basis vector,
+                // per positionAxes -- see updateDesktopTransformGizmo) so the
+                // drag itself matches what's on screen. Plane/free handles
+                // keep the existing world-aligned constraint mask, unaffected
+                // by local/world space.
+                const std::optional<engine::Vec3> localAxis = axisIndex >= 0 && axisIndex < 3
+                    ? std::optional<engine::Vec3>(scene::ToVec3(vrTransformGizmo_.positionAxes[static_cast<std::size_t>(axisIndex)]))
+                    : std::nullopt;
+                if (interactions_.beginTranslation(vrTransformGizmo_.entity,
+                        scene::ToVec3(origin + direction * desktopDragDistance_), constraintFor(handle), localAxis))
+                    desktopTransformDrag_ = true;
+            } else {
+                float hitDistance = 0.0f;
+                interactions_.select(desktopPick(origin, direction, hitDistance));
+            }
+        }
+    } else if (isDown && desktopMouseWasDown_ && desktopTransformDrag_) {
+        // Held, and a gizmo drag is active: keep applying it, using
+        // whichever mode's update call started this drag.
+        juce::Vector3D<float> origin, direction;
+        if (!desktopRay(screenPos, origin, direction)) { desktopMouseWasDown_ = isDown; return; }
+        if (mode == interaction::GizmoMode::rotate && desktopRotationAxisIndex_ >= 0) {
+            const std::array<juce::Vector3D<float>, 3> rotateAxes{{
+                { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } }};
+            float angle = 0.0f, distanceFromCentre = 0.0f;
+            if (RingAngle(origin, direction, vrTransformGizmo_.center,
+                          rotateAxes[static_cast<std::size_t>(desktopRotationAxisIndex_)], angle, distanceFromCentre))
+                interactions_.updateRotation(angle);
+        } else if (mode == interaction::GizmoMode::scale) {
+            interactions_.updateScale(scene::ToVec3(origin + direction * desktopDragDistance_));
+        } else {
+            interactions_.updateTranslation(scene::ToVec3(origin + direction * desktopDragDistance_));
+        }
+    } else if (!isDown && desktopMouseWasDown_ && desktopTransformDrag_) {
+        // Released: commit the drag to the undo stack.
+        desktopTransformDrag_ = false;
+        desktopRotationAxisIndex_ = -1;
+        interactions_.endGrab();
+    }
+
+    desktopMouseWasDown_ = isDown;
 }
 
 void ViewportComponent::RunOnGLThread(std::function<void()> work, bool blockUntilFinished) {
@@ -587,10 +781,17 @@ void ViewportComponent::uploadVRWands()
 void ViewportComponent::uploadVRTransformGizmo()
 {
     struct GizmoVertex { float position[3]; };
-    // Three arrow groups (6 vertices each), plane squares (24), and a
-    // central free-move cube (24).  Keep these fixed offsets so the draw
-    // path can colour the conventional editor handles independently.
-    std::vector<GizmoVertex> vertices(66);
+    // Three arrow groups (6 vertices each, offset 0), plane square
+    // outlines (24, offset 18), a central free-move cube (24, offset 42),
+    // the plane squares' filled translucent surfaces (18 -- 2 triangles x
+    // 3 planes, offset 66), and three rotation rings (96 -- 16 segments x
+    // 2 verts x 3 rings, offset 84). Keep these fixed offsets so the draw
+    // path can colour/blend the conventional editor handles independently,
+    // and so it can pick which groups to draw for the active GizmoMode --
+    // all groups are always built regardless of mode (this geometry is
+    // tiny; not worth the complexity of only building what's shown) but
+    // only the relevant ones are ever issued a draw call.
+    std::vector<GizmoVertex> vertices(180);
     const auto writeLine = [&](std::size_t& cursor, const juce::Vector3D<float>& a, const juce::Vector3D<float>& b) {
         vertices[cursor++] = { { a.x, a.y, a.z } };
         vertices[cursor++] = { { b.x, b.y, b.z } };
@@ -602,7 +803,11 @@ void ViewportComponent::uploadVRTransformGizmo()
     if (vrTransformGizmo_.entity != entt::null) {
         const auto c = vrTransformGizmo_.center;
         const float s = vrTransformGizmo_.scale;
-        const std::array<juce::Vector3D<float>, 3> axes{{ { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } }};
+        // World-aligned unless position mode + local space are both
+        // active (see updateDesktopTransformGizmo) -- used for the
+        // arrows and plane quads below. Rotation rings, further down,
+        // intentionally always use plain world axes instead.
+        const auto& axes = vrTransformGizmo_.positionAxes;
         for (std::size_t axis = 0; axis < axes.size(); ++axis) {
             const auto end = c + axes[axis] * s;
             const auto sideA = axis == 0 ? axes[1] : axes[0];
@@ -613,13 +818,14 @@ void ViewportComponent::uploadVRTransformGizmo()
             writeLine(cursor, end, end - axes[axis] * (0.18f * s) + sideB * (0.10f * s));
         }
         std::size_t planeCursor = 18;
+        std::size_t planeFillCursor = 66;
         const auto addPlane = [&](const juce::Vector3D<float>& a, const juce::Vector3D<float>& b) {
-            const auto p0 = c + (a + b) * (0.18f * s);
-            const auto p1 = c + (a * 0.50f + b * 0.18f) * s;
-            const auto p2 = c + (a + b) * (0.50f * s);
-            const auto p3 = c + (a * 0.18f + b * 0.50f) * s;
-            for (const auto& pair : std::array<std::pair<juce::Vector3D<float>, juce::Vector3D<float>>, 4>{{ { p0, p1 }, { p1, p2 }, { p2, p3 }, { p3, p0 } }})
+            const auto quad = PlaneHandleQuad(c, s, a, b);
+            for (const auto& pair : std::array<std::pair<juce::Vector3D<float>, juce::Vector3D<float>>, 4>{{ { quad[0], quad[1] }, { quad[1], quad[2] }, { quad[2], quad[3] }, { quad[3], quad[0] } }})
                 writeLine(planeCursor, pair.first, pair.second);
+            // Filled translucent surface: two triangles covering the same quad.
+            for (const auto index : { 0, 1, 2, 0, 2, 3 })
+                vertices[planeFillCursor++] = { { quad[index].x, quad[index].y, quad[index].z } };
         };
         addPlane(axes[0], axes[1]); // XY
         addPlane(axes[0], axes[2]); // XZ
@@ -634,6 +840,20 @@ void ViewportComponent::uploadVRTransformGizmo()
         std::size_t cubeCursor = 42;
         for (const auto& edge : std::array<std::pair<int, int>, 12>{{ { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 }, { 4, 5 }, { 5, 6 }, { 6, 7 }, { 7, 4 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } }})
             writeLine(cubeCursor, cube[edge.first], cube[edge.second]);
+
+        constexpr int ringSegments = 16;
+        std::size_t ringCursor = 84;
+        for (const auto& axis : axes) {
+            const auto helper = std::abs(axis.y) < 0.9f ? juce::Vector3D<float>{ 0.0f, 1.0f, 0.0f } : juce::Vector3D<float>{ 1.0f, 0.0f, 0.0f };
+            const auto ringU = (axis ^ helper).normalised();
+            const auto ringV = (axis ^ ringU).normalised();
+            for (int segment = 0; segment < ringSegments; ++segment) {
+                const float a = juce::MathConstants<float>::twoPi * static_cast<float>(segment) / ringSegments;
+                const float b = juce::MathConstants<float>::twoPi * static_cast<float>(segment + 1) / ringSegments;
+                writeLine(ringCursor, c + ringU * (std::cos(a) * s) + ringV * (std::sin(a) * s),
+                                     c + ringU * (std::cos(b) * s) + ringV * (std::sin(b) * s));
+            }
+        }
     }
     if (vrHoverActive_) {
         constexpr int segments = 24;
@@ -787,6 +1007,7 @@ void ViewportComponent::renderOpenGL() {
         uploadVRTransformGizmo();
         uploadVREditorCart();
     } else {
+        updateDesktopTransformDrag();
         updateDesktopTransformGizmo();
         uploadVRTransformGizmo();
     }
@@ -844,18 +1065,40 @@ void ViewportComponent::renderOpenGL() {
         gridProgram_->setUniformMat4("uProjection", eyeCamera.ProjectionMatrix().mat, 1, GL_FALSE);
         vrGizmoVertexArray_.Bind();
         if (vrTransformGizmo_.entity != entt::null) {
-            glLineWidth(7.0f);
-            gridProgram_->setUniform("uColor", 0.95f, 0.16f, 0.14f); glDrawArrays(GL_LINES, 0, 6);
-            gridProgram_->setUniform("uColor", 0.16f, 0.92f, 0.22f); glDrawArrays(GL_LINES, 6, 6);
-            gridProgram_->setUniform("uColor", 0.18f, 0.42f, 1.0f); glDrawArrays(GL_LINES, 12, 6);
-            glLineWidth(3.0f);
-            gridProgram_->setUniform("uColor", 0.92f, 0.92f, 0.95f); glDrawArrays(GL_LINES, 18, 24);
-            gridProgram_->setUniform("uColor", 1.0f, 0.82f, 0.18f); glDrawArrays(GL_LINES, 42, 24);
+            const auto mode = interactions_.gizmoMode();
+            if (mode == interaction::GizmoMode::position || mode == interaction::GizmoMode::scale) {
+                glLineWidth(7.0f);
+                gridProgram_->setUniform("uColor", 0.95f, 0.16f, 0.14f); glDrawArrays(GL_LINES, 0, 6);
+                gridProgram_->setUniform("uColor", 0.16f, 0.92f, 0.22f); glDrawArrays(GL_LINES, 6, 6);
+                gridProgram_->setUniform("uColor", 0.18f, 0.42f, 1.0f); glDrawArrays(GL_LINES, 12, 6);
+                glLineWidth(3.0f);
+                gridProgram_->setUniform("uColor", 1.0f, 0.82f, 0.18f); glDrawArrays(GL_LINES, 42, 24);
+            }
+            if (mode == interaction::GizmoMode::position) {
+                glLineWidth(3.0f);
+                gridProgram_->setUniform("uColor", 0.92f, 0.92f, 0.95f); glDrawArrays(GL_LINES, 18, 24);
+                // Filled, translucent plane-handle surfaces -- self-contained
+                // blend state, nothing else drawn this frame reads uAlpha
+                // meaningfully since every other draw leaves blending off.
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                gridProgram_->setUniform("uAlpha", 0.28f);
+                gridProgram_->setUniform("uColor", 0.92f, 0.92f, 0.95f);
+                glDrawArrays(GL_TRIANGLES, 66, 18);
+                gridProgram_->setUniform("uAlpha", 1.0f);
+                glDisable(GL_BLEND);
+            }
+            if (mode == interaction::GizmoMode::rotate) {
+                glLineWidth(4.0f);
+                gridProgram_->setUniform("uColor", 0.95f, 0.16f, 0.14f); glDrawArrays(GL_LINES, 84, 32);
+                gridProgram_->setUniform("uColor", 0.16f, 0.92f, 0.22f); glDrawArrays(GL_LINES, 116, 32);
+                gridProgram_->setUniform("uColor", 0.18f, 0.42f, 1.0f); glDrawArrays(GL_LINES, 148, 32);
+            }
         }
         if (vrHoverActive_) {
             glLineWidth(5.0f);
             gridProgram_->setUniform("uColor", 1.0f, 0.76f, 0.10f);
-            glDrawArrays(GL_LINES, 66, vrGizmoVertexCount_ - 66);
+            glDrawArrays(GL_LINES, 180, vrGizmoVertexCount_ - 180);
         }
         gl::VertexArray::Unbind();
         glLineWidth(1.0f);
