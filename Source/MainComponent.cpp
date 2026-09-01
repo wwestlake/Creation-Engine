@@ -89,7 +89,6 @@ MainComponent::MainComponent()
     headerBar_.onStop = [this] {
         SetPlaying(false);
         world_.ResetTick();
-        viewport_.ResetDemoEntityTransform();
         headerBar_.setStatusText("Stopped");
     };
     headerBar_.setStatusText("Editing");

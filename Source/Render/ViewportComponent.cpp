@@ -204,82 +204,9 @@ void ViewportComponent::RemovePointLight(int index) {
     pointLights_.erase(pointLights_.begin() + index);
 }
 
-void ViewportComponent::SeedDemoScene() {
-    if (hasSeededDemoScene_) {
-        return;
-    }
-    hasSeededDemoScene_ = true;
-
-    // A project scene may already have been restored before this OpenGL
-    // context becomes ready. The standard room is a new-project template,
-    // not content to inject into every authored scene. Checked via
-    // SceneFlags rather than Name: EngineSceneSerializer::restoreScene
-    // only attaches Name when the saved entity actually had one (e.g. an
-    // unnamed FBX-imported mesh won't), so a Name-based check can read a
-    // just-restored scene as empty and wrongly reseed the demo room on
-    // top of it. SceneFlags is unconditionally attached to every entity,
-    // by both restoreScene and this function's own addMesh lambda below.
-    {
-        const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
-        if (!world_.Registry().view<const scene::SceneFlags>().empty()) return;
-    }
-
-    // The starter scene is intentionally built only from the procedural
-    // primitive catalog. Store/bundled content can enrich it later, but the
-    // first playable room must work in a fresh project with no downloads.
-    const auto cube = assetCatalog_.Find("Cube");
-    const auto sphere = assetCatalog_.Find("Sphere");
-    if (cube.mesh == nullptr || sphere.mesh == nullptr) {
-        std::cout << "[scene] no cube asset in catalog; starter room will be empty." << std::endl;
-        return;
-    }
-
-    const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
-    auto addMesh = [&](const char* name, const scene::AssetCatalog::Asset& meshAsset,
-                       engine::Vec3 position, engine::Vec3 scale) {
-        const auto entity = world_.CreateEntity();
-        scene::Transform transform;
-        transform.position = position;
-        transform.scale = scale;
-        world_.Registry().emplace<scene::Name>(entity, scene::Name{ name });
-        world_.Registry().emplace<scene::Transform>(entity, transform);
-        world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ meshAsset.mesh, meshAsset.material });
-        world_.Registry().emplace<scene::SceneFlags>(entity, scene::SceneFlags{});
-        return entity;
-    };
-
-    demoEntity_ = addMesh("Center Block", cube, { 0.0f, 0.5f, 0.0f }, { 1.0f, 1.0f, 1.0f });
-    addMesh("Floor", cube, { 0.0f, -0.5f, 0.0f }, { 10.0f, 0.1f, 10.0f });
-    addMesh("North Wall", cube, { 0.0f, 2.0f, -10.0f }, { 10.0f, 2.5f, 0.1f });
-    addMesh("South Wall", cube, { 0.0f, 2.0f, 10.0f }, { 10.0f, 2.5f, 0.1f });
-    addMesh("West Wall", cube, { -10.0f, 2.0f, 0.0f }, { 0.1f, 2.5f, 10.0f });
-    addMesh("East Wall", cube, { 10.0f, 2.0f, 0.0f }, { 0.1f, 2.5f, 10.0f });
-    addMesh("Box A", cube, { -3.0f, 0.75f, -2.0f }, { 1.5f, 1.5f, 1.5f });
-    addMesh("Box B", cube, { 3.0f, 0.5f, -1.0f }, { 1.0f, 1.0f, 1.0f });
-
-    for (int index = 0; index < 4; ++index)
-    {
-        const auto ball = addMesh((std::string("Physics Ball ") + std::to_string(index + 1)).c_str(),
-                                  sphere, { -2.0f + static_cast<float>(index) * 1.35f,
-                                            3.0f + static_cast<float>(index) * 0.7f, 1.5f },
-                                  { 0.5f, 0.5f, 0.5f });
-        world_.Registry().emplace<engine::RigidBody>(ball, engine::RigidBody{ {}, 0.5f, -9.8f, 0.72f, true });
-    }
-
-    std::cout << "[scene] seeded starter room: floor, walls, boxes, glass placeholders, physics balls" << std::endl;
-}
-
 juce::Vector3D<float> ViewportComponent::SpawnPosition(float distance) const {
     const juce::ScopedLock lock(stateLock_);
     return lastCameraPosition_ + lastCameraForward_ * distance;
-}
-
-void ViewportComponent::ResetDemoEntityTransform() {
-    const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
-    if (demoEntity_ == entt::null || !world_.Registry().valid(demoEntity_)) {
-        return;
-    }
-    world_.Registry().get<scene::Transform>(demoEntity_) = scene::Transform{};
 }
 
 void ViewportComponent::ResolveProjectAssets(const creation::assets::ProjectSession& session,
@@ -799,12 +726,10 @@ void ViewportComponent::newOpenGLContextCreated() {
         return;
     }
 
-    SeedDemoScene();
-
     gridRenderer_.Build(10.0f, 1.0f);
     gridProgram_ = shaderComposer_->GetProgram(openGLContext_, "programs/grid.vert", "programs/grid.frag");
 
-    LogGLErrors("catalog load + scene seed + grid");
+    LogGLErrors("catalog load + grid");
 
     lastFrameTimeSeconds_ = juce::Time::getMillisecondCounterHiRes() / 1000.0;
     std::cout << "[render] newOpenGLContextCreated: done" << std::endl;
@@ -971,26 +896,6 @@ void ViewportComponent::renderOpenGL() {
     // panels on the message thread genuinely touch the same registry
     // concurrently with this render loop.
     const std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
-
-    // Demo-only: spins the seeded demo entity's Transform based on the
-    // World's tick count rather than wall-clock time, so the spin
-    // actually stops when the transport is paused/stopped (World::
-    // AdvanceTick() is gated on play state in MainComponent's timer) —
-    // an editor "playing" a paused simulation should look paused. Only
-    // writes when the tick has actually changed since the last frame
-    // (not unconditionally every frame): the inspector edits the same
-    // Transform from the message thread, and an unconditional per-frame
-    // write here would stomp any edit made while paused right back to
-    // the spin value on the very next frame.
-    const auto currentTick = world_.CurrentTick();
-    if (currentTick != lastSpinTick_) {
-        lastSpinTick_ = currentTick;
-        if (demoEntity_ != entt::null && world_.Registry().valid(demoEntity_) &&
-            world_.Registry().all_of<scene::Transform>(demoEntity_)) {
-            const float spinRadians = 0.5f * (static_cast<float>(currentTick) / 30.0f);
-            world_.Registry().get<scene::Transform>(demoEntity_).eulerRotationRadians.y = spinRadians;
-        }
-    }
 
     // Object definitions persist an asset identifier rather than a GPU
     // pointer. Resolve it only once the viewport owns a live GL context.
