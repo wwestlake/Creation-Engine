@@ -3,6 +3,19 @@ cmake_minimum_required(VERSION 3.22)
 set(CREATION_ENGINE_VERSION "0.0.1" CACHE STRING "Creation Engine product version")
 project(CreationEngine VERSION ${CREATION_ENGINE_VERSION} LANGUAGES C CXX)
 
+# Each suite agent works from its own workspace, D:/CreationSuite-Workspaces/
+# CreationSuite-<Agent>/apps/CreationEngine (see AGENTS.md's Multi-Agent
+# Rule) -- derive <Agent> from that path rather than hardcoding one agent's
+# name, so the POST_BUILD copy below always lands in the bin directory that
+# actually matches whoever is building.
+get_filename_component(CREATION_ENGINE_WORKSPACE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+get_filename_component(CREATION_ENGINE_WORKSPACE_NAME "${CREATION_ENGINE_WORKSPACE_DIR}" NAME)
+string(REGEX REPLACE "^CreationSuite-" "" CREATION_ENGINE_AGENT_NAME "${CREATION_ENGINE_WORKSPACE_NAME}")
+string(TOLOWER "${CREATION_ENGINE_AGENT_NAME}" CREATION_ENGINE_AGENT_NAME)
+if (NOT CREATION_ENGINE_AGENT_NAME)
+    set(CREATION_ENGINE_AGENT_NAME "dev")
+endif()
+
 find_path(CREATION_OPENXR_INCLUDE_DIR NAMES openxr/openxr.h)
 find_library(CREATION_OPENXR_LOADER_LIBRARY NAMES openxr_loader)
 if (CREATION_OPENXR_INCLUDE_DIR AND CREATION_OPENXR_LOADER_LIBRARY)
@@ -73,23 +86,23 @@ juce_add_gui_app(CreationEngineEditor
 )
 
 # Mirrors the built executable into the workspace-level shared bin
-# directory (D:\CreationSuite-Workspaces\codex-<config>-bin) so it's
+# directory (D:\CreationSuite-Workspaces\<agent>-<config>-bin) so it's
 # reachable at a stable path without needing OS symlink privileges.
 # Every suite agent does this for its own repo -- see AGENTS.md.
 add_custom_command(TARGET CreationEngineEditor POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/codex-$<LOWER_CASE:$<CONFIG>>-bin"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineEditor>" "D:/CreationSuite-Workspaces/codex-$<LOWER_CASE:$<CONFIG>>-bin/"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineEditor>" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/EngineLifecycle.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodes.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodesLibrary.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/EnginePack" "$<TARGET_FILE_DIR:CreationEngineEditor>/EnginePack"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/EnginePack" "D:/CreationSuite-Workspaces/codex-$<LOWER_CASE:$<CONFIG>>-bin/EnginePack"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/EnginePack" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/EnginePack"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/models" "$<TARGET_FILE_DIR:CreationEngineEditor>/EnginePack/models"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/models" "D:/CreationSuite-Workspaces/codex-$<LOWER_CASE:$<CONFIG>>-bin/EnginePack/models"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/models" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/EnginePack/models"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/packages" "$<TARGET_FILE_DIR:CreationEngineEditor>/EnginePack/packages"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/packages" "D:/CreationSuite-Workspaces/codex-$<LOWER_CASE:$<CONFIG>>-bin/EnginePack/packages"
-    COMMENT "Copying CreationEngineEditor to the shared codex bin directory"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/packages" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/EnginePack/packages"
+    COMMENT "Copying CreationEngineEditor to the shared ${CREATION_ENGINE_AGENT_NAME} bin directory"
 )
 
 juce_generate_juce_header(CreationEngineEditor)
@@ -357,13 +370,13 @@ juce_add_console_app(CreationEngineServer
 )
 
 # Mirrors the built executable into the workspace-level shared bin
-# directory (D:\CreationSuite-Workspaces\codex-<config>-bin) so it's
+# directory (D:\CreationSuite-Workspaces\<agent>-<config>-bin) so it's
 # reachable at a stable path without needing OS symlink privileges.
 # Every suite agent does this for its own repo -- see AGENTS.md.
 add_custom_command(TARGET CreationEngineServer POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/codex-$<LOWER_CASE:$<CONFIG>>-bin"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineServer>" "D:/CreationSuite-Workspaces/codex-$<LOWER_CASE:$<CONFIG>>-bin/"
-    COMMENT "Copying CreationEngineServer to the shared codex bin directory"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineServer>" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/"
+    COMMENT "Copying CreationEngineServer to the shared ${CREATION_ENGINE_AGENT_NAME} bin directory"
 )
 
 juce_generate_juce_header(CreationEngineServer)

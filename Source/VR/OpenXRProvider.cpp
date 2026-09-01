@@ -8,6 +8,13 @@
 #include <string>
 #include <vector>
 
+// LogVR() below uses juce::File/String/FileOutputStream unconditionally, even
+// when OpenXR itself is unavailable, so juce_core must not be gated behind
+// CE_HAS_OPENXR. juce_opengl.h happens to pull it in transitively, which
+// masked this on machines where an OpenXR SDK is present -- it broke as soon
+// as CE_HAS_OPENXR was 0 and that include disappeared.
+#include <juce_core/juce_core.h>
+
 #if CE_HAS_OPENXR
 #include <juce_opengl/juce_opengl.h>
 #endif
@@ -27,9 +34,9 @@
 #include <windows.h>
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
-#endif
 
 using namespace juce::gl;
+#endif
 
 namespace ce::vr {
 
