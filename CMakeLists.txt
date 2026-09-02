@@ -159,8 +159,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Assets/AssetPackStore.cpp
     Source/Assets/ProjectContentAssetStore.h
     Source/Assets/ProjectContentAssetStore.cpp
-    Source/Frust/BehaviorCatalog.h
-    Source/Frust/BehaviorCatalog.cpp
+    Source/Frust/PodCatalog.h
+    Source/Frust/PodCatalog.cpp
     Source/Frust/EngineFrustHost.h
     Source/Frust/EngineFrustHost.cpp
     Source/Frust/EngineNodeLibraryLoader.h

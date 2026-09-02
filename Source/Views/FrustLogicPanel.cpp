@@ -47,7 +47,7 @@ private:
 
 FrustLogicPanel::~FrustLogicPanel() = default;
 
-FrustLogicPanel::FrustLogicPanel(frust::EngineFrustHost& frustHost, frust::BehaviorCatalog& catalog)
+FrustLogicPanel::FrustLogicPanel(frust::EngineFrustHost& frustHost, frust::PodCatalog& catalog)
     : frustHost_(frustHost),
       catalog_(catalog),
       registry_(CopyRegistry(frustHost.nodeLibraries())),
@@ -65,7 +65,7 @@ FrustLogicPanel::FrustLogicPanel(frust::EngineFrustHost& frustHost, frust::Behav
     newBehaviorButton_.onClick = [this] {
         const auto name = newNameEditor_.getText().trim();
         if (name.isEmpty()) return;
-        catalog_.GetOrCreate(name); // registers an empty graph under this name.
+        catalog_.GetOrCreateGraph(name, frust::PodKind::Behavior); // registers an empty graph under this name.
         newNameEditor_.clear();
         RefreshBrowseList();
         OpenBehavior(name);
@@ -113,7 +113,7 @@ FrustLogicPanel::FrustLogicPanel(frust::EngineFrustHost& frustHost, frust::Behav
 
 void FrustLogicPanel::RefreshBrowseList() {
     rows_.clear();
-    auto names = catalog_.Names();
+    auto names = catalog_.Names(frust::PodKind::Behavior);
     std::sort(names.begin(), names.end(), [](const juce::String& a, const juce::String& b) {
         return a.compareIgnoreCase(b) < 0;
     });
@@ -130,7 +130,7 @@ void FrustLogicPanel::OpenBehavior(const juce::String& name) {
     // the catalog's stored graph while you're still mid-edit) goes through
     // the same .frgraph round-trip Save uses below, not a direct
     // assignment.
-    node_system::Graph& stored = catalog_.GetOrCreate(name);
+    node_system::Graph& stored = catalog_.GetOrCreateGraph(name, frust::PodKind::Behavior);
     std::string error;
     auto copy = node_system::DeserializeGraph(node_system::SerializeGraph(stored), error);
     if (!copy) {
@@ -200,7 +200,7 @@ void FrustLogicPanel::SaveGraph() {
         status_.setColour(juce::Label::textColourId, juce::Colour(0xffff6b6b));
         return;
     }
-    catalog_.GetOrCreate(openName_) = std::move(*copy);
+    catalog_.GetOrCreateGraph(openName_, frust::PodKind::Behavior) = std::move(*copy);
     status_.setText("Saved \"" + openName_ + "\"", juce::dontSendNotification);
     status_.setColour(juce::Label::textColourId, juce::Colour(0xff67e8a5));
 }

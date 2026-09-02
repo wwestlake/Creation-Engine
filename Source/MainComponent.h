@@ -7,8 +7,8 @@
 
 #include "engine/simulation.h"
 #include "engine/world.h"
-#include "Frust/BehaviorCatalog.h"
 #include "Frust/EngineFrustHost.h"
+#include "Frust/PodCatalog.h"
 #include "Interaction/EditorInteraction.h"
 #include "Render/ViewportComponent.h"
 #include "Views/BehaviorAttachmentPanel.h"
@@ -109,11 +109,12 @@ private:
     ce::engine::World world_;
     ce::interaction::EditorInteraction interactions_ { world_ };
     ce::frust::EngineFrustHost frustHost_ { world_ };
-    // Named registry of Behavior graphs (docs/BEHAVIOR_COMPONENT_MODEL.md)
-    // -- owned here since both FrustLogicPanel (editing) and
-    // behaviorAttachmentPanel_ (attaching a compiled Behavior to a
-    // selected entity) need the same catalog.
-    ce::frust::BehaviorCatalog behaviorCatalog_;
+    // Named registry of Pods (docs/BEHAVIOR_COMPONENT_MODEL.md, and the
+    // Pod Management System plan generalizing it) -- owned here since
+    // both FrustLogicPanel (editing) and behaviorAttachmentPanel_
+    // (attaching a compiled Behavior Pod to a selected entity) need the
+    // same catalog.
+    ce::frust::PodCatalog podCatalog_;
     bool isPlaying_ = false;
 
     CreationSuiteHeaderBar headerBar_;
@@ -164,7 +165,7 @@ private:
     // see docs/BEHAVIOR_COMPONENT_MODEL.md. Sits alongside
     // pbrMaterialPanel_ for the same reason: both are per-selected-entity
     // property editors.
-    ce::BehaviorAttachmentPanel behaviorAttachmentPanel_ { world_, frustHost_, behaviorCatalog_ };
+    ce::BehaviorAttachmentPanel behaviorAttachmentPanel_ { world_, frustHost_, podCatalog_ };
 
     ce::LightPanel lightPanel_;
 
