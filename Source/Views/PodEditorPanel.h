@@ -47,6 +47,11 @@ private:
     void ShowEditMode();
     void SaveGraph();
     void CompileAndLoad();
+    void AddInterfaceInput();
+    void BindInterfaceInputAt(int index);
+    void RemoveInterfaceInputAt(int index);
+    void BindInterfaceOutput();
+    void RefreshInterfaceRows();
 
     frust::EngineFrustHost& frustHost_;
     frust::PodCatalog& catalog_;
@@ -55,6 +60,11 @@ private:
     node_system::Graph graph_ { "untitled", node_system::GraphTarget::Behavior };
     node_system::NodeTypeRegistry registry_;
     juce::String openName_;
+    // Tracks the graph canvas's current selection -- reused by the
+    // interface editor's "Bind to Selected" buttons (Phase 6) so binding
+    // a declared input/output pin doesn't need its own separate pin-pick
+    // UI, just the same selection wiring NodeInspector already consumes.
+    node_system::NodeId selectedNodeId_ = 0;
 
     // --- Browse mode -- flat Kind-grouped sections, no folder tree
     // (Pod Management System plan's v1 scope decision). ---
@@ -80,6 +90,19 @@ private:
     creation::node_editor_ui::NodePalette palette_;
     creation::node_editor_ui::NodeGraphComponent graphView_;
     creation::node_editor_ui::NodeInspector inspector_;
+
+    // --- Interface editor (Phase 6) -- explicit, author-declared typed
+    // inputs/outputs, replacing the auto-detect resultNode/entryNode
+    // heuristic. Single output for v1 (plan's scope decision). Shares
+    // the right-hand column with inspector_. ---
+    juce::Label interfaceLabel_ { {}, "Interface" };
+    juce::TextEditor newInputNameEditor_;
+    juce::ComboBox newInputTypeCombo_;
+    juce::TextButton addInputButton_ { "+ Add Input" };
+    class InterfaceInputRow;
+    juce::OwnedArray<InterfaceInputRow> interfaceInputRows_;
+    juce::Label outputRowLabel_;
+    juce::TextButton bindOutputButton_ { "Bind Output to Selected" };
 
     bool editing_ = false;
 
