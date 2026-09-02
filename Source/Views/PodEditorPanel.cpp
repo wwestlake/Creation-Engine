@@ -223,7 +223,7 @@ PodEditorPanel::PodEditorPanel(frust::EngineFrustHost& frustHost, frust::PodCata
       registry_(CopyRegistry(frustHost.nodeLibraries())),
       palette_(registry_),
       graphView_(graph_, registry_),
-      inspector_(graph_)
+      inspector_(graph_, &registry_)
 {
     browseTitle_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
     browseTitle_.setColour(juce::Label::textColourId, juce::Colours::white);
