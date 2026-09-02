@@ -74,6 +74,7 @@ private:
     juce::Label hint_ { {}, "Drag nodes from the palette, connect pins, then Save and Compile." };
     juce::TextButton saveButton_ { "Save" };
     juce::TextButton compileButton_ { "Compile" };
+    juce::ToggleButton exposeAsNodeToggle_ { "Expose as node" };
     juce::Label status_;
     juce::TextEditor sourceView_;
     creation::node_editor_ui::NodePalette palette_;

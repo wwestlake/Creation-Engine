@@ -102,6 +102,13 @@ PodEditorPanel::PodEditorPanel(frust::EngineFrustHost& frustHost, frust::PodCata
     compileButton_.setTooltip("Generate FRust, write it as a cached loadable pod, and load it -- not just preview text.");
     addAndMakeVisible(compileButton_);
 
+    exposeAsNodeToggle_.setTooltip("Make this Pod's compiled output usable as a node inside other graphs.");
+    exposeAsNodeToggle_.onClick = [this] {
+        if (openName_.isEmpty()) return;
+        catalog_.SetExposeAsNode(openName_, exposeAsNodeToggle_.getToggleState());
+    };
+    addAndMakeVisible(exposeAsNodeToggle_);
+
     status_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
     addAndMakeVisible(status_);
 
@@ -175,6 +182,7 @@ void PodEditorPanel::OpenPod(const juce::String& name) {
     graph_ = std::move(*copy);
     openName_ = name;
     editTitle_.setText(KindLabel(kind) + " Pod: " + name, juce::dontSendNotification);
+    exposeAsNodeToggle_.setToggleState(catalog_.ExposeAsNode(name), juce::dontSendNotification);
     graphView_.GraphReplaced();
     sourceView_.setText("Compile to see generated FRust and validation errors here.", juce::dontSendNotification);
     status_.setText(juce::String(static_cast<int>(registry_.Types().size())) + " FRust nodes available", juce::dontSendNotification);
@@ -198,6 +206,7 @@ void PodEditorPanel::ShowBrowseMode() {
     hint_.setVisible(false);
     saveButton_.setVisible(false);
     compileButton_.setVisible(false);
+    exposeAsNodeToggle_.setVisible(false);
     status_.setVisible(false);
     sourceView_.setVisible(false);
     palette_.setVisible(false);
@@ -222,6 +231,7 @@ void PodEditorPanel::ShowEditMode() {
     hint_.setVisible(true);
     saveButton_.setVisible(true);
     compileButton_.setVisible(true);
+    exposeAsNodeToggle_.setVisible(true);
     status_.setVisible(true);
     sourceView_.setVisible(true);
     palette_.setVisible(true);
@@ -264,6 +274,7 @@ void PodEditorPanel::CompileAndLoad() {
     // see docs/BEHAVIOR_COMPONENT_MODEL.md section 5.
     options.functionName = "on_tick";
     options.manifestJson = "{\"name\":\"" + openName_.toStdString() + "\",\"version\":\"0.1.0\"}";
+    options.exposeAsNode = catalog_.ExposeAsNode(openName_);
     for (const auto& [id, library] : frustHost_.nodeLibraries().Libraries())
         options.sourceModules.insert(options.sourceModules.end(), library.frustSourceModules.begin(),
                                       library.frustSourceModules.end());
@@ -385,6 +396,8 @@ void PodEditorPanel::resized()
     saveButton_.setBounds(footerHeader.removeFromLeft(80));
     footerHeader.removeFromLeft(8);
     compileButton_.setBounds(footerHeader.removeFromLeft(100));
+    footerHeader.removeFromLeft(8);
+    exposeAsNodeToggle_.setBounds(footerHeader.removeFromLeft(130));
     footerHeader.removeFromLeft(8);
     status_.setBounds(footerHeader);
     sourceView_.setBounds(footer.reduced(0, 4));
