@@ -45,13 +45,14 @@ private:
     void OpenPod(const juce::String& name);
     void ShowBrowseMode();
     void ShowEditMode();
-    void SaveGraph();
+    void SaveContent();
     void CompileAndLoad();
     void AddInterfaceInput();
     void BindInterfaceInputAt(int index);
     void RemoveInterfaceInputAt(int index);
     void BindInterfaceOutput();
     void RefreshInterfaceRows();
+    void InsertSnippet();
 
     frust::EngineFrustHost& frustHost_;
     frust::PodCatalog& catalog_;
@@ -72,6 +73,10 @@ private:
     juce::TextEditor newNameEditor_;
     juce::TextButton newBehaviorPodButton_ { "New Behavior Pod" };
     juce::TextButton newProcessingPodButton_ { "New Processing Pod" };
+    // Graph vs hand-typed FRust source (Phase 8) -- both authoring modes
+    // feed the same save/compile/reflect pipeline, this just picks which
+    // one a newly created Pod starts as.
+    juce::ComboBox newAuthoringModeCombo_;
     juce::Label behaviorSectionLabel_ { {}, "Behavior Pods" };
     juce::Label processingSectionLabel_ { {}, "Processing Pods" };
     class PodRow;
@@ -103,6 +108,16 @@ private:
     juce::OwnedArray<InterfaceInputRow> interfaceInputRows_;
     juce::Label outputRowLabel_;
     juce::TextButton bindOutputButton_ { "Bind Output to Selected" };
+
+    // --- Source Pod editing (Phase 8) -- shown instead of
+    // palette_/graphView_/inspector_/the interface editor when the open
+    // Pod's authoring mode is Source. A Source Pod's model IS its FRust
+    // text directly; Compile skips the graph-to-text step entirely. ---
+    juce::CodeDocument sourceCodeDocument_;
+    std::unique_ptr<juce::CodeTokeniser> frustTokeniser_;
+    std::unique_ptr<juce::CodeEditorComponent> sourceEditor_;
+    juce::ComboBox snippetCombo_;
+    juce::TextButton insertSnippetButton_ { "Insert" };
 
     bool editing_ = false;
 
