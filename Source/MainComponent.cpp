@@ -33,6 +33,7 @@ constexpr DockPanelMenuEntry kDockPanelMenuEntries[] = {
     { "viewport", "Scene Viewport" },
     { "transform", "Transform" },
     { "materials-pbr", "Material Inspector" },
+    { "behaviors", "Behaviors" },
     { "lighting", "Lighting" },
     { "logic", "FRust Logic" },
     { "materials", "Materials" },
@@ -94,7 +95,7 @@ MainComponent::MainComponent()
     if (!frustHost_.loadBundled(frustError)) {
         juce::Logger::writeToLog("Creation Engine FRust host: " + juce::String(frustError));
     }
-    frustAutomationPanel_ = std::make_unique<ce::views::FrustLogicPanel>(frustHost_.nodeLibraries());
+    frustAutomationPanel_ = std::make_unique<ce::views::FrustLogicPanel>(frustHost_, behaviorCatalog_);
     frustHost_.setSceneTransitionRequestHandler([this](const std::string& reference) {
         const juce::String sceneReference(reference);
         for (const auto& scene : activeGame_.scenes)
@@ -160,6 +161,7 @@ MainComponent::MainComponent()
         interactions_.select(entity);
         transformPanel_.SetSelectedEntity(entity);
         pbrMaterialPanel_.SetSelectedEntity(entity);
+        behaviorAttachmentPanel_.SetSelectedEntity(entity);
     };
     explorerPanel_.onGameSelected = [this](const juce::String& gameId) { selectGame(gameId); };
     explorerPanel_.onSceneSelected = [this](const juce::String& sceneId) { selectScene(sceneId); };
@@ -404,6 +406,7 @@ void MainComponent::initialiseDockingWorkspace()
     dockManager_->registerPanel("viewport", "Scene Viewport", std::make_unique<NonOwningPanelHost>(viewport_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("transform", "Transform", std::make_unique<NonOwningPanelHost>(transformPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("materials-pbr", "Material Inspector", std::make_unique<NonOwningPanelHost>(pbrMaterialPanel_), CreationDock::DockTargetZone::Right);
+    dockManager_->registerPanel("behaviors", "Behaviors", std::make_unique<NonOwningPanelHost>(behaviorAttachmentPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("lighting", "Lighting", std::make_unique<NonOwningPanelHost>(lightPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("logic", "FRust Logic", std::make_unique<NonOwningPanelHost>(*frustAutomationPanel_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("materials", "Materials", std::make_unique<NonOwningPanelHost>(materialsPanel_), CreationDock::DockTargetZone::CenterTab);

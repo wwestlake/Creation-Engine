@@ -7,9 +7,11 @@
 
 #include "engine/simulation.h"
 #include "engine/world.h"
+#include "Frust/BehaviorCatalog.h"
 #include "Frust/EngineFrustHost.h"
 #include "Interaction/EditorInteraction.h"
 #include "Render/ViewportComponent.h"
+#include "Views/BehaviorAttachmentPanel.h"
 #include "Views/ContentBrowserPanel.h"
 #include "Views/HierarchyPanel.h"
 #include "Views/ImportPanel.h"
@@ -107,6 +109,11 @@ private:
     ce::engine::World world_;
     ce::interaction::EditorInteraction interactions_ { world_ };
     ce::frust::EngineFrustHost frustHost_ { world_ };
+    // Named registry of Behavior graphs (docs/BEHAVIOR_COMPONENT_MODEL.md)
+    // -- owned here since both FrustLogicPanel (editing) and
+    // behaviorAttachmentPanel_ (attaching a compiled Behavior to a
+    // selected entity) need the same catalog.
+    ce::frust::BehaviorCatalog behaviorCatalog_;
     bool isPlaying_ = false;
 
     CreationSuiteHeaderBar headerBar_;
@@ -152,6 +159,12 @@ private:
     // Not to be confused with materialsPanel_ below (the "Materials" dock
     // panel's future node-based material editor).
     ce::MaterialsPanel pbrMaterialPanel_;
+
+    // Selection-driven attach/detach UI for scene::BehaviorAttachments --
+    // see docs/BEHAVIOR_COMPONENT_MODEL.md. Sits alongside
+    // pbrMaterialPanel_ for the same reason: both are per-selected-entity
+    // property editors.
+    ce::BehaviorAttachmentPanel behaviorAttachmentPanel_ { world_, frustHost_, behaviorCatalog_ };
 
     ce::LightPanel lightPanel_;
 
