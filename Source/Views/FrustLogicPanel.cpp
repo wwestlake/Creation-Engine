@@ -10,6 +10,12 @@ namespace
 node_system::NodeTypeRegistry CopyRegistry(const node_system::NodeLibraryRegistry& libraries)
 {
     node_system::NodeTypeRegistry result;
+    // Control-flow nodes (branch/sequence/for/while/break/continue/return)
+    // are native to NodeSystem itself, not reflected from any FRust
+    // plugin -- registerNodeLibraries() never sees them, so they have to
+    // be added here explicitly or the palette never offers them at all,
+    // even though frust_codegen.cpp has real lowering for every one.
+    node_system::RegisterCoreControlFlowNodes(result);
     for (const auto& [name, descriptor] : libraries.TypeRegistry().Types())
         result.Register(descriptor);
     return result;

@@ -7,6 +7,7 @@
 
 #include "Frust/EngineFrustHost.h"
 #include "Frust/PodCatalog.h"
+#include "node_system/core_control_flow.h"
 #include "node_system/frgraph_serialization.h"
 #include "node_system/frust_codegen.h"
 #include "node_system/node_library.h"
