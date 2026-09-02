@@ -70,3 +70,41 @@ single-value nodes already compile into native FRust calls. Callable, loop,
 stream, timeline, and curve nodes share the declaration/reflection pipeline;
 their control-flow lowering is the next compiler phase, not a graph interpreter
 fallback.
+
+## Single-file self-reflection (Pod Management System plan, Phase 4)
+
+**Confirmed: a single-file plugin self-reflects its own `node` declarations.
+The two-file wrapper above is a reuse/organization convention, not a
+requirement of the reflection mechanism.**
+
+Verified directly from the reflecting compiler's own source (not assumed,
+not inferred from this doc), in
+`third_party/FrustLang/projects/01_language_paradigms/02_functional/Codegen.h`,
+`compileNodeReflection()`:
+
+```cpp
+bool compileNodeReflection(const Program& prog) {
+    std::vector<const NodeDecl*> nodes;
+    for (const auto* decl : prog.decls)
+        if (decl->kind == DeclKind::Node) nodes.push_back(decl->nodeDecl);
+    ...
+```
+
+This scans every top-level declaration in the compiled `Program` -- which
+already includes anything pulled in via `use self::`, since imports are
+flattened before codegen runs -- for `DeclKind::Node`, with no check on
+which source file or module a declaration came from. A `.frust` file with
+`node pure pub fn ...` declared directly, no `use self::`, no
+`nodeSourceModules` entry at all, produces the exact same
+`kFrustNodeReflectionGlobalName` LLVM global
+(`FrustPluginHost.cpp::MergeNodeReflection` reads that global, and never
+gates on `nodeSourceModules` for *whether* reflection happened -- only for
+what to list in the resulting descriptor's informational `sourceModules`
+field, which downstream graph compilation uses to know what to `use self::`
+import).
+
+**Consequence for the Pod compile pipeline (Phase 5)**: a compiled Pod that
+wants to expose itself as a node does not need the two-file manifest+sibling
+split -- one generated `.frust` file with the graph's output prefixed
+`node pure`/`node callable` instead of plain `pub fn` is sufficient. This
+was the smaller of the two branches the Pod plan flagged as possible.
