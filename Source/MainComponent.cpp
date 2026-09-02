@@ -37,6 +37,7 @@ constexpr DockPanelMenuEntry kDockPanelMenuEntries[] = {
     { "logic", "FRust Logic" },
     { "materials", "Materials" },
     { "assets", "Assets & Import" },
+    { "content-browser", "Content Browser" },
     { "server", "Server" },
     { "settings", "Settings" },
     { "runtime-status", "Runtime Status" },
@@ -60,7 +61,8 @@ MainComponent::MainComponent()
       pbrMaterialPanel_(world_),
       importPanel_(world_, viewport_, projectSession_),
       lightPanel_(viewport_),
-      materialsPanel_(viewport_) {
+      materialsPanel_(viewport_),
+      contentBrowserPanel_(viewport_, importPanel_) {
     commandManager_.registerAllCommandsForTarget(this);
     commandManager_.getKeyMappings()->addKeyPress(
         kRunGameClientCommand,
@@ -406,6 +408,7 @@ void MainComponent::initialiseDockingWorkspace()
     dockManager_->registerPanel("logic", "FRust Logic", std::make_unique<NonOwningPanelHost>(*frustAutomationPanel_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("materials", "Materials", std::make_unique<NonOwningPanelHost>(materialsPanel_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("assets", "Assets & Import", std::make_unique<NonOwningPanelHost>(importPanel_), CreationDock::DockTargetZone::CenterTab);
+    dockManager_->registerPanel("content-browser", "Content Browser", std::make_unique<NonOwningPanelHost>(contentBrowserPanel_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("server", "Server", std::make_unique<NonOwningPanelHost>(serverPanel_), CreationDock::DockTargetZone::Bottom);
     dockManager_->registerPanel("settings", "Settings", std::make_unique<NonOwningPanelHost>(settingsPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("runtime-status", "Runtime Status", std::make_unique<NonOwningPanelHost>(tickLabel_), CreationDock::DockTargetZone::Bottom);
@@ -583,6 +586,7 @@ bool MainComponent::openActiveGame(juce::String& errorMessage)
             if (scene.id == activeGame_.entrySceneId) { activeScene_ = scene; break; }
     if (activeScene_.id.isEmpty() && !activeGame_.scenes.isEmpty()) activeScene_ = activeGame_.scenes.getFirst();
     importPanel_.SetProjectContent(&projectSession_, activeGame_.assetRoot());
+    contentBrowserPanel_.SetProjectContent(&projectSession_);
     if (!ce::project::EngineGameDocumentStore::loadScene(projectSession_, activeGame_, activeScene_, world_, errorMessage)) return false;
     viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
     frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
@@ -613,6 +617,7 @@ void MainComponent::selectGame(const juce::String& gameId)
             if (scene.id == activeGame_.entrySceneId) { activeScene_ = scene; break; }
         if (activeScene_.id.isEmpty() && !activeGame_.scenes.isEmpty()) activeScene_ = activeGame_.scenes.getFirst();
         importPanel_.SetProjectContent(&projectSession_, activeGame_.assetRoot());
+        contentBrowserPanel_.SetProjectContent(&projectSession_);
         juce::String error;
         if (!ce::project::EngineGameDocumentStore::loadScene(projectSession_, activeGame_, activeScene_, world_, error))
             headerBar_.setStatusText("Could not open game: " + error);
@@ -668,6 +673,7 @@ void MainComponent::createGame()
         safeThis->activeGame_ = game;
         safeThis->activeScene_ = scene;
         safeThis->importPanel_.SetProjectContent(&safeThis->projectSession_, safeThis->activeGame_.assetRoot());
+        safeThis->contentBrowserPanel_.SetProjectContent(&safeThis->projectSession_);
         safeThis->refreshExplorerPanel();
         safeThis->saveAppSettings();
         safeThis->headerBar_.setStatusText("Created " + game.name + " / " + scene.name);

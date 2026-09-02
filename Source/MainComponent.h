@@ -10,6 +10,7 @@
 #include "Frust/EngineFrustHost.h"
 #include "Interaction/EditorInteraction.h"
 #include "Render/ViewportComponent.h"
+#include "Views/ContentBrowserPanel.h"
 #include "Views/HierarchyPanel.h"
 #include "Views/ImportPanel.h"
 #include "Views/FrustLogicPanel.h"
@@ -165,6 +166,13 @@ private:
     // constructor needs a fully-constructed ViewportComponent& to reach
     // the asset catalog it applies compiled materials to.
     ce::views::MaterialGraphPanel materialsPanel_;
+
+    // Tool-local content browser (models/textures/audio this project has
+    // imported) -- see docs/architecture/Suite-Asset-Pipeline-Model.md.
+    // Declared after importPanel_ for the same reason materialsPanel_ is
+    // declared after viewport_: its constructor needs a fully-constructed
+    // ImportPanel& to reach the AudioCatalog it evicts from on delete.
+    ce::views::ContentBrowserPanel contentBrowserPanel_;
 
     // --- Other modes: stand-ins until their milestones land ---
     std::unique_ptr<ce::views::FrustLogicPanel> frustAutomationPanel_;

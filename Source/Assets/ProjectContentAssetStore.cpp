@@ -14,7 +14,9 @@ bool ProjectContentAssetStore::importSource(creation::assets::ProjectSession& se
                                             const juce::String& category,
                                             const juce::StringArray& tags,
                                             creation::assets::AssetDescriptor& descriptor,
-                                            juce::String& errorMessage)
+                                            juce::String& errorMessage,
+                                            const juce::String& displayNameOverride,
+                                            const juce::String& description)
 {
     if (! session.isValid())
     {
@@ -24,7 +26,8 @@ bool ProjectContentAssetStore::importSource(creation::assets::ProjectSession& se
 
     creation::assets::ProjectAssetService::ImportOptions options;
     options.kind = kind;
-    options.displayName = sourceFile.getFileNameWithoutExtension();
+    options.displayName = displayNameOverride.isNotEmpty() ? displayNameOverride : sourceFile.getFileNameWithoutExtension();
+    options.description = description;
     const auto sourceBundleRoot = gameAssetRoot + "sources/" + sourceFile.getFileNameWithoutExtension() + "/";
     options.logicalPath = sourceBundleRoot + sourceFile.getFileName();
     options.category = category;

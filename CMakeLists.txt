@@ -224,6 +224,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/MaterialGraphPanel.cpp
     Source/Views/ImportPanel.h
     Source/Views/ImportPanel.cpp
+    Source/Views/ContentBrowserPanel.h
+    Source/Views/ContentBrowserPanel.cpp
     Source/Scene/Components.h
     Source/Scene/EngineSceneSerializer.h
     Source/Scene/EngineSceneSerializer.cpp

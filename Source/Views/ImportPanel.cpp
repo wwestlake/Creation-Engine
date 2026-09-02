@@ -173,20 +173,79 @@ void ImportPanel::filesDropped(const juce::StringArray& files, int, int) {
     // non-glTF importers entirely) ignore this field.
     context_.animationOptions = BuildAnimationImportOptions();
 
-    for (const auto& path : files) {
-        const juce::File file(path);
+    pendingDropFiles_.clear();
+    for (const auto& path : files) pendingDropFiles_.add(juce::File(path));
+    ProcessNextPendingDropFile();
+}
+
+void ImportPanel::ProcessNextPendingDropFile() {
+    while (!pendingDropFiles_.isEmpty()) {
+        const auto file = pendingDropFiles_.removeAndReturn(0);
         auto* importer = registry_.FindFor(file);
         if (importer == nullptr) {
             AppendLogLine("[skip] " + file.getFileName() + " -- no importer registered for this file type.");
             continue;
         }
 
-        const auto result = importer->Import(file, context_);
-        AppendLogLine(juce::String(result.success ? "[ok]   " : "[fail] ") + file.getFileName() + " (" +
-                      importer->DisplayName() + "): " + result.message);
+        // First-import metadata popup (Suite-Asset-Pipeline-Model.md,
+        // Phase 3) -- cleared per file, not sticky across a multi-file
+        // drop. Textures opt out (NeedsImportMetadata() == false); every
+        // drop today is effectively a first import since there's no
+        // reimport path yet distinguishing "this asset already exists"
+        // (that's Phase 4) -- once one exists, it'll skip this popup.
+        context_.pendingDisplayName.clear();
+        context_.pendingDescription.clear();
+        context_.pendingTags.clear();
+
+        if (!importer->NeedsImportMetadata()) {
+            RunImporterAndLog(*importer, file);
+            continue;
+        }
+
+        // Suspends this loop -- the popup's callback resumes it by
+        // calling ProcessNextPendingDropFile() again for whatever's left.
+        ShowImportMetadataPopup(file, *importer);
+        return;
     }
 
     RebuildAudioClipRows();
+}
+
+void ImportPanel::ShowImportMetadataPopup(const juce::File& file, import::AssetImporter& importer) {
+    const auto suggestedName = file.getFileNameWithoutExtension();
+    auto alert = std::make_unique<juce::AlertWindow>("Import: " + suggestedName, "Add details for this asset.",
+                                                       juce::AlertWindow::NoIcon);
+    alert->addTextEditor("name", suggestedName, "Name");
+    alert->addTextEditor("description", "", "Description (optional)");
+    alert->addTextEditor("tags", "", "Tags, comma-separated (optional)");
+    alert->addButton("Import", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    alert->addButton("Skip This File", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+    auto* alertPtr = alert.release();
+    auto* importerPtr = &importer;
+    alertPtr->enterModalState(
+        true,
+        juce::ModalCallbackFunction::create([this, alertPtr, file, importerPtr](int result) {
+            std::unique_ptr<juce::AlertWindow> owned(alertPtr); // reads fields below, then frees the window at scope exit.
+            if (result == 1) {
+                context_.pendingDisplayName = owned->getTextEditorContents("name").trim();
+                context_.pendingDescription = owned->getTextEditorContents("description").trim();
+                context_.pendingTags = juce::StringArray::fromTokens(owned->getTextEditorContents("tags"), ",", "");
+                for (auto& tag : context_.pendingTags) tag = tag.trim();
+                context_.pendingTags.removeEmptyStrings();
+                RunImporterAndLog(*importerPtr, file);
+            } else {
+                AppendLogLine("[skip] " + file.getFileName() + " -- import cancelled.");
+            }
+            ProcessNextPendingDropFile();
+        }),
+        false);
+}
+
+void ImportPanel::RunImporterAndLog(import::AssetImporter& importer, const juce::File& file) {
+    const auto result = importer.Import(file, context_);
+    AppendLogLine(juce::String(result.success ? "[ok]   " : "[fail] ") + file.getFileName() + " (" +
+                  importer.DisplayName() + "): " + result.message);
 }
 
 void ImportPanel::RebuildAudioClipRows() {

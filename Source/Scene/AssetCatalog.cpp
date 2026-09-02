@@ -1,5 +1,6 @@
 #include "Scene/AssetCatalog.h"
 
+#include <algorithm>
 #include <iostream>
 
 #include "Assets/AssetPackStore.h"
@@ -158,7 +159,7 @@ bool AssetCatalog::AddFromModel(const juce::String& name, const LoadedModel& mod
 
     const std::lock_guard<std::mutex> lock(mutex_);
     if (texture != nullptr) {
-        ownedTextures_.push_back(std::move(texture));
+        ownedTextures_[name.toStdString()] = std::move(texture);
     }
     if (assets_.find(name.toStdString()) == assets_.end()) {
         names_.push_back(name);
@@ -175,7 +176,7 @@ bool AssetCatalog::Add(const juce::String& name, std::shared_ptr<Mesh> mesh, std
 
     const std::lock_guard<std::mutex> lock(mutex_);
     if (ownedTexture != nullptr) {
-        ownedTextures_.push_back(std::move(ownedTexture));
+        ownedTextures_[name.toStdString()] = std::move(ownedTexture);
     }
     if (assets_.find(name.toStdString()) == assets_.end()) {
         names_.push_back(name);
@@ -218,6 +219,15 @@ std::vector<juce::String> AssetCatalog::Names() const {
     return names_;
 }
 
+bool AssetCatalog::Remove(const juce::String& name) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    const auto key = name.toStdString();
+    if (assets_.erase(key) == 0) return false;
+    ownedTextures_.erase(key); // no-op if this asset never owned a texture of its own.
+    names_.erase(std::remove(names_.begin(), names_.end(), name), names_.end());
+    return true;
+}
+
 std::shared_ptr<Material> AssetCatalog::GetOrCreateMaterial(const juce::String& name) {
     const std::lock_guard<std::mutex> lock(mutex_);
     auto& slot = materials_[name.toStdString()];
@@ -237,6 +247,11 @@ std::vector<juce::String> AssetCatalog::MaterialNames() const {
     result.reserve(materials_.size());
     for (const auto& [name, material] : materials_) result.push_back(name);
     return result;
+}
+
+bool AssetCatalog::RemoveMaterial(const juce::String& name) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return materials_.erase(name.toStdString()) != 0;
 }
 
 std::shared_ptr<gl::Texture2D> AssetCatalog::GetOrLoadTexture(const juce::File& file) {

@@ -12,6 +12,12 @@ namespace ce::assets
 class ProjectContentAssetStore final
 {
 public:
+    // displayNameOverride/description are the Import Hub's first-import
+    // metadata popup's Name/Description fields (Suite-Asset-Pipeline-
+    // Model.md, Phase 3) -- empty (the default) preserves the original
+    // behavior of always naming the asset after the source file with no
+    // description, for callers that don't collect either (e.g. textures,
+    // which skip the popup entirely).
     static bool importSource(creation::assets::ProjectSession& session,
                              const juce::String& gameAssetRoot,
                              const juce::File& sourceFile,
@@ -19,7 +25,9 @@ public:
                              const juce::String& category,
                              const juce::StringArray& tags,
                              creation::assets::AssetDescriptor& descriptor,
-                             juce::String& errorMessage);
+                             juce::String& errorMessage,
+                             const juce::String& displayNameOverride = {},
+                             const juce::String& description = {});
 
     // Materializes a managed project model only long enough for the Engine
     // decoder to parse it. The caller turns the returned CPU model into GPU
