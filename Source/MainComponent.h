@@ -15,7 +15,7 @@
 #include "Views/ContentBrowserPanel.h"
 #include "Views/HierarchyPanel.h"
 #include "Views/ImportPanel.h"
-#include "Views/FrustLogicPanel.h"
+#include "Views/PodEditorPanel.h"
 #include "Views/LightPanel.h"
 #include "Views/MaterialGraphPanel.h"
 #include "Views/MaterialsPanel.h"
@@ -95,6 +95,10 @@ private:
     bool ensureProjectSessionActive(juce::String& errorMessage);
     void saveAppSettings();
     void loadAppSettings();
+    // Called right after projectSession_ becomes valid (new project,
+    // opened project, or restored last-opened project) so podCatalog_
+    // reflects whatever Pods that project has already saved.
+    void loadPodsForActiveProject();
 
     creation::suite::SuiteSettings suiteSettings_;
     creation::suite::SuiteSettingsStore suiteSettingsStore_;
@@ -111,7 +115,7 @@ private:
     ce::frust::EngineFrustHost frustHost_ { world_ };
     // Named registry of Pods (docs/BEHAVIOR_COMPONENT_MODEL.md, and the
     // Pod Management System plan generalizing it) -- owned here since
-    // both FrustLogicPanel (editing) and behaviorAttachmentPanel_
+    // both PodEditorPanel (editing) and behaviorAttachmentPanel_
     // (attaching a compiled Behavior Pod to a selected entity) need the
     // same catalog.
     ce::frust::PodCatalog podCatalog_;
@@ -189,7 +193,7 @@ private:
     ce::views::ContentBrowserPanel contentBrowserPanel_;
 
     // --- Other modes: stand-ins until their milestones land ---
-    std::unique_ptr<ce::views::FrustLogicPanel> frustAutomationPanel_;
+    std::unique_ptr<ce::views::PodEditorPanel> podEditorPanel_;
     ce::PlaceholderPanel serverPanel_ { "Server", "Dedicated server operational view - coming soon" };
     ce::PlaceholderPanel settingsPanel_ { "Settings", "Application settings - coming soon" };
 
