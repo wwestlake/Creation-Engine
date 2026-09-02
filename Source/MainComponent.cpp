@@ -95,7 +95,7 @@ MainComponent::MainComponent()
     if (!frustHost_.loadBundled(frustError)) {
         juce::Logger::writeToLog("Creation Engine FRust host: " + juce::String(frustError));
     }
-    frustAutomationPanel_ = std::make_unique<ce::views::FrustLogicPanel>(frustHost_, behaviorCatalog_);
+    frustAutomationPanel_ = std::make_unique<ce::views::FrustLogicPanel>(frustHost_, podCatalog_);
     frustHost_.setSceneTransitionRequestHandler([this](const std::string& reference) {
         const juce::String sceneReference(reference);
         for (const auto& scene : activeGame_.scenes)

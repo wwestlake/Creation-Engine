@@ -34,7 +34,7 @@ private:
 BehaviorAttachmentPanel::~BehaviorAttachmentPanel() = default;
 
 BehaviorAttachmentPanel::BehaviorAttachmentPanel(engine::World& world, frust::EngineFrustHost& frustHost,
-                                                 frust::BehaviorCatalog& catalog)
+                                                 frust::PodCatalog& catalog)
     : world_(world), frustHost_(frustHost), catalog_(catalog) {
     titleLabel_.setFont(juce::Font(juce::FontOptions(16.0f)).boldened());
     titleLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
@@ -60,7 +60,7 @@ void BehaviorAttachmentPanel::Refresh() {
     attachButton_.setVisible(hasSelection);
 
     availableBehaviors_.clear(juce::dontSendNotification);
-    auto names = catalog_.Names();
+    auto names = catalog_.Names(frust::PodKind::Behavior);
     std::sort(names.begin(), names.end(), [](const juce::String& a, const juce::String& b) {
         return a.compareIgnoreCase(b) < 0;
     });

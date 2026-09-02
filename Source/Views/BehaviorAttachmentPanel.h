@@ -4,20 +4,20 @@
 #include <entt/entt.hpp>
 
 #include "engine/world.h"
-#include "Frust/BehaviorCatalog.h"
 #include "Frust/EngineFrustHost.h"
+#include "Frust/PodCatalog.h"
 
 namespace ce {
 
 // Per-selected-entity view of scene::BehaviorAttachments -- the "attach a
 // Component to a Model" half of docs/BEHAVIOR_COMPONENT_MODEL.md. Lists
 // currently attached pod IDs with Remove, and a picker to attach any
-// compiled Behavior from BehaviorCatalog. Attaching a Behavior that
+// compiled Behavior from PodCatalog. Attaching a Behavior that
 // hasn't been compiled yet (no loaded pod) is refused with a clear
 // reason rather than attaching a pod ID nothing can actually load.
 class BehaviorAttachmentPanel final : public juce::Component {
 public:
-    BehaviorAttachmentPanel(engine::World& world, frust::EngineFrustHost& frustHost, frust::BehaviorCatalog& catalog);
+    BehaviorAttachmentPanel(engine::World& world, frust::EngineFrustHost& frustHost, frust::PodCatalog& catalog);
 
     // Declared (not defaulted inline) and defined in the .cpp, after
     // AttachmentRow's full definition: rows_ is a juce::OwnedArray<
@@ -39,7 +39,7 @@ private:
 
     engine::World& world_;
     frust::EngineFrustHost& frustHost_;
-    frust::BehaviorCatalog& catalog_;
+    frust::PodCatalog& catalog_;
     entt::entity selectedEntity_ = entt::null;
 
     juce::Label titleLabel_ { {}, "Behaviors" };

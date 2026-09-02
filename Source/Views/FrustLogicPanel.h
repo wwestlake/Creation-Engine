@@ -5,8 +5,9 @@
 #include <creation/node_editor_ui/NodeInspector.h>
 #include <creation/node_editor_ui/NodePalette.h>
 
-#include "Frust/BehaviorCatalog.h"
 #include "Frust/EngineFrustHost.h"
+#include "Frust/PodCatalog.h"
+#include "node_system/core_control_flow.h"
 #include "node_system/frgraph_serialization.h"
 #include "node_system/frust_codegen.h"
 #include "node_system/node_library.h"
@@ -16,7 +17,7 @@ namespace ce::engine { class World; }
 namespace ce::views
 {
 
-// Behavior editor: a browsable list of named graphs (BehaviorCatalog),
+// Behavior editor: a browsable list of named graphs (PodCatalog),
 // opened one at a time for editing -- same two-mode Browse/Edit shape
 // MaterialGraphPanel was designed around, see
 // docs/BEHAVIOR_COMPONENT_MODEL.md. The graph IS the saved model; Compile
@@ -26,7 +27,7 @@ namespace ce::views
 class FrustLogicPanel final : public juce::Component, public juce::DragAndDropContainer
 {
 public:
-    FrustLogicPanel(frust::EngineFrustHost& frustHost, frust::BehaviorCatalog& catalog);
+    FrustLogicPanel(frust::EngineFrustHost& frustHost, frust::PodCatalog& catalog);
 
     // Declared (not defaulted inline) and defined in the .cpp, after
     // BehaviorRow's full definition -- same reason ImportPanel::~ImportPanel()
@@ -45,7 +46,7 @@ private:
     void CompileAndLoad();
 
     frust::EngineFrustHost& frustHost_;
-    frust::BehaviorCatalog& catalog_;
+    frust::PodCatalog& catalog_;
 
     node_system::Graph graph_ { "untitled", node_system::GraphTarget::Behavior };
     node_system::NodeTypeRegistry registry_;
