@@ -1,5 +1,6 @@
 #include "Scene/AssetCatalog.h"
 
+#include <algorithm>
 #include <iostream>
 
 #include "Assets/AssetPackStore.h"
@@ -158,7 +159,7 @@ bool AssetCatalog::AddFromModel(const juce::String& name, const LoadedModel& mod
 
     const std::lock_guard<std::mutex> lock(mutex_);
     if (texture != nullptr) {
-        ownedTextures_.push_back(std::move(texture));
+        ownedTextures_[name.toStdString()] = std::move(texture);
     }
     if (assets_.find(name.toStdString()) == assets_.end()) {
         names_.push_back(name);
@@ -175,7 +176,7 @@ bool AssetCatalog::Add(const juce::String& name, std::shared_ptr<Mesh> mesh, std
 
     const std::lock_guard<std::mutex> lock(mutex_);
     if (ownedTexture != nullptr) {
-        ownedTextures_.push_back(std::move(ownedTexture));
+        ownedTextures_[name.toStdString()] = std::move(ownedTexture);
     }
     if (assets_.find(name.toStdString()) == assets_.end()) {
         names_.push_back(name);
@@ -216,6 +217,74 @@ AssetCatalog::Asset AssetCatalog::Find(const juce::String& name) const {
 std::vector<juce::String> AssetCatalog::Names() const {
     const std::lock_guard<std::mutex> lock(mutex_);
     return names_;
+}
+
+bool AssetCatalog::Remove(const juce::String& name) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    const auto key = name.toStdString();
+    if (assets_.erase(key) == 0) return false;
+    ownedTextures_.erase(key); // no-op if this asset never owned a texture of its own.
+    names_.erase(std::remove(names_.begin(), names_.end(), name), names_.end());
+    return true;
+}
+
+std::shared_ptr<Material> AssetCatalog::GetOrCreateMaterial(const juce::String& name) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    auto& slot = materials_[name.toStdString()];
+    if (slot == nullptr) slot = std::make_shared<Material>();
+    return slot;
+}
+
+std::shared_ptr<Material> AssetCatalog::FindMaterial(const juce::String& name) const {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = materials_.find(name.toStdString());
+    return it == materials_.end() ? nullptr : it->second;
+}
+
+std::vector<juce::String> AssetCatalog::MaterialNames() const {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<juce::String> result;
+    result.reserve(materials_.size());
+    for (const auto& [name, material] : materials_) result.push_back(name);
+    return result;
+}
+
+bool AssetCatalog::RemoveMaterial(const juce::String& name) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return materials_.erase(name.toStdString()) != 0;
+}
+
+std::shared_ptr<gl::Texture2D> AssetCatalog::GetOrLoadTexture(const juce::File& file) {
+    const auto key = file.getFullPathName().toStdString();
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        if (const auto it = loadedTextures_.find(key); it != loadedTextures_.end()) return it->second;
+    }
+
+    auto texture = std::make_shared<gl::Texture2D>();
+    if (!texture->LoadFromFile(file)) return nullptr;
+
+    const std::lock_guard<std::mutex> lock(mutex_);
+    // Another thread could have loaded the same path while this one was
+    // decoding -- keep whichever landed first rather than uploading twice.
+    auto& slot = loadedTextures_[key];
+    if (slot == nullptr) slot = std::move(texture);
+    return slot;
+}
+
+bool AssetCatalog::AssignMaterial(const juce::String& meshAssetName, const juce::String& materialName) {
+    std::shared_ptr<Material> material;
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        auto assetIt = assets_.find(meshAssetName.toStdString());
+        if (assetIt == assets_.end()) return false;
+
+        auto& materialSlot = materials_[materialName.toStdString()];
+        if (materialSlot == nullptr) materialSlot = std::make_shared<Material>();
+        material = materialSlot;
+        assetIt->second.material = material;
+    }
+    return true;
 }
 
 } // namespace ce::scene

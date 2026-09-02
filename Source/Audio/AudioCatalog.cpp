@@ -1,5 +1,6 @@
 #include "Audio/AudioCatalog.h"
 
+#include <algorithm>
 #include <iostream>
 
 namespace ce::audio {
@@ -47,6 +48,13 @@ AudioAsset AudioCatalog::Find(const juce::String& name) const {
 std::vector<juce::String> AudioCatalog::Names() const {
     const std::lock_guard<std::mutex> lock(mutex_);
     return names_;
+}
+
+bool AudioCatalog::Remove(const juce::String& name) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    if (assets_.erase(name.toStdString()) == 0) return false;
+    names_.erase(std::remove(names_.begin(), names_.end(), name), names_.end());
+    return true;
 }
 
 } // namespace ce::audio

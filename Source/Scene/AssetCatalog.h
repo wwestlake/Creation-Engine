@@ -128,15 +128,78 @@ public:
     Asset Find(const juce::String& name) const;
     std::vector<juce::String> Names() const;
 
+    // Evicts a mesh asset from the runtime GPU cache -- frees this
+    // catalog's own mesh/material/skeleton/texture references. An entity
+    // already placed from this asset (Find() returns a copy of the
+    // shared_ptrs, not a reference into assets_) keeps its own copies
+    // alive regardless; this only stops the asset from being findable/
+    // placeable/browsable going forward. Callers are responsible for any
+    // dependency check before calling this -- Remove() itself is
+    // unconditional, same as Add()/AddFromModel() do no such check either.
+    // Returns false if name isn't a registered asset.
+    bool Remove(const juce::String& name);
+
+    // Materials are their own named, independent registry -- NOT a value
+    // owned by whichever mesh asset happens to reference one. A Material
+    // can be edited (MaterialGraphPanel) with no mesh asset in the
+    // picture at all, the same way opening a Material asset in a content
+    // browser never requires selecting an object first. A mesh asset's
+    // own Asset::material field is a SLOT: a shared_ptr reference into
+    // this registry, not an embedded, privately-owned instance -- see
+    // AssignMaterial below for repointing a slot to a different named
+    // material.
+    //
+    // Returns the SAME shared_ptr on every call for a given name (never
+    // rebuilds it) -- MaterialGraphPanel calls this once per compile and
+    // mutates the returned object's fields in place, so every mesh slot
+    // already pointing at this name sees the update through the shared
+    // instance without needing to re-resolve anything.
+    std::shared_ptr<Material> GetOrCreateMaterial(const juce::String& name);
+    [[nodiscard]] std::shared_ptr<Material> FindMaterial(const juce::String& name) const;
+    [[nodiscard]] std::vector<juce::String> MaterialNames() const;
+
+    // Evicts a material from the registry. Same "runtime cache only, no
+    // dependency check" contract as Remove() above -- a mesh asset slot
+    // still pointing at this name (AssignMaterial) keeps its own
+    // shared_ptr alive; it just stops being resolvable by name for any
+    // *new* AssignMaterial/GetOrCreateMaterial call. Returns false if
+    // name isn't a registered material.
+    bool RemoveMaterial(const juce::String& name);
+
+    // Repoints a mesh asset's material SLOT to reference a different
+    // named material (creating that material, empty, if it doesn't exist
+    // yet) -- the actual "assign this material to this object" action,
+    // kept deliberately separate from editing/compiling a material
+    // itself. Returns false if meshAssetName isn't a registered mesh
+    // asset.
+    bool AssignMaterial(const juce::String& meshAssetName, const juce::String& materialName);
+
+    // A bare texture, independent of any mesh/material -- for a Texture
+    // Sample node's own reference (ce::material::CompileMaterialGraph's
+    // texture slots). Keyed by absolute file path since there's no
+    // asset-picker/import step yet (see material_nodes.cpp's Texture
+    // Sample description): loading the same path twice returns the same
+    // cached instance rather than re-uploading it. Must be called with a
+    // current GL context, same as Add()/AddFromModel() above -- callers
+    // off the render thread need to hop via
+    // OpenGLContext::executeOnGLThread first. Returns nullptr if the file
+    // doesn't decode as an image.
+    std::shared_ptr<gl::Texture2D> GetOrLoadTexture(const juce::File& file);
+
 private:
     void AddProcedural(const juce::String& name, const std::vector<Vertex>& vertices,
                         const std::vector<GLuint>& indices, juce::Vector3D<float> albedo);
 
     std::unordered_set<std::string> loadedPacks_;
     mutable std::mutex mutex_;
-    std::vector<std::unique_ptr<gl::Texture2D>> ownedTextures_;
+    // Keyed by the owning asset's name so Remove() can free exactly this
+    // asset's texture -- was an unkeyed vector before Remove() existed,
+    // since nothing needed to find one again by name until now.
+    std::unordered_map<std::string, std::unique_ptr<gl::Texture2D>> ownedTextures_;
     std::unordered_map<std::string, Asset> assets_;
     std::vector<juce::String> names_;
+    std::unordered_map<std::string, std::shared_ptr<Material>> materials_;
+    std::unordered_map<std::string, std::shared_ptr<gl::Texture2D>> loadedTextures_;
 };
 
 } // namespace ce::scene

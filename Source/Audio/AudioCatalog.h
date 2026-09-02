@@ -51,6 +51,14 @@ public:
     AudioAsset Find(const juce::String& name) const;
     std::vector<juce::String> Names() const;
 
+    // Evicts a clip from the catalog. Same "runtime cache only, no
+    // dependency check, unconditional" contract as scene::AssetCatalog::
+    // Remove() -- a caller currently previewing this clip through
+    // AudioPreviewPlayer is responsible for stopping playback first if it
+    // wants to, this doesn't do it automatically. Returns false if name
+    // isn't a registered clip.
+    bool Remove(const juce::String& name);
+
 private:
     mutable std::mutex mutex_;
     std::unordered_map<std::string, AudioAsset> assets_;

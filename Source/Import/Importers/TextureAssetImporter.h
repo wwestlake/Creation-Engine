@@ -24,7 +24,13 @@ public:
     std::vector<juce::String> SupportedExtensions() const override {
         return { "png", "jpg", "jpeg", "tga", "bmp", "hdr" };
     }
+    // "Images may not need anything" -- a plain texture import has no
+    // real metadata decision to make (see Suite-Asset-Pipeline-Model.md,
+    // Phase 3's scoping), so it skips the popup other importers show.
+    bool NeedsImportMetadata() const override { return false; }
     ImportResult Import(const juce::File& sourceFile, ImportContext& context) override;
+    ImportResult Reimport(const juce::File& sourceFile, const creation::assets::AssetDescriptor& existingAsset,
+                           ImportContext& context) override;
 };
 
 } // namespace ce::import

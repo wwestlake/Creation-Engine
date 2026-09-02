@@ -17,6 +17,8 @@ public:
     juce::String DisplayName() const override { return "glTF Model"; }
     std::vector<juce::String> SupportedExtensions() const override { return { "gltf", "glb" }; }
     ImportResult Import(const juce::File& sourceFile, ImportContext& context) override;
+    ImportResult Reimport(const juce::File& sourceFile, const creation::assets::AssetDescriptor& existingAsset,
+                           ImportContext& context) override;
 };
 
 } // namespace ce::import

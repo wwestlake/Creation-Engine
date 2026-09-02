@@ -59,6 +59,23 @@ public:
 
     void SetProjectContent(creation::assets::ProjectSession* session, const juce::String& gameAssetRoot);
 
+    // For ContentBrowserPanel -- deleting an audio asset needs to evict it
+    // from the same runtime catalog this panel's preview rows read from,
+    // and there's exactly one AudioCatalog per running app, owned here.
+    audio::AudioCatalog& GetAudioCatalog() { return audioCatalog_; }
+
+    // For ContentBrowserPanel's Reimport -- it needs the same registry
+    // (to find the right AssetImporter by extension) and format manager
+    // (for audio decode) this panel's own drop handling uses; there's one
+    // of each per running app, owned here.
+    import::ImporterRegistry& GetImporterRegistry() { return registry_; }
+    juce::AudioFormatManager& GetAudioFormatManager() { return audioFormatManager_; }
+
+    // For ContentBrowserPanel to call after removing a clip from
+    // GetAudioCatalog(), so this panel's own preview-row list doesn't keep
+    // showing a row for a clip that's gone until its next unrelated drop.
+    void RefreshAudioClips() { RebuildAudioClipRows(); }
+
     void paint(juce::Graphics& g) override;
     void resized() override;
 
@@ -68,6 +85,21 @@ private:
 
     void AppendLogLine(const juce::String& line);
     void RebuildAudioClipRows();
+
+    // First-import metadata popup (Suite-Asset-Pipeline-Model.md, Phase
+    // 3), driven as an async chain rather than a blocking modal loop --
+    // runModalLoop() is compiled out here (JUCE_MODAL_LOOPS_PERMITTED
+    // defaults to 0 and nothing in this project turns it on), so a
+    // multi-file drop can't just loop synchronously through one popup per
+    // file. ProcessNextPendingDropFile() drains pendingDropFiles_
+    // synchronously through every file that doesn't need the popup, then
+    // suspends on the first one that does; its callback resumes the chain
+    // by calling ProcessNextPendingDropFile() again.
+    void ProcessNextPendingDropFile();
+    void ShowImportMetadataPopup(const juce::File& file, import::AssetImporter& importer);
+    void RunImporterAndLog(import::AssetImporter& importer, const juce::File& file);
+
+    juce::Array<juce::File> pendingDropFiles_;
 
     // Only one preview clip can play at a time (previewPlayer_ is a
     // single player) -- TogglePlay/IsPlayingClip/RefreshPlayButtonLabels

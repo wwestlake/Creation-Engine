@@ -2,6 +2,8 @@
 
 #include <mutex>
 
+#include <creation/assets/ProjectAssetService.h>
+
 #include "Assets/ProjectContentAssetStore.h"
 #include "Render/Import/GltfLoader.h"
 #include "Render/ViewportComponent.h"
@@ -85,14 +87,19 @@ ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportConte
         ApplyAnimationImportOptions(model, context.animationOptions, animationNote);
     }
 
+    juce::StringArray tags{ "model", "gltf" };
+    tags.addArray(context.pendingTags);
+
     creation::assets::AssetDescriptor sourceDescriptor;
     juce::String persistenceError;
     if (! assets::ProjectContentAssetStore::importSource(*context.projectSession, context.gameAssetRoot, sourceFile,
-                                                          creation::assets::AssetKind::render, "Model",
-                                                          { "model", "gltf" }, sourceDescriptor, persistenceError))
+                                                          creation::assets::AssetKind::render, "Model", tags,
+                                                          sourceDescriptor, persistenceError,
+                                                          context.pendingDisplayName, context.pendingDescription))
         return ImportResult::Failed("Could not store glTF source in project content: " + persistenceError);
 
-    const juce::String assetName = sourceFile.getFileNameWithoutExtension();
+    const juce::String assetName =
+        context.pendingDisplayName.isNotEmpty() ? context.pendingDisplayName : sourceFile.getFileNameWithoutExtension();
 
     bool added = false;
     context.viewport->RunOnGLThread(
@@ -118,6 +125,45 @@ ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportConte
     }
 
     return ImportResult::Ok(assetName + " stored in project content and placed in the scene." + animationNote);
+}
+
+ImportResult GltfAssetImporter::Reimport(const juce::File& sourceFile,
+                                         const creation::assets::AssetDescriptor& existingAsset,
+                                         ImportContext& context) {
+    if (context.catalog == nullptr || context.viewport == nullptr || context.projectSession == nullptr) {
+        return ImportResult::Failed("glTF reimport needs an open game, asset catalog, and viewport.");
+    }
+
+    LoadedModel model;
+    if (!LoadGltf(sourceFile, model) || model.primitives.empty()) {
+        return ImportResult::Failed("Failed to parse " + sourceFile.getFileName() + " (see log for details).");
+    }
+
+    juce::String animationNote;
+    if (!model.animations.empty()) {
+        ApplyAnimationImportOptions(model, context.animationOptions, animationNote);
+    }
+
+    creation::assets::ProjectAssetService::ImportOptions overrides; // left blank -- createNewVersion falls back to existingAsset's own fields.
+    creation::assets::AssetDescriptor newDescriptor;
+    juce::String persistenceError;
+    if (! creation::assets::ProjectAssetService::createNewVersion(*context.projectSession, existingAsset, sourceFile,
+                                                                   overrides, newDescriptor, persistenceError))
+        return ImportResult::Failed("Could not save the new version: " + persistenceError);
+    if (! context.projectSession->commit(persistenceError))
+        return ImportResult::Failed("New version saved, but the project manifest could not be committed: " + persistenceError);
+
+    bool added = false;
+    context.viewport->RunOnGLThread(
+        [&] { added = context.catalog->AddFromModel(existingAsset.displayName, model); }, /*blockUntilFinished=*/true);
+    if (!added) {
+        return ImportResult::Failed("Failed to rebuild GPU resources for " + sourceFile.getFileName() + ".");
+    }
+    if (! context.catalog->SetSourceIdentity(existingAsset.displayName, newDescriptor.id, newDescriptor.versionId) ||
+        ! context.catalog->AddAlias(newDescriptor.id, existingAsset.displayName))
+        return ImportResult::Failed("The reimported model could not be re-registered with its project asset identity.");
+
+    return ImportResult::Ok(existingAsset.displayName + " updated to a new version." + animationNote);
 }
 
 } // namespace ce::import

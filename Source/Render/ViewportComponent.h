@@ -84,7 +84,16 @@ namespace ce {
 class ViewportComponent final : public juce::Component,
                                  private juce::OpenGLRenderer {
 public:
-    explicit ViewportComponent(engine::World& world, interaction::EditorInteraction& interactions);
+    // renderSurfaceHost is where the OpenGLContext actually attaches -- an
+    // always-alive component owned outside the dock tree (see
+    // MainComponent::viewportRenderHost_), so tab-switching this panel
+    // never tears the context down and re-creates it (a real, reproduced
+    // crash from stale GPU handles -- see docs/... AGENTS.md Do It Right
+    // Rule for why this isn't a smaller per-panel patch instead). This
+    // component itself keeps receiving mouse/keyboard input as the actual
+    // dock panel; only where the rendered pixels land moves.
+    explicit ViewportComponent(engine::World& world, interaction::EditorInteraction& interactions,
+                                juce::Component& renderSurfaceHost);
     ~ViewportComponent() override;
 
     void paint(juce::Graphics&) override {}
@@ -163,6 +172,7 @@ private:
 
     engine::World& world_;
     interaction::EditorInteraction& interactions_;
+    juce::Component& renderSurfaceHost_;
 
     juce::OpenGLContext openGLContext_;
     std::unique_ptr<vr::OpenXRProvider> openXRProvider_;

@@ -14,6 +14,8 @@ public:
     juce::String DisplayName() const override { return "OBJ Model"; }
     std::vector<juce::String> SupportedExtensions() const override { return { "obj" }; }
     ImportResult Import(const juce::File& sourceFile, ImportContext& context) override;
+    ImportResult Reimport(const juce::File& sourceFile, const creation::assets::AssetDescriptor& existingAsset,
+                           ImportContext& context) override;
 };
 
 } // namespace ce::import

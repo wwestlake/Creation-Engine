@@ -211,12 +211,13 @@ void ConfigureVRCamera(ce::Camera& camera, const ce::engine::vr::View& eye,
 
 namespace ce {
 
-ViewportComponent::ViewportComponent(engine::World& world, interaction::EditorInteraction& interactions)
-    : world_(world), interactions_(interactions), freeCamera_(*this) {
+ViewportComponent::ViewportComponent(engine::World& world, interaction::EditorInteraction& interactions,
+                                      juce::Component& renderSurfaceHost)
+    : world_(world), interactions_(interactions), renderSurfaceHost_(renderSurfaceHost), freeCamera_(*this) {
     setWantsKeyboardFocus(true);
     openGLContext_.setOpenGLVersionRequired(juce::OpenGLContext::openGL4_1);
     openGLContext_.setRenderer(this);
-    openGLContext_.attachTo(*this);
+    openGLContext_.attachTo(renderSurfaceHost_);
     openGLContext_.setContinuousRepainting(true);
 }
 
@@ -984,8 +985,8 @@ void ViewportComponent::renderOpenGL() {
                    static_cast<GLsizei>(vrFrame_.leftEye.renderHeight));
     } else {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glViewport(0, 0, juce::roundToInt(scale * static_cast<float>(getWidth())),
-                   juce::roundToInt(scale * static_cast<float>(getHeight())));
+        glViewport(0, 0, juce::roundToInt(scale * static_cast<float>(renderSurfaceHost_.getWidth())),
+                   juce::roundToInt(scale * static_cast<float>(renderSurfaceHost_.getHeight())));
     }
 
     glClearColor(0.05f, 0.05f, 0.07f, 1.0f);
@@ -1012,7 +1013,9 @@ void ViewportComponent::renderOpenGL() {
         uploadVRTransformGizmo();
     }
 
-    const float aspect = getHeight() > 0 ? static_cast<float>(getWidth()) / static_cast<float>(getHeight()) : 1.0f;
+    const float aspect = renderSurfaceHost_.getHeight() > 0
+        ? static_cast<float>(renderSurfaceHost_.getWidth()) / static_cast<float>(renderSurfaceHost_.getHeight())
+        : 1.0f;
     camera_.SetPerspective(juce::MathConstants<float>::pi / 4.0f, aspect, 0.1f, 100.0f);
     const auto cameraPos = freeCamera_.Position();
     const auto cameraTarget = freeCamera_.Target();
@@ -1141,11 +1144,22 @@ void ViewportComponent::renderOpenGL() {
     const std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
 
     // Object definitions persist an asset identifier rather than a GPU
-    // pointer. Resolve it only once the viewport owns a live GL context.
+    // pointer. Resolve mesh only once the viewport owns a live GL context
+    // (Mesh::Upload already happened; re-fetching it every frame would be
+    // pure waste). Material is re-synced from the catalog every frame,
+    // unconditionally -- cheap (a mutex + hash lookup + a couple of
+    // shared_ptr copies, the same cost uCameraPos already pays every
+    // frame regardless) and it's what makes AssetCatalog::AssignMaterial
+    // (the Materials panel's "Assign to mesh" action) actually live: an
+    // already-placed entity picks up a reassigned material slot on the
+    // very next frame, no scene reload needed, because it's reading the
+    // catalog's current slot value instead of a value cached once at
+    // first resolve and never touched again.
     auto unresolvedAssets = world_.Registry().view<const scene::MeshAssetReference>();
     for (const auto entity : unresolvedAssets) {
-        if (const auto* existing = world_.Registry().try_get<scene::MeshRenderer>(entity);
-            existing != nullptr && existing->mesh != nullptr) continue;
+        const auto* existingConst = world_.Registry().try_get<const scene::MeshRenderer>(entity);
+        const bool meshAlreadyResolved = existingConst != nullptr && existingConst->mesh != nullptr;
+
         const auto& reference = unresolvedAssets.get<const scene::MeshAssetReference>(entity);
         // Try the exact pack-qualified identity first. A reference saved
         // against an older pack version (packId set, but that exact
@@ -1162,10 +1176,12 @@ void ViewportComponent::renderOpenGL() {
             asset = assetCatalog_.Find(reference.assetId);
         }
         if (asset.mesh != nullptr && asset.material != nullptr) {
-            if (auto* existing = world_.Registry().try_get<scene::MeshRenderer>(entity))
-                existing->mesh = asset.mesh;
-            else
+            if (auto* existing = world_.Registry().try_get<scene::MeshRenderer>(entity)) {
+                if (!meshAlreadyResolved) existing->mesh = asset.mesh;
+                existing->material = asset.material;
+            } else {
                 world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ asset.mesh, asset.material });
+            }
         }
     }
 
@@ -1198,6 +1214,12 @@ void ViewportComponent::renderOpenGL() {
         program->setUniformMat4("uProjection", eyeCamera.ProjectionMatrix().mat, 1, GL_FALSE);
         program->setUniformMat3("uNormalMatrix", normalMatrix.data(), 1, GL_FALSE);
         program->setUniform("uCameraPos", eyePosition.x, eyePosition.y, eyePosition.z);
+        // Backs the compiled-material path's Time node and Panner/Rotator's
+        // animation (material_host.frag's uTime) -- a host/lighting-level
+        // uniform set unconditionally here, the same way uCameraPos is,
+        // rather than something ApplyUniforms() deals with (that's skipped
+        // entirely for the compiled path, see Material.h).
+        program->setUniform("uTime", static_cast<float>(lastFrameTimeSeconds_));
 
         // Runtime tint overrides leave the shared material unchanged.
         juce::Vector3D<float> tint{ 1.0f, 1.0f, 1.0f };
@@ -1208,6 +1230,46 @@ void ViewportComponent::renderOpenGL() {
             tint = { 1.0f, 0.62f, 0.12f };
         }
         renderer.material->ApplyUniforms(*program, tint);
+
+        // Compiled material graph parameters (Scalar/Vector Parameter
+        // nodes) -- an entity's own engine::MaterialParameterOverrides
+        // wins over the Material's shared current value, same
+        // shared-vs-per-instance split as tint above. Harmless no-op for
+        // the fixed pbr_lit path or any material with no parameters: an
+        // empty map just skips the loop, and setUniform on a name the
+        // active program doesn't declare is a silent no-op (GL ignores
+        // uniform location -1), same as uTime already relies on.
+        const auto* parameterOverrides = world_.Registry().try_get<const engine::MaterialParameterOverrides>(entity);
+        for (const auto& [name, value] : renderer.material->parameterFloatValues) {
+            float resolved = value;
+            if (parameterOverrides != nullptr) {
+                if (const auto it = parameterOverrides->scalars.find(name); it != parameterOverrides->scalars.end())
+                    resolved = it->second;
+            }
+            program->setUniform(("uMaterial_" + name).c_str(), resolved);
+        }
+        for (const auto& [name, value] : renderer.material->parameterColorValues) {
+            auto resolved = value;
+            if (parameterOverrides != nullptr) {
+                if (const auto it = parameterOverrides->colors.find(name); it != parameterOverrides->colors.end())
+                    resolved = { it->second.x, it->second.y, it->second.z };
+            }
+            program->setUniform(("uMaterial_" + name).c_str(), resolved.x, resolved.y, resolved.z);
+        }
+
+        // Compiled material graph textures (Texture Sample nodes) -- bound
+        // fresh every frame, same "just push it, GL ignores an unused
+        // uniform location" tolerance as the parameter loops above.
+        // Starts at texture unit 0: ApplyUniforms() above only ever binds
+        // a texture (unit 0) for the FIXED path, returning early as a
+        // no-op for a compiled material, so this never collides with it.
+        int materialTextureUnit = 0;
+        for (const auto& [uniformName, texture] : renderer.material->textureBindings) {
+            if (texture == nullptr) continue;
+            texture->Bind(static_cast<unsigned int>(materialTextureUnit));
+            program->setUniform(uniformName.c_str(), materialTextureUnit);
+            ++materialTextureUnit;
+        }
 
         program->setUniform("uSunLight.direction", sunLightSnapshot.direction.x, sunLightSnapshot.direction.y,
                              sunLightSnapshot.direction.z);

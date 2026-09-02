@@ -11,6 +11,14 @@ App-specific repositories under `apps/` may also have their own `AGENTS.md` file
 
 If they conflict, stop and ask the user which rule should govern the task.
 
+## Do It Right Rule
+
+When a task has a real, correct architecture and a smaller patch/workaround, build the real architecture. No shortcuts.
+
+- If the correct fix has been identified in discussion with the user, do not default to a smaller/faster patch instead because it's later at night or the session is long. Say so and ask, don't just pick the smaller one.
+- A defensive patch around a known-wrong pattern (e.g. special-casing one call site instead of fixing the pattern itself) is technical debt being created on purpose, not a neutral choice.
+- This does not mean over-engineer routine work: an ordinary bug fix or small change to an already-correct, already-working system stays scoped to that fix. This rule is about architecture-level decisions specifically, where "the fast way" and "the right way" have already been identified as genuinely different things.
+
 ## Development Environment Rule
 
 This workspace is a development/evaluation environment by default.

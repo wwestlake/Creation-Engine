@@ -69,9 +69,19 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/JuceDocking/CMakeLists.txt")
 endif()
 
 # --- Shared, framework-agnostic libraries --------------------------------
-# NodeSystem is language-neutral graph infrastructure. It remains in the
-# Engine while FRust visual automation is introduced on top of it.
-add_subdirectory(NodeSystem)
+# NodeSystem is language-neutral graph infrastructure, owned by the suite
+# (docs/SHARED_EXTRACTION_PLAN.md) so every app -- Engine, Texture, and
+# whatever else needs node-graph-authored content -- shares one substrate
+# and one node catalog contract instead of drifting apart. Previously
+# Engine kept its own forked copy under this directory; that fork is gone
+# (wwestlake/Creation-Suite#115) and its FRust-specific pieces
+# (frust_codegen, node_library) were carried over into the shared copy
+# rather than left behind.
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/NodeSystem" CreationSuiteSharedNodeSystem)
+# MaterialSystem: the node-graph -> GLSL compiler, shared for the same
+# reason NodeSystem is -- Creation Texture will produce the same kind of
+# materials Engine does (docs/MATERIAL_SYSTEM_PLAN.md).
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/MaterialSystem" CreationSuiteSharedMaterialSystem)
 add_library(creation_engine_ufbx STATIC third_party/ufbx/ufbx.c)
 target_include_directories(creation_engine_ufbx PUBLIC third_party/ufbx)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/NodeEditorUI/CMakeLists.txt")
@@ -114,6 +124,18 @@ add_custom_command(TARGET CreationEngineEditor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/EngineLifecycle.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodes.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodesLibrary.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
+    # The shared bin mirror above (line ~122) never got this same
+    # plugins/ treatment EnginePack gets below -- meaning EngineFrustHost::
+    # loadBundled() has been silently failing (plugins/EngineLifecycle.frust
+    # "not found beside the executable") for every run launched from the
+    # shared claude-debug-bin path, since that check requires ALL of
+    # plugins/{EngineLifecycle,CoreNodes}.frust to exist right beside the
+    # exe. Found while wiring FRust-driven material parameters -- the host
+    # function was never being reached at all.
+    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/plugins"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/EngineLifecycle.frust" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/plugins/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodes.frust" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/plugins/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodesLibrary.frust" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/plugins/"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/EnginePack" "$<TARGET_FILE_DIR:CreationEngineEditor>/EnginePack"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/EnginePack" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/EnginePack"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/models" "$<TARGET_FILE_DIR:CreationEngineEditor>/EnginePack/models"
@@ -198,8 +220,12 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/TransformPanel.cpp
     Source/Views/MaterialsPanel.h
     Source/Views/MaterialsPanel.cpp
+    Source/Views/MaterialGraphPanel.h
+    Source/Views/MaterialGraphPanel.cpp
     Source/Views/ImportPanel.h
     Source/Views/ImportPanel.cpp
+    Source/Views/ContentBrowserPanel.h
+    Source/Views/ContentBrowserPanel.cpp
     Source/Scene/Components.h
     Source/Scene/EngineSceneSerializer.h
     Source/Scene/EngineSceneSerializer.cpp
@@ -259,6 +285,7 @@ target_compile_definitions(CreationEngineEditor PRIVATE
 target_link_libraries(CreationEngineEditor PRIVATE
     engine_core
     node_system
+    creation_suite_material_system
     creation_suite_asset_system
     creation_suite_services
     creation_suite_ui

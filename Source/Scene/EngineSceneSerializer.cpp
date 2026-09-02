@@ -205,8 +205,23 @@ bool EngineSceneSerializer::restoreScene(ce::engine::World& world, const juce::V
             reg.emplace<ObjectState>(entity, std::move(objectState));
         }
 
+        // Only reconstruct a private Material here when there's no catalog
+        // asset to resolve one from (meshAssetId empty -- a procedural/
+        // authored-in-place entity, the same case AssetPlacement.cpp never
+        // handles). When meshAssetId IS present, ViewportComponent's
+        // renderOpenGL() resolve loop creates this entity's MeshRenderer
+        // from AssetCatalog::Find() instead, sharing the SAME Material
+        // instance every other entity using that asset shares -- matching
+        // MaterialsPanel's own documented design (editing a shared
+        // Material is expected to affect every entity sharing it, exactly
+        // like Mesh already does). Building a private clone here for
+        // EVERY entity regardless of asset identity was the actual bug:
+        // it silently detached every reloaded entity from the catalog's
+        // live Material, so neither PBR edits nor a compiled node-graph
+        // material (MaterialGraphPanel) ever showed up again after a
+        // save/reload round trip.
         auto mNode = entityNode.getChildWithName("Material");
-        if (mNode.isValid())
+        if (mNode.isValid() && meshAssetId.isEmpty())
         {
             auto mat = std::make_shared<Material>();
             mat->albedo.x = static_cast<float>(mNode.getProperty("albedoR", 0.7));

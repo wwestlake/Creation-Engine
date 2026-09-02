@@ -26,6 +26,8 @@ EngineFrustHost::EngineFrustHost(engine::World& worldToHost)
     runtime.registerHostFunction("engine_first_transform_entity", reinterpret_cast<void*>(&EngineFrustHost::firstTransformEntity));
     runtime.registerHostFunction("engine_current_object_entity", reinterpret_cast<void*>(&EngineFrustHost::currentObjectEntity));
     runtime.registerHostFunction("engine_set_position_x", reinterpret_cast<void*>(&EngineFrustHost::setPositionX));
+    runtime.registerHostFunction("engine_set_material_color_parameter", reinterpret_cast<void*>(&EngineFrustHost::setMaterialColorParameter));
+    runtime.registerHostFunction("engine_set_material_scalar_parameter", reinterpret_cast<void*>(&EngineFrustHost::setMaterialScalarParameter));
     runtime.registerHostFunction("engine_request_scene_transition", reinterpret_cast<void*>(&EngineFrustHost::requestSceneTransition));
     runtime.registerHostFunction("engine_active_game_id", reinterpret_cast<void*>(&EngineFrustHost::activeGameId));
     runtime.registerHostFunction("engine_active_scene_id", reinterpret_cast<void*>(&EngineFrustHost::activeSceneId));
@@ -228,6 +230,39 @@ std::int64_t EngineFrustHost::setPositionX(std::int64_t entityId, std::int64_t p
     }
 
     registry.get<engine::Transform>(entity).position.x = static_cast<float>(positionX);
+    return 1;
+}
+
+std::int64_t EngineFrustHost::setMaterialColorParameter(std::int64_t entityId, const char* parameterName,
+                                                          std::int64_t r255, std::int64_t g255, std::int64_t b255)
+{
+    if (activeHost == nullptr || entityId < 0 || parameterName == nullptr || *parameterName == '\0') return 0;
+
+    const auto entity = static_cast<entt::entity>(entityId);
+    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
+    auto& registry = activeHost->world.Registry();
+    if (!registry.valid(entity)) return 0;
+
+    auto& overrides = registry.get_or_emplace<engine::MaterialParameterOverrides>(entity);
+    overrides.colors[parameterName] = engine::Vec3{
+        juce::jlimit<float>(0.0f, 255.0f, static_cast<float>(r255)) / 255.0f,
+        juce::jlimit<float>(0.0f, 255.0f, static_cast<float>(g255)) / 255.0f,
+        juce::jlimit<float>(0.0f, 255.0f, static_cast<float>(b255)) / 255.0f,
+    };
+    return 1;
+}
+
+std::int64_t EngineFrustHost::setMaterialScalarParameter(std::int64_t entityId, const char* parameterName, std::int64_t valuePerMille)
+{
+    if (activeHost == nullptr || entityId < 0 || parameterName == nullptr || *parameterName == '\0') return 0;
+
+    const auto entity = static_cast<entt::entity>(entityId);
+    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
+    auto& registry = activeHost->world.Registry();
+    if (!registry.valid(entity)) return 0;
+
+    auto& overrides = registry.get_or_emplace<engine::MaterialParameterOverrides>(entity);
+    overrides.scalars[parameterName] = static_cast<float>(valuePerMille) / 1000.0f;
     return 1;
 }
 
