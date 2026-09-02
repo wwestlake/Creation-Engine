@@ -14,6 +14,7 @@
 #include "Views/ImportPanel.h"
 #include "Views/FrustLogicPanel.h"
 #include "Views/LightPanel.h"
+#include "Views/MaterialGraphPanel.h"
 #include "Views/MaterialsPanel.h"
 #include "Views/PlaceholderPanel.h"
 #include "Views/TransformPanel.h"
@@ -38,7 +39,8 @@
 class MainComponent final : public juce::Component,
                             private juce::Timer,
                             public juce::ApplicationCommandTarget,
-                            private juce::MenuBarModel
+                            private juce::MenuBarModel,
+                            private juce::ComponentListener
 {
 public:
     MainComponent();
@@ -57,6 +59,21 @@ public:
     void menuItemSelected(int menuItemID, int topLevelMenuIndex) override;
 
 private:
+    // Keeps viewportRenderHost_ positioned over viewport_'s own on-screen
+    // bounds while Scene Viewport is the active dock tab, and moved
+    // off-canvas (same size, parked far outside the window) the rest of
+    // the time. See viewportRenderHost_'s own comment for why: JUCE's GL
+    // compositing for an attached context renders as its own layer that
+    // ignores normal 2D paint occlusion (confirmed empirically -- painting
+    // an opaque background over it from a sibling/parent component does
+    // NOT hide it), so the only way to keep it always-alive (never
+    // setVisible(false), which tears down the context) while also not
+    // visually bleeding over whichever other CenterTab is actually active
+    // is to move it, not hide it.
+    void componentMovedOrResized(juce::Component& component, bool wasMoved, bool wasResized) override;
+    void componentVisibilityChanged(juce::Component& component) override;
+    void syncViewportRenderHost();
+
     void timerCallback() override;
     void SetPlaying(bool playing);
     void initialiseDockingWorkspace();
@@ -96,6 +113,25 @@ private:
     std::unique_ptr<juce::MenuBarComponent> menuBar_;
 
     // --- Scene mode content ---
+    // Always-alive host for the 3D viewport's juce::OpenGLContext, living
+    // outside the dock tree entirely (a plain child of MainComponent, sent
+    // toBack() and *never* setVisible(false)'d) so the context is never
+    // torn down by switching away from the Scene Viewport dock tab -- a
+    // real, reproduced crash otherwise (stale GPU handles from a recreated
+    // context; see apps/CreationEngine/AGENTS.md's Do It Right Rule for why
+    // this is the real fix rather than a per-panel workaround).
+    //
+    // Its bounds are kept in sync with viewport_'s own on-screen position
+    // while Scene Viewport is the active tab, and moved off-canvas
+    // (syncViewportRenderHost()) the rest of the time -- position, not
+    // visibility, is what hides it, because JUCE's GL compositing for an
+    // attached context turned out (confirmed by testing, not assumed) to
+    // ignore normal 2D paint occlusion: a sibling/parent painting an opaque
+    // background over this component's screen region does not hide its
+    // rendered output. Must be declared (and constructed) before viewport_,
+    // whose constructor takes a reference to it.
+    juce::Component viewportRenderHost_;
+
     // viewport_ must be declared (and therefore constructed) before
     // hierarchyPanel_: HierarchyPanel now takes a ViewportComponent&
     // (SC5's "+ Add" menu reads the asset catalog and camera position
@@ -123,8 +159,14 @@ private:
     // needs a fully-constructed ViewportComponent&.
     ce::ImportPanel importPanel_;
 
+    // The real "Materials" dock panel -- a node graph editor over
+    // ce::material's compiler (see MaterialGraphPanel.h). Declared after
+    // viewport_ for the same reason as importPanel_ above: its
+    // constructor needs a fully-constructed ViewportComponent& to reach
+    // the asset catalog it applies compiled materials to.
+    ce::views::MaterialGraphPanel materialsPanel_;
+
     // --- Other modes: stand-ins until their milestones land ---
-    ce::PlaceholderPanel materialsPanel_ { "Materials", "Node-based material editor - coming soon" };
     std::unique_ptr<ce::views::FrustLogicPanel> frustAutomationPanel_;
     ce::PlaceholderPanel serverPanel_ { "Server", "Dedicated server operational view - coming soon" };
     ce::PlaceholderPanel settingsPanel_ { "Settings", "Application settings - coming soon" };

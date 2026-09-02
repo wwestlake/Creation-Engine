@@ -10,7 +10,12 @@ namespace ce::runtime
 
 GameClientContent::GameClientContent(int clientNumber, juce::ValueTree sceneState,
                                      juce::String gameName, juce::String sceneName)
-    : clientNumber_(clientNumber), world_(), viewport_(world_, interactions_)
+    // Unlike the editor's docked Scene Viewport, this window is a standalone
+    // top-level window with no tab-hide/show to tear its GL context down --
+    // self-attaching remains correct here (see ViewportComponent's
+    // renderSurfaceHost_ comment for why the editor's viewport needs an
+    // external host instead).
+    : clientNumber_(clientNumber), world_(), viewport_(world_, interactions_, viewport_)
 {
     // A run client owns an isolated World, but it begins with the exact
     // authored scene selected in the editor rather than a blank test world.

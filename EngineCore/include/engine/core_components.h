@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <unordered_map>
+
 #include "engine/math.h"
 
 namespace ce::engine {
@@ -28,6 +31,21 @@ struct Transform {
 // albedo at draw time.
 struct Tint {
     Vec3 color{ 1.0f, 1.0f, 1.0f };
+};
+
+// Per-entity overrides for a compiled material graph's named Scalar/
+// Vector Parameter nodes (ce::material::CompileMaterialGraph), applied
+// on top of ce::Material's own current parameterFloatValues/
+// parameterColorValues the same way Tint overrides albedo above -- same
+// shared-asset-vs-per-instance-override split, same reason (a Material
+// can be shared by many entities; a script driving one entity's color
+// must not bleed into the rest). Set by FRust via
+// EngineFrustHost::setMaterialColorParameter/setMaterialScalarParameter.
+// Absent entirely for entities nothing has ever driven -- they just read
+// straight from the Material's own values.
+struct MaterialParameterOverrides {
+    std::unordered_map<std::string, Vec3> colors;
+    std::unordered_map<std::string, float> scalars;
 };
 
 } // namespace ce::engine

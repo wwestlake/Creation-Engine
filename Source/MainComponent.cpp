@@ -54,12 +54,13 @@ private:
 }
 
 MainComponent::MainComponent()
-    : viewport_(world_, interactions_),
+    : viewport_(world_, interactions_, viewportRenderHost_),
       hierarchyPanel_(world_, viewport_),
       transformPanel_(world_, interactions_),
       pbrMaterialPanel_(world_),
       importPanel_(world_, viewport_, projectSession_),
-      lightPanel_(viewport_) {
+      lightPanel_(viewport_),
+      materialsPanel_(viewport_) {
     commandManager_.registerAllCommandsForTarget(this);
     commandManager_.getKeyMappings()->addKeyPress(
         kRunGameClientCommand,
@@ -67,6 +68,22 @@ MainComponent::MainComponent()
     commandManager_.getKeyMappings()->addKeyPress(kUndoInteractionCommand, juce::KeyPress('Z', juce::ModifierKeys::ctrlModifier, 0));
     commandManager_.getKeyMappings()->addKeyPress(kRedoInteractionCommand, juce::KeyPress('Y', juce::ModifierKeys::ctrlModifier, 0));
     addKeyListener(commandManager_.getKeyMappings());
+
+    // See viewportRenderHost_'s header comment: an always-alive host for
+    // the 3D viewport's GL context, outside the dock tree, kept behind
+    // everything and never hidden. Its bounds are synced to viewport_'s
+    // own bounds by componentMovedOrResized() below.
+    // A real nonzero starting size, not (0,0,0,0) -- JUCE never actually
+    // creates the attached OpenGLContext against a component that starts
+    // out zero-sized (confirmed by testing: newOpenGLContextCreated()
+    // never fires at all, even after later resizes/repositions restore a
+    // sane size). syncViewportRenderHost() corrects this to the real
+    // on-screen placement as soon as the dock layout runs.
+    viewportRenderHost_.setBounds(0, 0, 1280, 720);
+    addAndMakeVisible(viewportRenderHost_);
+    viewportRenderHost_.setInterceptsMouseClicks(false, false);
+    viewportRenderHost_.toBack();
+    viewport_.addComponentListener(this);
 
     juce::String suiteErr;
     suiteSettings_ = suiteSettingsStore_.load(suiteErr);
@@ -185,6 +202,14 @@ void MainComponent::resized() {
     runGameButton_.setBounds(getWidth() - 170, 105, 158, 34);
 
     if (dockManager_ != nullptr) dockManager_->setBounds(bounds);
+
+    // Also synced here, not just from the viewport_ ComponentListener
+    // callbacks above: viewport_'s own bounds/visible-flag can already be
+    // in their final state by the time the real top-level window first
+    // becomes visible (isShowing() only just turned true, with nothing on
+    // viewport_ itself changing to fire a listener callback), which would
+    // otherwise leave viewportRenderHost_ parked off-canvas forever.
+    syncViewportRenderHost();
 }
 
 void MainComponent::getAllCommands(juce::Array<juce::CommandID>& commands)
@@ -343,6 +368,31 @@ void MainComponent::openGameClient()
     headerBar_.setStatusText("Running " + juce::String(gameClients_.size()) + " game client" + (gameClients_.size() == 1 ? "" : "s"));
 }
 
+void MainComponent::componentMovedOrResized(juce::Component& component, bool, bool)
+{
+    if (&component == &viewport_) syncViewportRenderHost();
+}
+
+void MainComponent::componentVisibilityChanged(juce::Component& component)
+{
+    if (&component == &viewport_) syncViewportRenderHost();
+}
+
+void MainComponent::syncViewportRenderHost()
+{
+    if (viewport_.isShowing()) {
+        viewportRenderHost_.setBounds(getLocalArea(&viewport_, viewport_.getLocalBounds()));
+    } else {
+        // Parked off-canvas, not hidden -- see viewportRenderHost_'s
+        // header comment for why setVisible(false) is off the table here.
+        // Same size as its last on-screen placement (irrelevant while
+        // parked, but keeps the next on-screen restore's aspect ratio
+        // sane for one frame if a resize happens to land while off-canvas).
+        const auto size = viewportRenderHost_.getLocalBounds();
+        viewportRenderHost_.setBounds(-100000, -100000, size.getWidth(), size.getHeight());
+    }
+}
+
 void MainComponent::initialiseDockingWorkspace()
 {
     dockManager_ = std::make_unique<CreationDock::DockManager>(*this);
@@ -378,6 +428,15 @@ void MainComponent::SetPlaying(bool playing) {
 }
 
 void MainComponent::timerCallback() {
+    // Catch-all for viewportRenderHost_ sync (see its own comment):
+    // viewport_'s bounds/visible flag can already be in their final state
+    // before the top-level window itself actually becomes visible, so
+    // neither the ComponentListener callbacks nor MainComponent::resized()
+    // are guaranteed to fire again at the moment isShowing() actually
+    // flips true. Cheap at 30 Hz -- just an isShowing() check plus,
+    // ordinarily, a no-op setBounds once already in sync.
+    syncViewportRenderHost();
+
     if (const auto selection = interactions_.takeSelectionChange())
         hierarchyPanel_.SelectEntity(*selection);
     if (pendingSceneTransitionId_.isNotEmpty()) {

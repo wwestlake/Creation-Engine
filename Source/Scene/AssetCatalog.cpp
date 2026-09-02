@@ -218,4 +218,58 @@ std::vector<juce::String> AssetCatalog::Names() const {
     return names_;
 }
 
+std::shared_ptr<Material> AssetCatalog::GetOrCreateMaterial(const juce::String& name) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    auto& slot = materials_[name.toStdString()];
+    if (slot == nullptr) slot = std::make_shared<Material>();
+    return slot;
+}
+
+std::shared_ptr<Material> AssetCatalog::FindMaterial(const juce::String& name) const {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = materials_.find(name.toStdString());
+    return it == materials_.end() ? nullptr : it->second;
+}
+
+std::vector<juce::String> AssetCatalog::MaterialNames() const {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<juce::String> result;
+    result.reserve(materials_.size());
+    for (const auto& [name, material] : materials_) result.push_back(name);
+    return result;
+}
+
+std::shared_ptr<gl::Texture2D> AssetCatalog::GetOrLoadTexture(const juce::File& file) {
+    const auto key = file.getFullPathName().toStdString();
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        if (const auto it = loadedTextures_.find(key); it != loadedTextures_.end()) return it->second;
+    }
+
+    auto texture = std::make_shared<gl::Texture2D>();
+    if (!texture->LoadFromFile(file)) return nullptr;
+
+    const std::lock_guard<std::mutex> lock(mutex_);
+    // Another thread could have loaded the same path while this one was
+    // decoding -- keep whichever landed first rather than uploading twice.
+    auto& slot = loadedTextures_[key];
+    if (slot == nullptr) slot = std::move(texture);
+    return slot;
+}
+
+bool AssetCatalog::AssignMaterial(const juce::String& meshAssetName, const juce::String& materialName) {
+    std::shared_ptr<Material> material;
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        auto assetIt = assets_.find(meshAssetName.toStdString());
+        if (assetIt == assets_.end()) return false;
+
+        auto& materialSlot = materials_[materialName.toStdString()];
+        if (materialSlot == nullptr) materialSlot = std::make_shared<Material>();
+        material = materialSlot;
+        assetIt->second.material = material;
+    }
+    return true;
+}
+
 } // namespace ce::scene

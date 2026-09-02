@@ -1,8 +1,9 @@
-manifest "{\"name\":\"engine_lifecycle\",\"version\":\"0.2.0\",\"description\":\"Creation Engine built-in FRust lifecycle and transform capability proof plugin\",\"entryPoints\":[\"on_init\",\"on_event\",\"on_unload\"],\"intendedApplications\":[\"creation-engine\"],\"requiredHostFunctions\":[{\"name\":\"engine_current_tick\",\"description\":\"Reads the authoritative Engine simulation tick.\"},{\"name\":\"engine_first_transform_entity\",\"description\":\"Finds the first Engine entity with a transform.\"},{\"name\":\"engine_set_position_x\",\"description\":\"Sets an entity X position in Engine world units.\"},{\"name\":\"engine_active_game_id\",\"description\":\"Reads the active Engine game ID.\"},{\"name\":\"engine_active_scene_id\",\"description\":\"Reads the active Engine scene ID.\"},{\"name\":\"engine_request_scene_transition\",\"description\":\"Requests a transition by direct Engine scene reference.\"}]}";
+manifest "{\"name\":\"engine_lifecycle\",\"version\":\"0.2.0\",\"description\":\"Creation Engine built-in FRust lifecycle and transform capability proof plugin\",\"entryPoints\":[\"on_init\",\"on_event\",\"on_unload\"],\"intendedApplications\":[\"creation-engine\"],\"requiredHostFunctions\":[{\"name\":\"engine_current_tick\",\"description\":\"Reads the authoritative Engine simulation tick.\"},{\"name\":\"engine_first_transform_entity\",\"description\":\"Finds the first Engine entity with a transform.\"},{\"name\":\"engine_set_position_x\",\"description\":\"Sets an entity X position in Engine world units.\"},{\"name\":\"engine_set_material_color_parameter\",\"description\":\"Overrides a named Vector Parameter on an entity's compiled material.\"},{\"name\":\"engine_active_game_id\",\"description\":\"Reads the active Engine game ID.\"},{\"name\":\"engine_active_scene_id\",\"description\":\"Reads the active Engine scene ID.\"},{\"name\":\"engine_request_scene_transition\",\"description\":\"Requests a transition by direct Engine scene reference.\"}]}";
 
 extern fn engine_current_tick() -> i64;
 extern fn engine_first_transform_entity() -> i64;
 extern fn engine_set_position_x(entity: i64, position_x: i64) -> i64;
+extern fn engine_set_material_color_parameter(entity: i64, parameter_name: String, r255: i64, g255: i64, b255: i64) -> i64;
 extern fn engine_active_game_id() -> String;
 extern fn engine_active_scene_id() -> String;
 extern fn engine_request_scene_transition(scene_reference: String) -> i64;
@@ -14,6 +15,16 @@ pub fn on_init() -> i64 = {
 pub fn on_event(id: i64, argument: i64) -> i64 = {
     let entity = engine_first_transform_entity();
     engine_set_position_x(entity, argument % 8);
+    // Proof that a Vector Parameter node compiled into an entity's
+    // material (Materials panel -> "TintColor") can be driven live from
+    // FRust: red at argument%8==0, green at argument%8==4, a straight
+    // lerp between at every step in between. A no-op if the entity's
+    // material has no parameter named "TintColor" -- the override just
+    // sits unused until one does.
+    let phase = argument % 8;
+    let red = 255 - (phase * 255 / 8);
+    let green = phase * 255 / 8;
+    engine_set_material_color_parameter(entity, "TintColor", red, green, 0);
     engine_current_tick() + id + argument
 }
 

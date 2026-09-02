@@ -62,6 +62,16 @@ private:
     static std::int64_t firstTransformEntity();
     static std::int64_t currentObjectEntity();
     static std::int64_t setPositionX(std::int64_t entityId, std::int64_t positionX);
+    // r/g/b are 0-255 -- the FFI boundary here only carries i64 (see every
+    // other extern fn in EngineLifecycle.frust; this doesn't introduce a
+    // new convention), so an ordinary byte-color encoding is the natural
+    // fit for a value FRust scripts will type as literal integers anyway.
+    static std::int64_t setMaterialColorParameter(std::int64_t entityId, const char* parameterName,
+                                                   std::int64_t r255, std::int64_t g255, std::int64_t b255);
+    // value is per-mille (0-1000 representing 0.0-1.0) -- more headroom
+    // than a byte for scalar parameters like roughness/an animation phase
+    // that aren't naturally 0-255 color channels.
+    static std::int64_t setMaterialScalarParameter(std::int64_t entityId, const char* parameterName, std::int64_t valuePerMille);
     static std::int64_t requestSceneTransition(const char* sceneReference);
     static const char* activeGameId();
     static const char* activeSceneId();
