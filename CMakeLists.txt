@@ -206,8 +206,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/TransportLookAndFeel.cpp
     Source/Views/TransportBar.h
     Source/Views/TransportBar.cpp
-    Source/Views/FrustLogicPanel.h
-    Source/Views/FrustLogicPanel.cpp
+    Source/Views/PodEditorPanel.h
+    Source/Views/PodEditorPanel.cpp
     Source/Views/BehaviorAttachmentPanel.h
     Source/Views/BehaviorAttachmentPanel.cpp
     Source/Runtime/GameClientWindow.h

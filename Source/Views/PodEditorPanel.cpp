@@ -1,4 +1,4 @@
-#include "FrustLogicPanel.h"
+#include "PodEditorPanel.h"
 
 #include <algorithm>
 
@@ -20,21 +20,23 @@ node_system::NodeTypeRegistry CopyRegistry(const node_system::NodeLibraryRegistr
         result.Register(descriptor);
     return result;
 }
+
+juce::String KindLabel(frust::PodKind kind) { return kind == frust::PodKind::Processing ? "Processing" : "Behavior"; }
 }
 
-// One row in Browse mode: a Behavior's name plus Open. Deliberately no
+// One row in Browse mode: a Pod's name plus Open. Deliberately no
 // Delete here yet -- see docs/BEHAVIOR_COMPONENT_MODEL.md's open asset-
 // tracking-depth question; a real delete needs the same dependency-check
-// treatment ContentBrowserPanel gives project assets, which Behaviors
-// aren't tracked as yet.
-class FrustLogicPanel::BehaviorRow final : public juce::Component {
+// treatment ContentBrowserPanel gives project assets, which Pods aren't
+// tracked through the full pipeline as yet.
+class PodEditorPanel::PodRow final : public juce::Component {
 public:
-    BehaviorRow(FrustLogicPanel& owner, juce::String name) : owner_(owner), name_(std::move(name)) {
+    PodRow(PodEditorPanel& owner, juce::String name) : owner_(owner), name_(std::move(name)) {
         nameLabel_.setText(name_, juce::dontSendNotification);
         nameLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
         addAndMakeVisible(nameLabel_);
 
-        openButton_.onClick = [this] { owner_.OpenBehavior(name_); };
+        openButton_.onClick = [this] { owner_.OpenPod(name_); };
         addAndMakeVisible(openButton_);
     }
 
@@ -45,17 +47,19 @@ public:
     }
 
 private:
-    FrustLogicPanel& owner_;
+    PodEditorPanel& owner_;
     juce::String name_;
     juce::Label nameLabel_;
     juce::TextButton openButton_ { "Open" };
 };
 
-FrustLogicPanel::~FrustLogicPanel() = default;
+PodEditorPanel::~PodEditorPanel() = default;
 
-FrustLogicPanel::FrustLogicPanel(frust::EngineFrustHost& frustHost, frust::PodCatalog& catalog)
+PodEditorPanel::PodEditorPanel(frust::EngineFrustHost& frustHost, frust::PodCatalog& catalog,
+                               creation::assets::ProjectSession& projectSession)
     : frustHost_(frustHost),
       catalog_(catalog),
+      projectSession_(projectSession),
       registry_(CopyRegistry(frustHost.nodeLibraries())),
       palette_(registry_),
       graphView_(graph_, registry_),
@@ -65,18 +69,20 @@ FrustLogicPanel::FrustLogicPanel(frust::EngineFrustHost& frustHost, frust::PodCa
     browseTitle_.setColour(juce::Label::textColourId, juce::Colours::white);
     addAndMakeVisible(browseTitle_);
 
-    newNameEditor_.setTextToShowWhenEmpty("New behavior name...", juce::Colours::grey);
+    newNameEditor_.setTextToShowWhenEmpty("New Pod name...", juce::Colours::grey);
     addAndMakeVisible(newNameEditor_);
 
-    newBehaviorButton_.onClick = [this] {
-        const auto name = newNameEditor_.getText().trim();
-        if (name.isEmpty()) return;
-        catalog_.GetOrCreateGraph(name, frust::PodKind::Behavior); // registers an empty graph under this name.
-        newNameEditor_.clear();
-        RefreshBrowseList();
-        OpenBehavior(name);
-    };
-    addAndMakeVisible(newBehaviorButton_);
+    newBehaviorPodButton_.onClick = [this] { CreatePod(frust::PodKind::Behavior); };
+    addAndMakeVisible(newBehaviorPodButton_);
+    newProcessingPodButton_.onClick = [this] { CreatePod(frust::PodKind::Processing); };
+    addAndMakeVisible(newProcessingPodButton_);
+
+    behaviorSectionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
+    behaviorSectionLabel_.setFont(juce::Font(juce::FontOptions(13.0f)).boldened());
+    addAndMakeVisible(behaviorSectionLabel_);
+    processingSectionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
+    processingSectionLabel_.setFont(juce::Font(juce::FontOptions(13.0f)).boldened());
+    addAndMakeVisible(processingSectionLabel_);
 
     backButton_.onClick = [this] { ShowBrowseMode(); };
     addAndMakeVisible(backButton_);
@@ -89,7 +95,7 @@ FrustLogicPanel::FrustLogicPanel(frust::EngineFrustHost& frustHost, frust::PodCa
     addAndMakeVisible(hint_);
 
     saveButton_.onClick = [this] { SaveGraph(); };
-    saveButton_.setTooltip("Save this graph -- the graph is the model, this is what makes it reopenable.");
+    saveButton_.setTooltip("Save this Pod to the project -- the graph is the model, this is what makes it reopenable.");
     addAndMakeVisible(saveButton_);
 
     compileButton_.onClick = [this] { CompileAndLoad(); };
@@ -117,49 +123,75 @@ FrustLogicPanel::FrustLogicPanel(frust::EngineFrustHost& frustHost, frust::PodCa
     ShowBrowseMode();
 }
 
-void FrustLogicPanel::RefreshBrowseList() {
-    rows_.clear();
-    auto names = catalog_.Names(frust::PodKind::Behavior);
-    std::sort(names.begin(), names.end(), [](const juce::String& a, const juce::String& b) {
-        return a.compareIgnoreCase(b) < 0;
-    });
-    for (const auto& name : names) {
-        auto* row = rows_.add(new BehaviorRow(*this, name));
+void PodEditorPanel::RefreshBrowseList() {
+    behaviorRows_.clear();
+    processingRows_.clear();
+
+    auto behaviorNames = catalog_.Names(frust::PodKind::Behavior);
+    auto processingNames = catalog_.Names(frust::PodKind::Processing);
+    auto sortNames = [](std::vector<juce::String>& names) {
+        std::sort(names.begin(), names.end(), [](const juce::String& a, const juce::String& b) {
+            return a.compareIgnoreCase(b) < 0;
+        });
+    };
+    sortNames(behaviorNames);
+    sortNames(processingNames);
+
+    for (const auto& name : behaviorNames) {
+        auto* row = behaviorRows_.add(new PodRow(*this, name));
+        addAndMakeVisible(row);
+    }
+    for (const auto& name : processingNames) {
+        auto* row = processingRows_.add(new PodRow(*this, name));
         addAndMakeVisible(row);
     }
     resized();
 }
 
-void FrustLogicPanel::OpenBehavior(const juce::String& name) {
+void PodEditorPanel::CreatePod(frust::PodKind kind) {
+    const auto name = newNameEditor_.getText().trim();
+    if (name.isEmpty()) return;
+    catalog_.GetOrCreateGraph(name, kind); // registers an empty graph under this name.
+    newNameEditor_.clear();
+    RefreshBrowseList();
+    OpenPod(name);
+}
+
+void PodEditorPanel::OpenPod(const juce::String& name) {
+    const auto kind = catalog_.Kind(name);
     // Graph holds unique_ptr<Node> internally -- it move-assigns, it does
     // not copy-assign. An independent editing copy (so Save doesn't alias
     // the catalog's stored graph while you're still mid-edit) goes through
     // the same .frgraph round-trip Save uses below, not a direct
     // assignment.
-    node_system::Graph& stored = catalog_.GetOrCreateGraph(name, frust::PodKind::Behavior);
+    node_system::Graph& stored = catalog_.GetOrCreateGraph(name, kind);
     std::string error;
     auto copy = node_system::DeserializeGraph(node_system::SerializeGraph(stored), error);
     if (!copy) {
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Cannot Open Behavior",
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Cannot Open Pod",
                                                 "Could not load \"" + name + "\": " + juce::String(error));
         return;
     }
     graph_ = std::move(*copy);
     openName_ = name;
-    editTitle_.setText("FRust Logic: " + name, juce::dontSendNotification);
+    editTitle_.setText(KindLabel(kind) + " Pod: " + name, juce::dontSendNotification);
     graphView_.GraphReplaced();
     sourceView_.setText("Compile to see generated FRust and validation errors here.", juce::dontSendNotification);
     status_.setText(juce::String(static_cast<int>(registry_.Types().size())) + " FRust nodes available", juce::dontSendNotification);
     ShowEditMode();
 }
 
-void FrustLogicPanel::ShowBrowseMode() {
+void PodEditorPanel::ShowBrowseMode() {
     editing_ = false;
     RefreshBrowseList();
     browseTitle_.setVisible(true);
     newNameEditor_.setVisible(true);
-    newBehaviorButton_.setVisible(true);
-    for (auto* row : rows_) row->setVisible(true);
+    newBehaviorPodButton_.setVisible(true);
+    newProcessingPodButton_.setVisible(true);
+    behaviorSectionLabel_.setVisible(true);
+    processingSectionLabel_.setVisible(true);
+    for (auto* row : behaviorRows_) row->setVisible(true);
+    for (auto* row : processingRows_) row->setVisible(true);
 
     backButton_.setVisible(false);
     editTitle_.setVisible(false);
@@ -174,12 +206,16 @@ void FrustLogicPanel::ShowBrowseMode() {
     resized();
 }
 
-void FrustLogicPanel::ShowEditMode() {
+void PodEditorPanel::ShowEditMode() {
     editing_ = true;
     browseTitle_.setVisible(false);
     newNameEditor_.setVisible(false);
-    newBehaviorButton_.setVisible(false);
-    for (auto* row : rows_) row->setVisible(false);
+    newBehaviorPodButton_.setVisible(false);
+    newProcessingPodButton_.setVisible(false);
+    behaviorSectionLabel_.setVisible(false);
+    processingSectionLabel_.setVisible(false);
+    for (auto* row : behaviorRows_) row->setVisible(false);
+    for (auto* row : processingRows_) row->setVisible(false);
 
     backButton_.setVisible(true);
     editTitle_.setVisible(true);
@@ -194,9 +230,9 @@ void FrustLogicPanel::ShowEditMode() {
     resized();
 }
 
-void FrustLogicPanel::SaveGraph() {
+void PodEditorPanel::SaveGraph() {
     if (openName_.isEmpty()) return;
-    // Same round-trip as OpenBehavior, in reverse -- the catalog gets an
+    // Same round-trip as OpenPod, in reverse -- the catalog gets an
     // independent copy, so graph_ (and this editor) keeps working
     // unaffected by whatever the catalog does with its own copy afterward.
     std::string error;
@@ -206,12 +242,19 @@ void FrustLogicPanel::SaveGraph() {
         status_.setColour(juce::Label::textColourId, juce::Colour(0xffff6b6b));
         return;
     }
-    catalog_.GetOrCreateGraph(openName_, frust::PodKind::Behavior) = std::move(*copy);
+    catalog_.GetOrCreateGraph(openName_, catalog_.Kind(openName_)) = std::move(*copy);
+
+    juce::String persistError;
+    if (!catalog_.Save(projectSession_, openName_, persistError)) {
+        status_.setText("Saved locally, but could not persist to the project: " + persistError, juce::dontSendNotification);
+        status_.setColour(juce::Label::textColourId, juce::Colour(0xffffb454));
+        return;
+    }
     status_.setText("Saved \"" + openName_ + "\"", juce::dontSendNotification);
     status_.setColour(juce::Label::textColourId, juce::Colour(0xff67e8a5));
 }
 
-void FrustLogicPanel::CompileAndLoad() {
+void PodEditorPanel::CompileAndLoad() {
     if (openName_.isEmpty()) return;
 
     node_system::FrustGraphCompileOptions options;
@@ -230,8 +273,7 @@ void FrustLogicPanel::CompileAndLoad() {
     // the natural start of the exec chain. Both are the same "first found"
     // heuristic this panel already used for resultNode before control-flow
     // support existed; a graph with more than one candidate of either kind
-    // needs an explicit picker, which is future UI, not a silent guess
-    // beyond "first."
+    // needs an explicit picker -- Phase 6 of the Pod plan, not this phase.
     for (const auto& [id, node] : graph_.Nodes()) {
         if (!node->Outputs().empty() && node->Outputs().front().type.kind == node_system::PinKind::Data) {
             options.resultNode = id;
@@ -249,7 +291,7 @@ void FrustLogicPanel::CompileAndLoad() {
     }
 
     if (options.resultNode == 0 && options.entryNode == 0) {
-        sourceView_.setText("Add at least one data-producing or executable node to compile this Behavior.",
+        sourceView_.setText("Add at least one data-producing or executable node to compile this Pod.",
                              juce::dontSendNotification);
         status_.setText("Nothing to compile", juce::dontSendNotification);
         return;
@@ -290,8 +332,8 @@ void FrustLogicPanel::CompileAndLoad() {
     if (!frustHost_.loadObjectBehavior(openName_.toStdString(), cachedFile.getFullPathName().toStdString(), loadError)) {
         // Reloading an already-loaded pod isn't supported yet (see
         // BEHAVIOR_COMPONENT_MODEL.md section 7's hot-reload item) -- a
-        // second Compile of the same Behavior is expected to fail here
-        // until that's built, not a new bug.
+        // second Compile of the same Pod is expected to fail here until
+        // that's built, not a new bug.
         status_.setText("Compiled, but failed to load: " + juce::String(loadError), juce::dontSendNotification);
         status_.setColour(juce::Label::textColourId, juce::Colour(0xffffb454));
         return;
@@ -302,7 +344,7 @@ void FrustLogicPanel::CompileAndLoad() {
     status_.setColour(juce::Label::textColourId, juce::Colour(0xff67e8a5));
 }
 
-void FrustLogicPanel::resized()
+void PodEditorPanel::resized()
 {
     auto area = getLocalBounds().reduced(16, 12);
 
@@ -311,11 +353,21 @@ void FrustLogicPanel::resized()
         browseTitle_.setBounds(header);
         area.removeFromTop(8);
         auto newRow = area.removeFromTop(28);
-        newBehaviorButton_.setBounds(newRow.removeFromRight(120).reduced(2));
+        newProcessingPodButton_.setBounds(newRow.removeFromRight(150).reduced(2));
+        newRow.removeFromRight(4);
+        newBehaviorPodButton_.setBounds(newRow.removeFromRight(140).reduced(2));
         newRow.removeFromRight(8);
         newNameEditor_.setBounds(newRow);
-        area.removeFromTop(8);
-        for (auto* row : rows_) {
+        area.removeFromTop(12);
+
+        behaviorSectionLabel_.setBounds(area.removeFromTop(20));
+        for (auto* row : behaviorRows_) {
+            row->setBounds(area.removeFromTop(26));
+            area.removeFromTop(2);
+        }
+        area.removeFromTop(10);
+        processingSectionLabel_.setBounds(area.removeFromTop(20));
+        for (auto* row : processingRows_) {
             row->setBounds(area.removeFromTop(26));
             area.removeFromTop(2);
         }
@@ -347,7 +399,7 @@ void FrustLogicPanel::resized()
     graphView_.setBounds(area);
 }
 
-void FrustLogicPanel::paint(juce::Graphics& g)
+void PodEditorPanel::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colour(0xff10141a));
 }
