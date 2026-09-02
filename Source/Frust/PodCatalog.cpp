@@ -36,6 +36,23 @@ juce::String LogicalPathFor(const juce::String& name) {
     return juce::String(creation::assets::ProjectContainerPaths::sourceAssetRoot) + "Pods/" + SlugifyPodName(name) + ".pod";
 }
 
+// Only the FRust-supported subset (matches frust_codegen.cpp's FrustType) --
+// the interface editor's type picker is restricted to these too.
+juce::String DataTypeToken(node_system::DataType type) {
+    switch (type) {
+        case node_system::DataType::Float: return "float";
+        case node_system::DataType::Bool: return "bool";
+        case node_system::DataType::String: return "string";
+        default: return "int";
+    }
+}
+node_system::DataType DataTypeFromToken(const juce::String& token) {
+    if (token.equalsIgnoreCase("float")) return node_system::DataType::Float;
+    if (token.equalsIgnoreCase("bool")) return node_system::DataType::Bool;
+    if (token.equalsIgnoreCase("string")) return node_system::DataType::String;
+    return node_system::DataType::Int;
+}
+
 }  // namespace
 
 node_system::Graph& PodCatalog::GetOrCreateGraph(const juce::String& name, PodKind kind) {
@@ -63,6 +80,11 @@ PodEntry& PodCatalog::GetOrCreateEntry(const juce::String& name, PodKind kind) {
 node_system::Graph* PodCatalog::FindGraph(const juce::String& name) {
     const auto it = entries_.find(name.toStdString());
     return it == entries_.end() ? nullptr : &it->second.graph;
+}
+
+PodEntry* PodCatalog::FindEntry(const juce::String& name) {
+    const auto it = entries_.find(name.toStdString());
+    return it == entries_.end() ? nullptr : &it->second;
 }
 
 std::vector<juce::String> PodCatalog::Names(std::optional<PodKind> filterKind) const {
@@ -129,6 +151,18 @@ bool PodCatalog::Save(creation::assets::ProjectSession& session, const juce::Str
     payload->setProperty("authoringMode", AuthoringModeToken(entry.authoringMode));
     payload->setProperty("exposeAsNode", entry.exposeAsNode);
     payload->setProperty("content", content);
+    payload->setProperty("outputNode", static_cast<int>(entry.outputNode));
+    payload->setProperty("outputPin", static_cast<int>(entry.outputPin));
+    juce::Array<juce::var> interfaceInputsJson;
+    for (const auto& input : entry.interfaceInputs) {
+        auto* inputObject = new juce::DynamicObject();
+        inputObject->setProperty("name", input.name);
+        inputObject->setProperty("type", DataTypeToken(input.type));
+        inputObject->setProperty("boundNode", static_cast<int>(input.boundNode));
+        inputObject->setProperty("boundPin", static_cast<int>(input.boundPin));
+        interfaceInputsJson.add(juce::var(inputObject));
+    }
+    payload->setProperty("interfaceInputs", interfaceInputsJson);
     const juce::String json = juce::JSON::toString(juce::var(payload));
     const juce::MemoryBlock data(json.toRawUTF8(), json.getNumBytesAsUTF8());
 
@@ -178,6 +212,20 @@ bool PodCatalog::LoadAll(creation::assets::ProjectSession& session, juce::String
         entry.authoringMode = authoringMode;
         entry.exposeAsNode = static_cast<bool>(payload->getProperty("exposeAsNode"));
         entry.assetId = asset.id;
+        entry.outputNode = static_cast<node_system::NodeId>(static_cast<int>(payload->getProperty("outputNode")));
+        entry.outputPin = static_cast<node_system::PinId>(static_cast<int>(payload->getProperty("outputPin")));
+        if (const auto* inputsArray = payload->getProperty("interfaceInputs").getArray()) {
+            for (const auto& inputVar : *inputsArray) {
+                if (auto* inputObject = inputVar.getDynamicObject()) {
+                    PodInterfaceInput input;
+                    input.name = inputObject->getProperty("name").toString();
+                    input.type = DataTypeFromToken(inputObject->getProperty("type").toString());
+                    input.boundNode = static_cast<node_system::NodeId>(static_cast<int>(inputObject->getProperty("boundNode")));
+                    input.boundPin = static_cast<node_system::PinId>(static_cast<int>(inputObject->getProperty("boundPin")));
+                    entry.interfaceInputs.push_back(std::move(input));
+                }
+            }
+        }
 
         if (authoringMode == PodAuthoringMode::Source) {
             entry.sourceText = content;

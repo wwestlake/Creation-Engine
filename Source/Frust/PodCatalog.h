@@ -26,6 +26,18 @@ enum class PodKind { Behavior, Processing };
 // start rather than retrofitting one in.
 enum class PodAuthoringMode { Graph, Source };
 
+// One named, typed input the Pod's compiled function accepts -- author-
+// declared (Phase 6), replacing the earlier auto-detect resultNode/
+// entryNode heuristic. Unbound (boundNode == 0) until the author picks
+// which node+pin inside the graph should consume it; an unbound input
+// renders as a visible error in the editor, never blocks anything.
+struct PodInterfaceInput {
+    juce::String name;
+    node_system::DataType type = node_system::DataType::Float;
+    node_system::NodeId boundNode = 0;
+    node_system::PinId boundPin = 0;
+};
+
 // Named registry of Pods -- generalizes the Phase 4.5 BehaviorCatalog to
 // cover both Kinds and both authoring modes, with real ProjectSession
 // persistence (BehaviorCatalog was runtime-only, never saved). The graph
@@ -55,6 +67,15 @@ struct PodEntry {
     // in other graphs. Wired up starting Phase 5 of the Pod plan; the
     // field lives here from the start so persistence round-trips it.
     bool exposeAsNode = false;
+
+    // Explicit interface (Phase 6) -- single output for v1, per the Pod
+    // plan's scope decision; multi-output needs a FRust tuple/struct-
+    // return verification spike first. Both start unbound/empty; Compile
+    // falls back to the old auto-detect heuristic only when this is
+    // entirely empty, so Pods created before this phase keep working.
+    std::vector<PodInterfaceInput> interfaceInputs;
+    node_system::NodeId outputNode = 0;
+    node_system::PinId outputPin = 0;
 };
 
 class PodCatalog final {
@@ -73,6 +94,12 @@ public:
     juce::String& GetOrCreateSource(const juce::String& name, PodKind kind);
 
     [[nodiscard]] node_system::Graph* FindGraph(const juce::String& name);
+
+    // Mutable access to a Pod's full entry -- used by PodEditorPanel's
+    // interface editor (Phase 6) to read/write interfaceInputs/
+    // outputNode/outputPin directly, same way GetOrCreateGraph already
+    // returns a mutable reference into internal state.
+    [[nodiscard]] PodEntry* FindEntry(const juce::String& name);
     [[nodiscard]] std::vector<juce::String> Names(std::optional<PodKind> filterKind = std::nullopt) const;
     bool Remove(const juce::String& name);
 
