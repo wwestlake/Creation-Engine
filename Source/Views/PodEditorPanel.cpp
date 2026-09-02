@@ -32,6 +32,75 @@ juce::String DataTypeLabel(node_system::DataType type) {
     }
 }
 
+// Syntax highlighting for hand-typed Source Pods (Phase 8). Reuses
+// JUCE's generic C-like lexer (CppTokeniserFunctions) for comments,
+// strings, numbers, operators and brackets -- FRust's surface syntax is
+// C-like enough that this is genuinely correct, not an approximation.
+// The one thing it can't do on its own is recognize FRust's own
+// keywords (they're not in C++'s reserved-word table), so identifiers
+// it doesn't classify as a C++ keyword are re-checked against FRust's
+// real keyword set (observed directly in this repo's .frust files --
+// EngineLifecycle.frust, CoreNodes.frust/CoreNodesLibrary.frust -- plus
+// the control-flow/type keywords FrustLang's own codegen supports).
+bool IsFrustKeyword(const juce::String& token) {
+    static const juce::StringArray kKeywords {
+        "manifest", "use", "self", "extern", "pub", "fn", "node", "pure",
+        "callable", "loop", "let", "if", "else", "while", "for", "return",
+        "break", "continue", "true", "false",
+        "i32", "i64", "f32", "f64", "bool", "String", "usize"
+    };
+    return kKeywords.contains(token);
+}
+
+class FrustCodeTokeniser final : public juce::CodeTokeniser {
+public:
+    int readNextToken(juce::CodeDocument::Iterator& source) override {
+        auto start = source;
+        const int tokenType = juce::CppTokeniserFunctions::readNextToken(source);
+        if (tokenType == juce::CPlusPlusCodeTokeniser::tokenType_identifier) {
+            juce::String token;
+            while (start.getPosition() < source.getPosition()) token << start.nextChar();
+            if (IsFrustKeyword(token)) return juce::CPlusPlusCodeTokeniser::tokenType_keyword;
+        }
+        return tokenType;
+    }
+
+    juce::CodeEditorComponent::ColourScheme getDefaultColourScheme() override {
+        return juce::CPlusPlusCodeTokeniser().getDefaultColourScheme();
+    }
+};
+
+// Per-Kind starting content for a new Source Pod -- the same idea as a
+// Graph Pod simply starting empty, just with real starter text since a
+// blank source file gives an author nothing to go on the way a blank
+// canvas at least offers a palette to drag from.
+juce::String SourceTemplateFor(frust::PodKind kind) {
+    if (kind == frust::PodKind::Processing) {
+        return "// Processing Pod -- invoked on demand, not entity-scoped.\n"
+               "// Check \"Expose as node\" is not needed here: a Source Pod\n"
+               "// reflects as a node automatically if you prefix a function\n"
+               "// with `node pure` or `node callable` yourself, same as any\n"
+               "// other FRust node declaration.\n"
+               "node pure pub fn process(value: i64) -> i64 = {\n"
+               "    value\n"
+               "}\n";
+    }
+    return "// Behavior Pod -- invoked per-entity by EngineFrustHost's lifecycle.\n"
+           "pub fn on_tick() -> i64 = {\n"
+           "    0\n"
+           "}\n";
+}
+
+struct Snippet { const char* label; const char* text; };
+constexpr Snippet kSnippets[] = {
+    { "node pure fn", "node pure pub fn name(value: i64) -> i64 = {\n    value\n}\n" },
+    { "node callable fn", "node callable pub fn name() -> i64 = {\n    1\n}\n" },
+    { "if / else", "if condition {\n    \n} else {\n    \n}\n" },
+    { "while loop", "while condition {\n    \n}\n" },
+    { "for loop", "for i in 0..10 {\n    \n}\n" },
+    { "let binding", "let name = value;\n" },
+};
+
 // Finds a Data pin on `node` matching `type` -- searches inputs (for
 // binding a declared interface input to something the graph can feed a
 // parameter into) or outputs (for binding the single interface output).
@@ -145,6 +214,10 @@ PodEditorPanel::PodEditorPanel(frust::EngineFrustHost& frustHost, frust::PodCata
     addAndMakeVisible(newBehaviorPodButton_);
     newProcessingPodButton_.onClick = [this] { CreatePod(frust::PodKind::Processing); };
     addAndMakeVisible(newProcessingPodButton_);
+    newAuthoringModeCombo_.addItemList(juce::StringArray { "Graph", "Source" }, 1);
+    newAuthoringModeCombo_.setSelectedItemIndex(0, juce::dontSendNotification);
+    newAuthoringModeCombo_.setTooltip("Graph: node canvas. Source: hand-typed FRust.");
+    addAndMakeVisible(newAuthoringModeCombo_);
 
     behaviorSectionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
     behaviorSectionLabel_.setFont(juce::Font(juce::FontOptions(13.0f)).boldened());
@@ -163,7 +236,7 @@ PodEditorPanel::PodEditorPanel(frust::EngineFrustHost& frustHost, frust::PodCata
     hint_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
     addAndMakeVisible(hint_);
 
-    saveButton_.onClick = [this] { SaveGraph(); };
+    saveButton_.onClick = [this] { SaveContent(); };
     saveButton_.setTooltip("Save this Pod to the project -- the graph is the model, this is what makes it reopenable.");
     addAndMakeVisible(saveButton_);
 
@@ -217,6 +290,18 @@ PodEditorPanel::PodEditorPanel(frust::EngineFrustHost& frustHost, frust::PodCata
     addChildComponent(graphView_);
     addChildComponent(inspector_);
 
+    frustTokeniser_ = std::make_unique<FrustCodeTokeniser>();
+    sourceEditor_ = std::make_unique<juce::CodeEditorComponent>(sourceCodeDocument_, frustTokeniser_.get());
+    sourceEditor_->setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 14.0f, juce::Font::plain)));
+    sourceEditor_->setColourScheme(frustTokeniser_->getDefaultColourScheme());
+    addChildComponent(*sourceEditor_);
+
+    for (const auto& snippet : kSnippets) snippetCombo_.addItem(snippet.label, snippetCombo_.getNumItems() + 1);
+    snippetCombo_.setTextWhenNothingSelected("Snippet...");
+    addChildComponent(snippetCombo_);
+    insertSnippetButton_.onClick = [this] { InsertSnippet(); };
+    addChildComponent(insertSnippetButton_);
+
     RefreshBrowseList();
     ShowBrowseMode();
 }
@@ -249,7 +334,12 @@ void PodEditorPanel::RefreshBrowseList() {
 void PodEditorPanel::CreatePod(frust::PodKind kind) {
     const auto name = newNameEditor_.getText().trim();
     if (name.isEmpty()) return;
-    catalog_.GetOrCreateGraph(name, kind); // registers an empty graph under this name.
+    if (newAuthoringModeCombo_.getSelectedItemIndex() == 1) {
+        auto& source = catalog_.GetOrCreateSource(name, kind);
+        source = SourceTemplateFor(kind);
+    } else {
+        catalog_.GetOrCreateGraph(name, kind); // registers an empty graph under this name.
+    }
     newNameEditor_.clear();
     RefreshBrowseList();
     OpenPod(name);
@@ -257,28 +347,36 @@ void PodEditorPanel::CreatePod(frust::PodKind kind) {
 
 void PodEditorPanel::OpenPod(const juce::String& name) {
     const auto kind = catalog_.Kind(name);
-    // Graph holds unique_ptr<Node> internally -- it move-assigns, it does
-    // not copy-assign. An independent editing copy (so Save doesn't alias
-    // the catalog's stored graph while you're still mid-edit) goes through
-    // the same .frgraph round-trip Save uses below, not a direct
-    // assignment.
-    node_system::Graph& stored = catalog_.GetOrCreateGraph(name, kind);
-    std::string error;
-    auto copy = node_system::DeserializeGraph(node_system::SerializeGraph(stored), error);
-    if (!copy) {
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Cannot Open Pod",
-                                                "Could not load \"" + name + "\": " + juce::String(error));
-        return;
-    }
-    graph_ = std::move(*copy);
+    const auto mode = catalog_.AuthoringMode(name);
     openName_ = name;
     selectedNodeId_ = 0;
     editTitle_.setText(KindLabel(kind) + " Pod: " + name, juce::dontSendNotification);
     exposeAsNodeToggle_.setToggleState(catalog_.ExposeAsNode(name), juce::dontSendNotification);
-    graphView_.GraphReplaced();
     sourceView_.setText("Compile to see generated FRust and validation errors here.", juce::dontSendNotification);
-    status_.setText(juce::String(static_cast<int>(registry_.Types().size())) + " FRust nodes available", juce::dontSendNotification);
-    RefreshInterfaceRows();
+
+    if (mode == frust::PodAuthoringMode::Source) {
+        auto* entry = catalog_.FindEntry(name);
+        sourceCodeDocument_.replaceAllContent(entry ? entry->sourceText : juce::String());
+        status_.setText("Editing FRust source directly", juce::dontSendNotification);
+    } else {
+        // Graph holds unique_ptr<Node> internally -- it move-assigns, it
+        // does not copy-assign. An independent editing copy (so Save
+        // doesn't alias the catalog's stored graph while you're still
+        // mid-edit) goes through the same .frgraph round-trip Save uses,
+        // not a direct assignment.
+        node_system::Graph& stored = catalog_.GetOrCreateGraph(name, kind);
+        std::string error;
+        auto copy = node_system::DeserializeGraph(node_system::SerializeGraph(stored), error);
+        if (!copy) {
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Cannot Open Pod",
+                                                    "Could not load \"" + name + "\": " + juce::String(error));
+            return;
+        }
+        graph_ = std::move(*copy);
+        graphView_.GraphReplaced();
+        status_.setText(juce::String(static_cast<int>(registry_.Types().size())) + " FRust nodes available", juce::dontSendNotification);
+        RefreshInterfaceRows();
+    }
     ShowEditMode();
 }
 
@@ -289,6 +387,7 @@ void PodEditorPanel::ShowBrowseMode() {
     newNameEditor_.setVisible(true);
     newBehaviorPodButton_.setVisible(true);
     newProcessingPodButton_.setVisible(true);
+    newAuthoringModeCombo_.setVisible(true);
     behaviorSectionLabel_.setVisible(true);
     processingSectionLabel_.setVisible(true);
     for (auto* row : behaviorRows_) row->setVisible(true);
@@ -312,6 +411,9 @@ void PodEditorPanel::ShowBrowseMode() {
     for (auto* row : interfaceInputRows_) row->setVisible(false);
     outputRowLabel_.setVisible(false);
     bindOutputButton_.setVisible(false);
+    sourceEditor_->setVisible(false);
+    snippetCombo_.setVisible(false);
+    insertSnippetButton_.setVisible(false);
     resized();
 }
 
@@ -321,45 +423,63 @@ void PodEditorPanel::ShowEditMode() {
     newNameEditor_.setVisible(false);
     newBehaviorPodButton_.setVisible(false);
     newProcessingPodButton_.setVisible(false);
+    newAuthoringModeCombo_.setVisible(false);
     behaviorSectionLabel_.setVisible(false);
     processingSectionLabel_.setVisible(false);
     for (auto* row : behaviorRows_) row->setVisible(false);
     for (auto* row : processingRows_) row->setVisible(false);
+
+    const bool isSource = catalog_.AuthoringMode(openName_) == frust::PodAuthoringMode::Source;
 
     backButton_.setVisible(true);
     editTitle_.setVisible(true);
     hint_.setVisible(true);
     saveButton_.setVisible(true);
     compileButton_.setVisible(true);
-    exposeAsNodeToggle_.setVisible(true);
+    // The toggle drives Graph compilation's node-pure/node-callable
+    // prefixing; a Source Pod author gets the exact same effect by
+    // typing `node pure`/`node callable` themselves, so the toggle has
+    // nothing to do here.
+    exposeAsNodeToggle_.setVisible(!isSource);
     status_.setVisible(true);
     sourceView_.setVisible(true);
-    palette_.setVisible(true);
-    graphView_.setVisible(true);
-    inspector_.setVisible(true);
-    interfaceLabel_.setVisible(true);
-    newInputNameEditor_.setVisible(true);
-    newInputTypeCombo_.setVisible(true);
-    addInputButton_.setVisible(true);
-    for (auto* row : interfaceInputRows_) row->setVisible(true);
-    outputRowLabel_.setVisible(true);
-    bindOutputButton_.setVisible(true);
+    palette_.setVisible(!isSource);
+    graphView_.setVisible(!isSource);
+    inspector_.setVisible(!isSource);
+    interfaceLabel_.setVisible(!isSource);
+    newInputNameEditor_.setVisible(!isSource);
+    newInputTypeCombo_.setVisible(!isSource);
+    addInputButton_.setVisible(!isSource);
+    for (auto* row : interfaceInputRows_) row->setVisible(!isSource);
+    outputRowLabel_.setVisible(!isSource);
+    bindOutputButton_.setVisible(!isSource);
+    sourceEditor_->setVisible(isSource);
+    snippetCombo_.setVisible(isSource);
+    insertSnippetButton_.setVisible(isSource);
     resized();
 }
 
-void PodEditorPanel::SaveGraph() {
+void PodEditorPanel::SaveContent() {
     if (openName_.isEmpty()) return;
-    // Same round-trip as OpenPod, in reverse -- the catalog gets an
-    // independent copy, so graph_ (and this editor) keeps working
-    // unaffected by whatever the catalog does with its own copy afterward.
-    std::string error;
-    auto copy = node_system::DeserializeGraph(node_system::SerializeGraph(graph_), error);
-    if (!copy) {
-        status_.setText("Save failed: " + juce::String(error), juce::dontSendNotification);
-        status_.setColour(juce::Label::textColourId, juce::Colour(0xffff6b6b));
-        return;
+    auto* entry = catalog_.FindEntry(openName_);
+    if (entry == nullptr) return;
+
+    if (entry->authoringMode == frust::PodAuthoringMode::Source) {
+        entry->sourceText = sourceCodeDocument_.getAllContent();
+    } else {
+        // Same round-trip as OpenPod, in reverse -- the catalog gets an
+        // independent copy, so graph_ (and this editor) keeps working
+        // unaffected by whatever the catalog does with its own copy
+        // afterward.
+        std::string error;
+        auto copy = node_system::DeserializeGraph(node_system::SerializeGraph(graph_), error);
+        if (!copy) {
+            status_.setText("Save failed: " + juce::String(error), juce::dontSendNotification);
+            status_.setColour(juce::Label::textColourId, juce::Colour(0xffff6b6b));
+            return;
+        }
+        entry->graph = std::move(*copy);
     }
-    catalog_.GetOrCreateGraph(openName_, catalog_.Kind(openName_)) = std::move(*copy);
 
     juce::String persistError;
     if (!catalog_.Save(projectSession_, openName_, persistError)) {
@@ -374,6 +494,25 @@ void PodEditorPanel::SaveGraph() {
 void PodEditorPanel::CompileAndLoad() {
     if (openName_.isEmpty()) return;
     auto* entry = catalog_.FindEntry(openName_);
+    if (entry == nullptr) return;
+
+    std::string frustSource;
+
+    if (entry->authoringMode == frust::PodAuthoringMode::Source) {
+        // A Source Pod's model IS its FRust text directly -- no
+        // graph-to-text step, no manifest/exposeAsNode injection (the
+        // author writes `manifest "...";` and `node pure`/`node
+        // callable` themselves, same as EngineLifecycle.frust and
+        // CoreNodes.frust do). Invalid syntax surfaces exactly the same
+        // way it would for a Graph Pod: at the load step below, via the
+        // JIT compiler's own error text -- never blocks typing.
+        frustSource = sourceCodeDocument_.getAllContent().toStdString();
+        sourceView_.setText(sourceCodeDocument_.getAllContent(), juce::dontSendNotification);
+        if (juce::String(frustSource).trim().isEmpty()) {
+            status_.setText("Nothing to compile", juce::dontSendNotification);
+            return;
+        }
+    } else {
 
     node_system::FrustGraphCompileOptions options;
     // Every compiled Behavior exposes one hook today: on_tick. Other
@@ -437,6 +576,8 @@ void PodEditorPanel::CompileAndLoad() {
         status_.setColour(juce::Label::textColourId, juce::Colour(0xffff6b6b));
         return;
     }
+    frustSource = result.source;
+    }
 
     // The cached loadable pod, today, is the generated FRust source file
     // itself -- loaded through the same PluginRuntime::load() JIT path
@@ -455,7 +596,7 @@ void PodEditorPanel::CompileAndLoad() {
         return;
     }
     const auto cachedFile = behaviorsDir.getChildFile(openName_ + ".frust");
-    if (!cachedFile.replaceWithText(result.source)) {
+    if (!cachedFile.replaceWithText(frustSource)) {
         status_.setText("Compiled, but could not write the cached pod file", juce::dontSendNotification);
         status_.setColour(juce::Label::textColourId, juce::Colour(0xffff6b6b));
         return;
@@ -574,6 +715,14 @@ void PodEditorPanel::RefreshInterfaceRows() {
     resized();
 }
 
+void PodEditorPanel::InsertSnippet() {
+    const int index = snippetCombo_.getSelectedItemIndex();
+    if (index < 0 || static_cast<size_t>(index) >= std::size(kSnippets)) return;
+    sourceEditor_->insertTextAtCaret(kSnippets[static_cast<size_t>(index)].text);
+    snippetCombo_.setSelectedItemIndex(-1, juce::dontSendNotification);
+    sourceEditor_->grabKeyboardFocus();
+}
+
 void PodEditorPanel::resized()
 {
     auto area = getLocalBounds().reduced(16, 12);
@@ -586,6 +735,8 @@ void PodEditorPanel::resized()
         newProcessingPodButton_.setBounds(newRow.removeFromRight(150).reduced(2));
         newRow.removeFromRight(4);
         newBehaviorPodButton_.setBounds(newRow.removeFromRight(140).reduced(2));
+        newRow.removeFromRight(4);
+        newAuthoringModeCombo_.setBounds(newRow.removeFromRight(80).reduced(1));
         newRow.removeFromRight(8);
         newNameEditor_.setBounds(newRow);
         area.removeFromTop(12);
@@ -621,6 +772,16 @@ void PodEditorPanel::resized()
     status_.setBounds(footerHeader);
     sourceView_.setBounds(footer.reduced(0, 4));
     area.removeFromBottom(8);
+
+    if (catalog_.AuthoringMode(openName_) == frust::PodAuthoringMode::Source) {
+        auto snippetRow = area.removeFromTop(26);
+        insertSnippetButton_.setBounds(snippetRow.removeFromRight(60).reduced(1));
+        snippetRow.removeFromRight(4);
+        snippetCombo_.setBounds(snippetRow.removeFromRight(160).reduced(1));
+        area.removeFromTop(4);
+        sourceEditor_->setBounds(area);
+        return;
+    }
 
     auto left = area.removeFromLeft(190);
     palette_.setBounds(left);
