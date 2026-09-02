@@ -35,7 +35,7 @@ constexpr DockPanelMenuEntry kDockPanelMenuEntries[] = {
     { "materials-pbr", "Material Inspector" },
     { "behaviors", "Behaviors" },
     { "lighting", "Lighting" },
-    { "logic", "FRust Logic" },
+    { "pods", "Pods" },
     { "materials", "Materials" },
     { "assets", "Assets & Import" },
     { "content-browser", "Content Browser" },
@@ -95,7 +95,7 @@ MainComponent::MainComponent()
     if (!frustHost_.loadBundled(frustError)) {
         juce::Logger::writeToLog("Creation Engine FRust host: " + juce::String(frustError));
     }
-    frustAutomationPanel_ = std::make_unique<ce::views::FrustLogicPanel>(frustHost_, podCatalog_);
+    podEditorPanel_ = std::make_unique<ce::views::PodEditorPanel>(frustHost_, podCatalog_, projectSession_);
     frustHost_.setSceneTransitionRequestHandler([this](const std::string& reference) {
         const juce::String sceneReference(reference);
         for (const auto& scene : activeGame_.scenes)
@@ -408,7 +408,7 @@ void MainComponent::initialiseDockingWorkspace()
     dockManager_->registerPanel("materials-pbr", "Material Inspector", std::make_unique<NonOwningPanelHost>(pbrMaterialPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("behaviors", "Behaviors", std::make_unique<NonOwningPanelHost>(behaviorAttachmentPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("lighting", "Lighting", std::make_unique<NonOwningPanelHost>(lightPanel_), CreationDock::DockTargetZone::Right);
-    dockManager_->registerPanel("logic", "FRust Logic", std::make_unique<NonOwningPanelHost>(*frustAutomationPanel_), CreationDock::DockTargetZone::CenterTab);
+    dockManager_->registerPanel("pods", "Pods", std::make_unique<NonOwningPanelHost>(*podEditorPanel_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("materials", "Materials", std::make_unique<NonOwningPanelHost>(materialsPanel_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("assets", "Assets & Import", std::make_unique<NonOwningPanelHost>(importPanel_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("content-browser", "Content Browser", std::make_unique<NonOwningPanelHost>(contentBrowserPanel_), CreationDock::DockTargetZone::CenterTab);
@@ -501,6 +501,7 @@ void MainComponent::createNewProject()
         }
 
         options->headerBar_.setProjectLabel("Project: " + options->projectSession_.getManifest().projectName);
+        options->loadPodsForActiveProject();
         juce::String activateError;
         if (!options->openActiveGame(activateError))
             options->headerBar_.setStatusText("Created project, but could not open its game: " + activateError);
@@ -519,6 +520,7 @@ void MainComponent::openProject(const juce::String& projectId)
     }
 
     headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName);
+    loadPodsForActiveProject();
     if (!openActiveGame(err)) {
         headerBar_.setStatusText("Project opened, but its game could not load: " + err);
         return;
@@ -726,6 +728,7 @@ bool MainComponent::ensureProjectSessionActive(juce::String& errorMessage)
             if (creation::assets::ProjectWorkspaceService::openProject(suiteSettings_, lastProjectId, projectSession_, errorMessage))
             {
                 headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName);
+                loadPodsForActiveProject();
                 if (!openActiveGame(errorMessage)) return false;
                 return true;
             }
@@ -740,6 +743,7 @@ bool MainComponent::ensureProjectSessionActive(juce::String& errorMessage)
         if (creation::assets::ProjectWorkspaceService::openProject(suiteSettings_, availableProjects.getFirst().projectId, projectSession_, errorMessage))
         {
             headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName);
+            loadPodsForActiveProject();
             if (!openActiveGame(errorMessage)) return false;
             return true;
         }
@@ -747,6 +751,13 @@ bool MainComponent::ensureProjectSessionActive(juce::String& errorMessage)
 
     createNewProject();
     return false;
+}
+
+void MainComponent::loadPodsForActiveProject()
+{
+    juce::String error;
+    if (!podCatalog_.LoadAll(projectSession_, error))
+        headerBar_.setStatusText("Some Pods could not be loaded: " + error);
 }
 
 void MainComponent::saveAppSettings()

@@ -18,7 +18,7 @@ namespace ce::views
 // The real "Materials" dock panel (replacing MainComponent's old
 // PlaceholderPanel stand-in): a node graph editor over ce::material's real
 // compiler, reusing the same shared canvas/palette/inspector triplet
-// FrustLogicPanel already proved out for FRust behavior graphs. See
+// PodEditorPanel already proved out for FRust behavior graphs. See
 // docs/MATERIAL_SYSTEM_PLAN.md and apps/CreationEngine/AGENTS.md's Do It
 // Right Rule -- this is the actual editor, not a text-dump compiler demo.
 //
