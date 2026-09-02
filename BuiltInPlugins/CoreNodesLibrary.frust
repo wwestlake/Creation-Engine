@@ -11,3 +11,13 @@ node pure pub fn core_not(value: bool) -> bool = { !value }
 // A minimal executable-flow primitive used by graph compilation smoke tests.
 // Real action nodes can take typed data inputs and call registered host APIs.
 node callable pub fn core_trigger() -> i64 = { 1 }
+
+// Value/literal source nodes: one unconnected input (its default, edited
+// via the existing NodeInspector unconnected-input convention, IS the
+// authored literal), pass-through output. Behavior/Processing graphs had
+// no way to originate a constant value at all before this -- found during
+// the Pod plan's post-implementation verification pass.
+node pure pub fn core_literal_float(value: f64) -> f64 = { value }
+node pure pub fn core_literal_int(value: i64) -> i64 = { value }
+node pure pub fn core_literal_bool(value: bool) -> bool = { value }
+node pure pub fn core_literal_string(value: String) -> String = { value }
