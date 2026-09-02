@@ -28,9 +28,20 @@ juce::String DataTypeLabel(node_system::DataType type) {
         case node_system::DataType::Float: return "Float";
         case node_system::DataType::Bool: return "Bool";
         case node_system::DataType::String: return "String";
+        case node_system::DataType::Entity: return "Entity";
+        case node_system::DataType::Transform: return "Transform";
+        case node_system::DataType::Material: return "Material";
+        case node_system::DataType::Model: return "Model";
+        case node_system::DataType::Controller: return "Controller";
         default: return "Int";
     }
 }
+
+// Order here must match kTypesByIndex in AddInterfaceInput() below --
+// both are indexed by newInputTypeCombo_'s selected item.
+constexpr const char* kInterfaceTypeNames[] = {
+    "Float", "Bool", "Int", "String", "Entity", "Transform", "Material", "Model", "Controller"
+};
 
 // Syntax highlighting for hand-typed Source Pods (Phase 8). Reuses
 // JUCE's generic C-like lexer (CppTokeniserFunctions) for comments,
@@ -257,7 +268,11 @@ PodEditorPanel::PodEditorPanel(frust::EngineFrustHost& frustHost, frust::PodCata
 
     newInputNameEditor_.setTextToShowWhenEmpty("Input name...", juce::Colours::grey);
     addAndMakeVisible(newInputNameEditor_);
-    newInputTypeCombo_.addItemList(juce::StringArray { "Float", "Bool", "Int", "String" }, 1);
+    {
+        juce::StringArray typeItems;
+        for (const auto* name : kInterfaceTypeNames) typeItems.add(name);
+        newInputTypeCombo_.addItemList(typeItems, 1);
+    }
     newInputTypeCombo_.setSelectedItemIndex(0, juce::dontSendNotification);
     addAndMakeVisible(newInputTypeCombo_);
     addInputButton_.onClick = [this] { AddInterfaceInput(); };
@@ -626,13 +641,16 @@ void PodEditorPanel::AddInterfaceInput() {
     if (entry == nullptr) return;
 
     static constexpr node_system::DataType kTypesByIndex[] = {
-        node_system::DataType::Float, node_system::DataType::Bool, node_system::DataType::Int, node_system::DataType::String
+        node_system::DataType::Float, node_system::DataType::Bool, node_system::DataType::Int, node_system::DataType::String,
+        node_system::DataType::Entity, node_system::DataType::Transform, node_system::DataType::Material,
+        node_system::DataType::Model, node_system::DataType::Controller
     };
     const int typeIndex = newInputTypeCombo_.getSelectedItemIndex();
 
     frust::PodInterfaceInput input;
     input.name = name;
-    input.type = (typeIndex >= 0 && typeIndex < 4) ? kTypesByIndex[typeIndex] : node_system::DataType::Int;
+    input.type = (typeIndex >= 0 && static_cast<size_t>(typeIndex) < std::size(kTypesByIndex))
+                      ? kTypesByIndex[typeIndex] : node_system::DataType::Int;
     entry->interfaceInputs.push_back(input);
 
     newInputNameEditor_.clear();

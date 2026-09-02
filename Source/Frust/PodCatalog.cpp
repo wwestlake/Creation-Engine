@@ -43,6 +43,11 @@ juce::String DataTypeToken(node_system::DataType type) {
         case node_system::DataType::Float: return "float";
         case node_system::DataType::Bool: return "bool";
         case node_system::DataType::String: return "string";
+        case node_system::DataType::Entity: return "entity";
+        case node_system::DataType::Transform: return "transform";
+        case node_system::DataType::Material: return "material";
+        case node_system::DataType::Model: return "model";
+        case node_system::DataType::Controller: return "controller";
         default: return "int";
     }
 }
@@ -50,6 +55,11 @@ node_system::DataType DataTypeFromToken(const juce::String& token) {
     if (token.equalsIgnoreCase("float")) return node_system::DataType::Float;
     if (token.equalsIgnoreCase("bool")) return node_system::DataType::Bool;
     if (token.equalsIgnoreCase("string")) return node_system::DataType::String;
+    if (token.equalsIgnoreCase("entity")) return node_system::DataType::Entity;
+    if (token.equalsIgnoreCase("transform")) return node_system::DataType::Transform;
+    if (token.equalsIgnoreCase("material")) return node_system::DataType::Material;
+    if (token.equalsIgnoreCase("model")) return node_system::DataType::Model;
+    if (token.equalsIgnoreCase("controller")) return node_system::DataType::Controller;
     return node_system::DataType::Int;
 }
 
