@@ -75,6 +75,21 @@ private:
     static std::int64_t requestSceneTransition(const char* sceneReference);
     static const char* activeGameId();
     static const char* activeSceneId();
+    // Pod Variable get/set (Node/Behavior Graph Foundations plan Phase 5)
+    // -- storage is the entity's existing ObjectState.values
+    // (juce::NamedValueSet, already generic, already serialized), keyed
+    // by "<podId>.<name>" so two attached Pods can't collide on a
+    // variable name. Bool crosses the FFI boundary directly -- verified
+    // clean in both directions by FrustLang's own dedicated test harness
+    // (LANGUAGE_GAPS.md #9), not just assumed. Float is deliberately not
+    // included yet: no equivalent dedicated f64-FFI verification exists
+    // in this codebase to point to, unlike bool/i64/String which all do.
+    static bool podGetVariableBool(std::int64_t entityId, const char* podId, const char* name);
+    static std::int64_t podSetVariableBool(std::int64_t entityId, const char* podId, const char* name, bool value);
+    static std::int64_t podGetVariableInt(std::int64_t entityId, const char* podId, const char* name);
+    static std::int64_t podSetVariableInt(std::int64_t entityId, const char* podId, const char* name, std::int64_t value);
+    static const char* podGetVariableString(std::int64_t entityId, const char* podId, const char* name);
+    static std::int64_t podSetVariableString(std::int64_t entityId, const char* podId, const char* name, const char* value);
     [[nodiscard]] static std::string behaviorKey(const std::string& podId);
     [[nodiscard]] std::vector<std::pair<std::int64_t, std::string>> attachedObjectBehaviors() const;
     void ensureObjectLifecycle(std::int64_t entityId, const std::string& podId, std::int64_t tick);

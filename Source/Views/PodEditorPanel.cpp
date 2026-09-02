@@ -1,6 +1,8 @@
 #include "PodEditorPanel.h"
 
 #include <algorithm>
+#include <map>
+#include <set>
 #include <sstream>
 
 namespace ce::views
@@ -21,6 +23,10 @@ node_system::NodeTypeRegistry CopyRegistry(const node_system::NodeLibraryRegistr
     // structural, not FRust-reflected. See CompileAndLoad() below for
     // where these actually drive multi-entry compilation.
     node_system::RegisterCoreEventNodes(result);
+    // Entity-self accessor + Bool/Int/String Variable Get/Set -- same
+    // reasoning, plus these are host-extern calls (see
+    // NodeTypeDescriptor::isHostExtern).
+    node_system::RegisterCoreVariableNodes(result);
     for (const auto& [name, descriptor] : libraries.TypeRegistry().Types())
         result.Register(descriptor);
     return result;
@@ -565,12 +571,21 @@ void PodEditorPanel::CompileAndLoad() {
 
     std::ostringstream combinedSource;
     if (!eventNodes.empty()) {
+        // Each function compiles with its own manifest/imports suppressed
+        // (emitManifestAndImports = false for all of them, not just all-
+        // but-the-first) -- extern declarations returned by different
+        // compiles need deduping ACROSS every call before any of them are
+        // emitted, which isn't possible if one call already baked its own
+        // copy into `source`. The shared header (manifest + imports +
+        // deduped externs) is assembled here instead, once, up front.
+        std::map<std::string, std::string> externsByName;
+        std::vector<std::string> functionBodies;
         for (size_t i = 0; i < eventNodes.size(); ++i) {
             const auto* node = graph_.FindNode(eventNodes[i]);
             auto options = baseOptions;
             options.functionName = node_system::EventNodeFrustFunctionName(node->TypeName());
             options.entryNode = eventNodes[i];
-            options.emitManifestAndImports = (i == 0);
+            options.emitManifestAndImports = false;
 
             const auto result = node_system::CompileBehaviorGraphToFrust(graph_, frustHost_.nodeLibraries(), options);
             if (!result.ok) {
@@ -579,8 +594,18 @@ void PodEditorPanel::CompileAndLoad() {
                 status_.setColour(juce::Label::textColourId, juce::Colour(0xffff6b6b));
                 return;
             }
-            combinedSource << result.source << "\n";
+            functionBodies.push_back(result.source);
+            for (const auto& decl : result.externDeclarations) externsByName[decl] = decl;
         }
+
+        if (!baseOptions.manifestJson.empty())
+            combinedSource << "manifest \"" << node_system::EscapeFrustString(baseOptions.manifestJson) << "\";\n\n";
+        std::set<std::string> uniqueModules(baseOptions.sourceModules.begin(), baseOptions.sourceModules.end());
+        for (const auto& module : uniqueModules) combinedSource << "use self::" << module << ";\n";
+        if (!uniqueModules.empty()) combinedSource << "\n";
+        for (const auto& [name, decl] : externsByName) { (void)name; combinedSource << decl; }
+        if (!externsByName.empty()) combinedSource << "\n";
+        for (const auto& body : functionBodies) combinedSource << body << "\n";
     } else {
         auto options = baseOptions;
         // Every compiled Behavior exposes one hook today: on_tick. Other
@@ -624,6 +649,12 @@ void PodEditorPanel::CompileAndLoad() {
             return;
         }
 
+        // Same reasoning as the Event-node path above: build the header
+        // ourselves so a host-extern node used outside any Event chain
+        // (e.g. a Processing Pod reading a Variable) still gets its
+        // extern fn declaration emitted -- the compiler itself never
+        // embeds these in `source` anymore, only returns them as data.
+        options.emitManifestAndImports = false;
         const auto result = node_system::CompileBehaviorGraphToFrust(graph_, frustHost_.nodeLibraries(), options);
         if (!result.ok) {
             sourceView_.setText(juce::String(result.error), juce::dontSendNotification);
@@ -631,6 +662,13 @@ void PodEditorPanel::CompileAndLoad() {
             status_.setColour(juce::Label::textColourId, juce::Colour(0xffff6b6b));
             return;
         }
+        if (!options.manifestJson.empty())
+            combinedSource << "manifest \"" << node_system::EscapeFrustString(options.manifestJson) << "\";\n\n";
+        std::set<std::string> uniqueModules(options.sourceModules.begin(), options.sourceModules.end());
+        for (const auto& module : uniqueModules) combinedSource << "use self::" << module << ";\n";
+        if (!uniqueModules.empty()) combinedSource << "\n";
+        for (const auto& decl : result.externDeclarations) combinedSource << decl;
+        if (!result.externDeclarations.empty()) combinedSource << "\n";
         combinedSource << result.source;
     }
 

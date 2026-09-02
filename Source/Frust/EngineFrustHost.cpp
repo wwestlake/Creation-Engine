@@ -3,6 +3,8 @@
 
 #include <algorithm>
 
+#include "node_system/core_control_flow.h"
+
 #include <juce_core/juce_core.h>
 
 #include "engine/core_components.h"
@@ -31,6 +33,41 @@ EngineFrustHost::EngineFrustHost(engine::World& worldToHost)
     runtime.registerHostFunction("engine_request_scene_transition", reinterpret_cast<void*>(&EngineFrustHost::requestSceneTransition));
     runtime.registerHostFunction("engine_active_game_id", reinterpret_cast<void*>(&EngineFrustHost::activeGameId));
     runtime.registerHostFunction("engine_active_scene_id", reinterpret_cast<void*>(&EngineFrustHost::activeSceneId));
+    runtime.registerHostFunction("pod_get_variable_bool", reinterpret_cast<void*>(&EngineFrustHost::podGetVariableBool));
+    runtime.registerHostFunction("pod_set_variable_bool", reinterpret_cast<void*>(&EngineFrustHost::podSetVariableBool));
+    runtime.registerHostFunction("pod_get_variable_int", reinterpret_cast<void*>(&EngineFrustHost::podGetVariableInt));
+    runtime.registerHostFunction("pod_set_variable_int", reinterpret_cast<void*>(&EngineFrustHost::podSetVariableInt));
+    runtime.registerHostFunction("pod_get_variable_string", reinterpret_cast<void*>(&EngineFrustHost::podGetVariableString));
+    runtime.registerHostFunction("pod_set_variable_string", reinterpret_cast<void*>(&EngineFrustHost::podSetVariableString));
+
+    // Real, pre-existing gap fixed here: control-flow/Event/Variable node
+    // types were only ever registered into PodEditorPanel's own palette
+    // registry (a throwaway NodeTypeRegistry built fresh each time,
+    // CopyRegistry()), never into nodeLibraries_ -- the registry
+    // CompileBehaviorGraphToFrust actually receives. lowerExecChain()
+    // requires libraries.FindNodeType() to succeed for every node it
+    // walks, including the entry node itself, so a graph using ANY of
+    // these node types could never actually compile in the running app,
+    // only in NodeSystemSmoke.cpp's own separately-constructed test
+    // registry. Found while wiring up Phase 4/5 of the Node/Behavior
+    // Graph Foundations plan.
+    {
+        node_system::NodeTypeRegistry structuralTypes;
+        node_system::RegisterCoreControlFlowNodes(structuralTypes);
+        node_system::RegisterCoreEventNodes(structuralTypes);
+        node_system::RegisterCoreVariableNodes(structuralTypes);
+
+        node_system::NodeLibraryDescriptor library;
+        library.id = "core-structural";
+        library.displayName = "Core Structural Nodes";
+        library.description = "Control-flow, Event, and Variable nodes native to NodeSystem itself -- not FRust-reflected.";
+        library.target = node_system::GraphTarget::Behavior;
+        for (const auto& [name, descriptor] : structuralTypes.Types())
+            library.nodeTypes.push_back(descriptor);
+
+        std::string libraryError;
+        nodeLibraries_.Register(std::move(library), &libraryError);
+    }
 }
 
 EngineFrustHost::~EngineFrustHost()
@@ -214,6 +251,79 @@ std::int64_t EngineFrustHost::firstTransformEntity()
 std::int64_t EngineFrustHost::currentObjectEntity()
 {
     return activeHost != nullptr ? activeHost->activeObjectEntityId : -1;
+}
+
+namespace {
+juce::Identifier PodVariableKey(const char* podId, const char* name) {
+    return juce::Identifier(juce::String(podId != nullptr ? podId : "") + "." + juce::String(name != nullptr ? name : ""));
+}
+}
+
+bool EngineFrustHost::podGetVariableBool(std::int64_t entityId, const char* podId, const char* name)
+{
+    if (activeHost == nullptr || entityId < 0) return false;
+    const auto entity = static_cast<entt::entity>(entityId);
+    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
+    auto& registry = activeHost->world.Registry();
+    const auto* state = registry.valid(entity) ? registry.try_get<scene::ObjectState>(entity) : nullptr;
+    return state != nullptr && static_cast<bool>(state->values[PodVariableKey(podId, name)]);
+}
+
+std::int64_t EngineFrustHost::podSetVariableBool(std::int64_t entityId, const char* podId, const char* name, bool value)
+{
+    if (activeHost == nullptr || entityId < 0) return 0;
+    const auto entity = static_cast<entt::entity>(entityId);
+    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
+    auto& registry = activeHost->world.Registry();
+    if (!registry.valid(entity)) return 0;
+    registry.get_or_emplace<scene::ObjectState>(entity).values.set(PodVariableKey(podId, name), value);
+    return 1;
+}
+
+std::int64_t EngineFrustHost::podGetVariableInt(std::int64_t entityId, const char* podId, const char* name)
+{
+    if (activeHost == nullptr || entityId < 0) return 0;
+    const auto entity = static_cast<entt::entity>(entityId);
+    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
+    auto& registry = activeHost->world.Registry();
+    const auto* state = registry.valid(entity) ? registry.try_get<scene::ObjectState>(entity) : nullptr;
+    return state != nullptr ? static_cast<std::int64_t>(state->values[PodVariableKey(podId, name)]) : 0;
+}
+
+std::int64_t EngineFrustHost::podSetVariableInt(std::int64_t entityId, const char* podId, const char* name, std::int64_t value)
+{
+    if (activeHost == nullptr || entityId < 0) return 0;
+    const auto entity = static_cast<entt::entity>(entityId);
+    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
+    auto& registry = activeHost->world.Registry();
+    if (!registry.valid(entity)) return 0;
+    registry.get_or_emplace<scene::ObjectState>(entity).values.set(PodVariableKey(podId, name), value);
+    return 1;
+}
+
+const char* EngineFrustHost::podGetVariableString(std::int64_t entityId, const char* podId, const char* name)
+{
+    static thread_local std::string value;
+    value.clear();
+    if (activeHost == nullptr || entityId < 0) return value.c_str();
+    const auto entity = static_cast<entt::entity>(entityId);
+    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
+    auto& registry = activeHost->world.Registry();
+    if (const auto* state = registry.valid(entity) ? registry.try_get<scene::ObjectState>(entity) : nullptr) {
+        value = state->values[PodVariableKey(podId, name)].toString().toStdString();
+    }
+    return value.c_str();
+}
+
+std::int64_t EngineFrustHost::podSetVariableString(std::int64_t entityId, const char* podId, const char* name, const char* value)
+{
+    if (activeHost == nullptr || entityId < 0) return 0;
+    const auto entity = static_cast<entt::entity>(entityId);
+    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
+    auto& registry = activeHost->world.Registry();
+    if (!registry.valid(entity)) return 0;
+    registry.get_or_emplace<scene::ObjectState>(entity).values.set(PodVariableKey(podId, name), juce::String(value != nullptr ? value : ""));
+    return 1;
 }
 
 std::int64_t EngineFrustHost::setPositionX(std::int64_t entityId, std::int64_t positionX)
