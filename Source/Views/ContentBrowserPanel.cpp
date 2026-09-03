@@ -12,6 +12,28 @@
 
 namespace ce::views {
 
+namespace {
+juce::String KindLabel(frust::PodKind kind) { return kind == frust::PodKind::Processing ? "Processing" : "Behavior"; }
+
+// Kind-only creation (no name box, ever) needs a default name generated
+// for it -- "New Behavior Pod", then "New Behavior Pod 2", etc., the
+// first-free-numbered-slot shape most editors use for untitled documents.
+juce::String GenerateDefaultPodName(frust::PodCatalog& catalog, frust::PodKind kind) {
+    const juce::String base = "New " + KindLabel(kind) + " Pod";
+    const auto existing = catalog.Names(kind);
+    auto isTaken = [&](const juce::String& candidate) {
+        return std::any_of(existing.begin(), existing.end(),
+                            [&](const juce::String& name) { return name.equalsIgnoreCase(candidate); });
+    };
+    if (!isTaken(base)) return base;
+    for (int i = 2; i < 1000; ++i) {
+        const auto candidate = base + " " + juce::String(i);
+        if (!isTaken(candidate)) return candidate;
+    }
+    return base + " " + juce::String(juce::Time::currentTimeMillis());
+}
+}
+
 // One row: the durable project asset's display name/kind/category, plus
 // Delete. Deliberately shows only the LATEST version of each logical asset
 // -- older reimport history exists (AssetCatalog::findAllVersions) but
@@ -25,9 +47,10 @@ public:
         nameLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
         addAndMakeVisible(nameLabel_);
 
-        kindLabel_.setText(creation::assets::toDisplayName(descriptor_.kind) +
-                                (descriptor_.category.isNotEmpty() ? " / " + descriptor_.category : juce::String()),
-                            juce::dontSendNotification);
+        // Kind is already the enclosing Section's header -- repeating it
+        // per row would be the same redundant-column mistake the node
+        // palette had. Only the category (if any) shows here.
+        kindLabel_.setText(descriptor_.category, juce::dontSendNotification);
         kindLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
         addAndMakeVisible(kindLabel_);
 
@@ -64,8 +87,104 @@ private:
     juce::TextButton reimportButton_{ "Reimport" };
 };
 
-ContentBrowserPanel::ContentBrowserPanel(ViewportComponent& viewport, ImportPanel& importPanel)
-    : viewport_(viewport), importPanel_(importPanel) {
+// One collapsible section per AssetKind -- a header (kind name, count,
+// expand/collapse chevron) plus that kind's own rows. Right-clicking
+// anywhere in the Pods section (header, or the empty-hint area when it
+// has zero rows) is the entire "New Pod" creation flow -- there is no
+// name box and no button elsewhere. Kept as one persistent object per
+// kind across Refresh() calls (rows rebuilt in place via SetRows(), the
+// Section itself never recreated) so expand/collapse state survives a
+// Pod being created, saved, or deleted.
+class ContentBrowserPanel::Section final : public juce::Component {
+public:
+    static constexpr int kHeaderHeight = 22;
+    static constexpr int kRowHeight = 28;
+    static constexpr int kHintHeight = 20;
+
+    Section(ContentBrowserPanel& owner, creation::assets::AssetKind kind) : owner_(owner), kind_(kind) {}
+
+    creation::assets::AssetKind Kind() const { return kind_; }
+    bool IsEmpty() const { return rows_.isEmpty(); }
+
+    void SetRows(std::vector<creation::assets::AssetDescriptor> descriptors) {
+        rows_.clear();
+        for (auto& descriptor : descriptors) {
+            auto* row = rows_.add(new AssetRow(owner_, descriptor));
+            addAndMakeVisible(row);
+        }
+        resized();
+        repaint();
+    }
+
+    int GetPreferredHeight() const {
+        if (!expanded_) return kHeaderHeight;
+        if (rows_.isEmpty()) return kHeaderHeight + (IsPods() ? kHintHeight : 0);
+        return kHeaderHeight + rows_.size() * kRowHeight;
+    }
+
+    void resized() override {
+        auto bounds = getLocalBounds();
+        bounds.removeFromTop(kHeaderHeight);
+        if (!expanded_) return;
+        for (auto* row : rows_) {
+            row->setBounds(bounds.removeFromTop(kRowHeight - 2));
+            bounds.removeFromTop(2);
+        }
+    }
+
+    void paint(juce::Graphics& g) override {
+        auto bounds = getLocalBounds();
+        auto header = bounds.removeFromTop(kHeaderHeight);
+        g.setColour(juce::Colour(0xff20262f));
+        g.fillRect(header);
+        g.setColour(juce::Colour(0xff9aa8ba));
+        g.setFont(juce::Font(juce::FontOptions(12.0f)).boldened());
+        const juce::String chevron = expanded_ ? juce::String(juce::CharPointer_UTF8("\xe2\x96\xbc "))
+                                                : juce::String(juce::CharPointer_UTF8("\xe2\x96\xb6 "));
+        g.drawText(chevron + creation::assets::toDisplayName(kind_) + "  (" + juce::String(rows_.size()) + ")",
+                   header.reduced(8, 0), juce::Justification::centredLeft, true);
+
+        if (expanded_ && rows_.isEmpty() && IsPods()) {
+            g.setColour(juce::Colour(0xff5c6b7d));
+            g.setFont(juce::Font(juce::FontOptions(11.0f)).italicised());
+            g.drawText("Right-click to create a new Pod", bounds.reduced(8, 0), juce::Justification::centredLeft, true);
+        }
+    }
+
+    void mouseDown(const juce::MouseEvent& event) override {
+        if (event.mods.isPopupMenu()) {
+            ShowContextMenu();
+            return;
+        }
+        if (event.getPosition().y < kHeaderHeight) {
+            expanded_ = !expanded_;
+            owner_.resized();
+            repaint();
+        }
+    }
+
+private:
+    bool IsPods() const { return kind_ == creation::assets::AssetKind::pod; }
+
+    void ShowContextMenu() {
+        if (!IsPods()) return;
+        juce::PopupMenu menu;
+        menu.addItem(1, "New Behavior Pod");
+        menu.addItem(2, "New Processing Pod");
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this), [this](int result) {
+            if (result == 1) owner_.CreateNewPod(frust::PodKind::Behavior);
+            else if (result == 2) owner_.CreateNewPod(frust::PodKind::Processing);
+        });
+    }
+
+    ContentBrowserPanel& owner_;
+    creation::assets::AssetKind kind_;
+    bool expanded_ = true;
+    juce::OwnedArray<AssetRow> rows_;
+};
+
+ContentBrowserPanel::ContentBrowserPanel(ViewportComponent& viewport, ImportPanel& importPanel, frust::PodCatalog& podCatalog)
+    : viewport_(viewport), importPanel_(importPanel), podCatalog_(podCatalog) {
     titleLabel_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
     titleLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
     addAndMakeVisible(titleLabel_);
@@ -80,6 +199,11 @@ ContentBrowserPanel::ContentBrowserPanel(ViewportComponent& viewport, ImportPane
     emptyLabel_.setColour(juce::Label::textColourId, juce::Colours::grey);
     emptyLabel_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(emptyLabel_);
+
+    // The Pods section always exists -- created once here, never removed --
+    // so there's always somewhere to right-click "New Pod" even before a
+    // project is open or before any Pod exists.
+    FindOrCreateSection(creation::assets::AssetKind::pod);
 }
 
 ContentBrowserPanel::~ContentBrowserPanel() = default;
@@ -89,12 +213,18 @@ void ContentBrowserPanel::SetProjectContent(creation::assets::ProjectSession* se
     Refresh();
 }
 
-void ContentBrowserPanel::Refresh() {
-    rows_.clear();
+ContentBrowserPanel::Section* ContentBrowserPanel::FindOrCreateSection(creation::assets::AssetKind kind) {
+    for (auto* section : sections_)
+        if (section->Kind() == kind) return section;
+    auto* section = sections_.add(new Section(*this, kind));
+    addAndMakeVisible(section);
+    return section;
+}
 
-    if (projectSession_ == nullptr || !projectSession_->isValid()) {
-        emptyLabel_.setText("Open a project to browse its assets.", juce::dontSendNotification);
-        emptyLabel_.setVisible(true);
+void ContentBrowserPanel::Refresh() {
+    const bool projectOpen = projectSession_ != nullptr && projectSession_->isValid();
+    emptyLabel_.setVisible(!projectOpen);
+    if (!projectOpen) {
         resized();
         return;
     }
@@ -111,29 +241,59 @@ void ContentBrowserPanel::Refresh() {
     }
 
     const auto filterText = searchBox_.getText().trim();
-    std::vector<creation::assets::AssetDescriptor> visible;
+    std::unordered_map<creation::assets::AssetKind, std::vector<creation::assets::AssetDescriptor>> byKind;
+    byKind[creation::assets::AssetKind::pod]; // always present, even filtered/empty.
     for (const auto& [id, descriptor] : latestById) {
         if (filterText.isNotEmpty() && !descriptor.displayName.containsIgnoreCase(filterText)) continue;
-        visible.push_back(descriptor);
-    }
-    std::sort(visible.begin(), visible.end(), [](const auto& a, const auto& b) {
-        return a.displayName.compareIgnoreCase(b.displayName) < 0;
-    });
-
-    for (const auto& descriptor : visible) {
-        auto* row = rows_.add(new AssetRow(*this, descriptor));
-        addAndMakeVisible(row);
+        byKind[descriptor.kind].push_back(descriptor);
     }
 
-    emptyLabel_.setText(filterText.isNotEmpty() ? "No assets match \"" + filterText + "\"."
-                                                 : "No assets imported into this project yet -- see Assets & Import.",
-                         juce::dontSendNotification);
-    emptyLabel_.setVisible(rows_.isEmpty());
+    for (auto& [kind, descriptors] : byKind) {
+        std::sort(descriptors.begin(), descriptors.end(), [](const auto& a, const auto& b) {
+            return a.displayName.compareIgnoreCase(b.displayName) < 0;
+        });
+        FindOrCreateSection(kind)->SetRows(std::move(descriptors));
+    }
+
+    // Drop sections for kinds that no longer have any (matching) assets --
+    // except Pods, which always stays.
+    for (int i = sections_.size() - 1; i >= 0; --i) {
+        auto* section = sections_.getUnchecked(i);
+        if (section->Kind() != creation::assets::AssetKind::pod && section->IsEmpty()) sections_.remove(i);
+    }
+
+    struct SectionComparator {
+        static int compareElements(Section* a, Section* b) {
+            const bool aPods = a->Kind() == creation::assets::AssetKind::pod;
+            const bool bPods = b->Kind() == creation::assets::AssetKind::pod;
+            if (aPods != bPods) return aPods ? -1 : 1;
+            return creation::assets::toDisplayName(a->Kind()).compareIgnoreCase(creation::assets::toDisplayName(b->Kind()));
+        }
+    } comparator;
+    sections_.sort(comparator);
+
     resized();
 }
 
 void ContentBrowserPanel::OpenAsset(const creation::assets::AssetDescriptor& descriptor) {
     if (onAssetOpened) onAssetOpened(descriptor);
+}
+
+void ContentBrowserPanel::CreateNewPod(frust::PodKind kind) {
+    if (projectSession_ == nullptr || !projectSession_->isValid()) return;
+
+    const auto name = GenerateDefaultPodName(podCatalog_, kind);
+    podCatalog_.GetOrCreateGraph(name, kind);
+
+    juce::String error;
+    if (!podCatalog_.Save(*projectSession_, name, error)) {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Cannot Create Pod",
+                                                "Could not save the new Pod: " + error);
+        return;
+    }
+
+    Refresh();
+    if (onPodCreated) onPodCreated(name);
 }
 
 void ContentBrowserPanel::DeleteAsset(const creation::assets::AssetDescriptor& latest) {
@@ -271,14 +431,14 @@ void ContentBrowserPanel::resized() {
     searchBox_.setBounds(area.removeFromTop(28));
     area.removeFromTop(8);
 
-    if (rows_.isEmpty()) {
+    if (emptyLabel_.isVisible()) {
         emptyLabel_.setBounds(area.removeFromTop(40));
         return;
     }
 
-    for (auto* row : rows_) {
-        row->setBounds(area.removeFromTop(26));
-        area.removeFromTop(2);
+    for (auto* section : sections_) {
+        section->setBounds(area.removeFromTop(section->GetPreferredHeight()));
+        area.removeFromTop(4);
     }
 }
 

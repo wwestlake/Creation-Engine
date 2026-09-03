@@ -68,7 +68,7 @@ MainComponent::MainComponent()
       importPanel_(world_, viewport_, projectSession_),
       lightPanel_(viewport_),
       materialsPanel_(viewport_),
-      contentBrowserPanel_(viewport_, importPanel_) {
+      contentBrowserPanel_(viewport_, importPanel_, podCatalog_) {
     commandManager_.registerAllCommandsForTarget(this);
     commandManager_.getKeyMappings()->addKeyPress(
         kRunGameClientCommand,
