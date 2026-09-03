@@ -30,6 +30,7 @@
 
 #include <creation/assets/ProjectSession.h>
 #include <creation/assets/ProjectWorkspaceService.h>
+#include <creation/services/SuiteProcessRegistry.h>
 #include <creation/suite/SuiteSettings.h>
 
 // The editor and the runtime are the same executable in different modes
@@ -122,6 +123,16 @@ private:
     creation::suite::SuiteSettings suiteSettings_;
     creation::suite::SuiteSettingsStore suiteSettingsStore_;
     creation::assets::ProjectSession projectSession_;
+
+    // Makes this process discoverable to CreationSuiteVfsService's idle
+    // check (suiteHasAnyOtherLiveApp() in the service's Main.cpp) --
+    // without this, the service can never see a live suite app and
+    // self-terminates 20s after every on-demand launch, regardless of
+    // whether this app is actively using it (root cause of intermittent
+    // "Could not write the entry into the project" import failures).
+    // Constructed/registered in MainComponent's constructor, held for the
+    // app's whole lifetime per this class's own contract.
+    creation::services::SuiteProcessRegistration suiteProcessRegistration_;
     ce::project::GameDocumentInfo activeGame_;
     ce::project::SceneDocumentInfo activeScene_;
     juce::String pendingSceneTransitionId_;

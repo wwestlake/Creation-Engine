@@ -74,6 +74,10 @@ MainComponent::MainComponent()
       lightPanel_(viewport_),
       materialsPanel_(viewport_),
       contentBrowserPanel_(viewport_, importPanel_, podCatalog_, objectDefinitions_) {
+    // See suiteProcessRegistration_'s header comment: this is what keeps
+    // CreationSuiteVfsService alive while this app is actually running.
+    suiteProcessRegistration_.RegisterSelf("CreationEngine");
+
     commandManager_.registerAllCommandsForTarget(this);
     commandManager_.getKeyMappings()->addKeyPress(
         kRunGameClientCommand,
