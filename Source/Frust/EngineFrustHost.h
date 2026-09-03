@@ -53,6 +53,11 @@ public:
     void setSceneTransitionRequestHandler(std::function<void(const std::string&)> handler);
     void setActiveGameIdProvider(std::function<std::string()> provider);
     void setActiveSceneIdProvider(std::function<std::string()> provider);
+    // Backs core.asset.exists (Phase 8 of the Node/Behavior Graph
+    // Foundations plan) -- the host doesn't own ProjectSession/
+    // AssetCatalog directly (MainComponent does), same provider-callback
+    // pattern as the two providers just above, not a new convention.
+    void setAssetExistsProvider(std::function<bool(const std::string&)> provider);
     [[nodiscard]] bool isLoaded() const noexcept;
     [[nodiscard]] bool isObjectBehaviorLoaded(const std::string& podId) const noexcept;
     [[nodiscard]] const node_system::NodeLibraryRegistry& nodeLibraries() const noexcept { return nodeLibraries_; }
@@ -90,6 +95,7 @@ private:
     static std::int64_t podSetVariableInt(std::int64_t entityId, const char* podId, const char* name, std::int64_t value);
     static const char* podGetVariableString(std::int64_t entityId, const char* podId, const char* name);
     static std::int64_t podSetVariableString(std::int64_t entityId, const char* podId, const char* name, const char* value);
+    static bool assetExists(const char* assetDisplayName);
     [[nodiscard]] static std::string behaviorKey(const std::string& podId);
     [[nodiscard]] std::vector<std::pair<std::int64_t, std::string>> attachedObjectBehaviors() const;
     void ensureObjectLifecycle(std::int64_t entityId, const std::string& podId, std::int64_t tick);
@@ -113,6 +119,7 @@ private:
     std::function<void(const std::string&)> sceneTransitionRequestHandler;
     std::function<std::string()> activeGameIdProvider;
     std::function<std::string()> activeSceneIdProvider;
+    std::function<bool(const std::string&)> assetExistsProvider;
     std::unordered_map<std::int64_t, ObjectLifecycle> objectLifecycles;
 };
 } // namespace ce::frust

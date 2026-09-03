@@ -14,6 +14,11 @@ std::optional<Domain> domain(const juce::String& value) {
     if (value == "event") return node_system::Domain::Event;
     if (value == "animation") return node_system::Domain::Animation;
     if (value == "material") return node_system::Domain::Material;
+    // audio/video were missing despite both existing on the Domain enum
+    // -- found while touching this function for Phase 8's capability
+    // enforcement, fixed alongside it since it's the same few lines.
+    if (value == "audio") return node_system::Domain::Audio;
+    if (value == "video") return node_system::Domain::Video;
     return std::nullopt;
 }
 std::optional<GraphTarget> target(const juce::String& value) {
@@ -229,13 +234,31 @@ bool parseLibrary(const creation::frust::PluginRuntime::NodeLibraryManifest& man
 }
 
 bool RegisterPluginNodeLibraries(const std::vector<creation::frust::PluginRuntime::NodeLibraryManifest>& manifests,
-                                 node_system::NodeLibraryRegistry& registry, std::string& error) {
+                                 node_system::NodeLibraryRegistry& registry,
+                                 const std::set<std::string, std::less<>>& supportedCapabilities,
+                                 std::string& error) {
     std::vector<NodeLibraryDescriptor> libraries;
     libraries.reserve(manifests.size());
     for (const auto& manifest : manifests) {
         NodeLibraryDescriptor library;
         if (!parseLibrary(manifest, library, error)) {
             return false;
+        }
+        // The actual enforcement (Phase 8 of the Node/Behavior Graph
+        // Foundations plan): requiredCapabilities was already parsed off
+        // every node above, but nothing ever checked it against
+        // anything -- a library could declare it needed a capability the
+        // host doesn't provide and load anyway. Reject the WHOLE library
+        // (not just the offending node) with a clear, specific error, so
+        // a half-working library never silently loads.
+        for (const auto& node : library.nodeTypes) {
+            for (const auto& capability : node.requiredCapabilities) {
+                if (!supportedCapabilities.contains(capability)) {
+                    error = "Node library '" + library.id + "' node '" + node.typeName +
+                            "' requires capability '" + capability + "', which this host does not provide.";
+                    return false;
+                }
+            }
         }
         libraries.push_back(std::move(library));
     }
