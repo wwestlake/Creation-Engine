@@ -103,6 +103,16 @@ MainComponent::MainComponent()
     });
     frustHost_.setActiveGameIdProvider([this] { return activeGame_.id.toStdString(); });
     frustHost_.setActiveSceneIdProvider([this] { return activeScene_.id.toStdString(); });
+    // Backs core.asset.exists (Node/Behavior Graph Foundations plan Phase
+    // 8, the first real capability node) -- a real query against
+    // ProjectSession's asset catalog, not a stub.
+    frustHost_.setAssetExistsProvider([this](const std::string& name) {
+        if (!projectSession_.isValid()) return false;
+        const juce::String target(name);
+        for (const auto& asset : projectSession_.getManifest().assetCatalog.query({}))
+            if (asset.displayName == target) return true;
+        return false;
+    });
 
     headerBar_.setAppTitle("Creation Engine");
     headerBar_.setLogoImage(creation::ui::getSuiteLogoImage(creation::ui::SuiteLogoId::engine));
