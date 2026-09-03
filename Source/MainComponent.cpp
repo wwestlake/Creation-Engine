@@ -305,7 +305,7 @@ void MainComponent::getCommandInfo(juce::CommandID commandID, juce::ApplicationC
         result.addDefaultKeypress('S', juce::ModifierKeys::ctrlModifier);
     }
     if (commandID == kImportCommand)
-        result.setInfo("Import...", "Bring the Assets & Import panel to the front", "File", {});
+        result.setInfo("Import...", "Open a file browser to import assets", "File", {});
     if (commandID == kNewProjectCommand)
         result.setInfo("New Project...", "Create a new Suite project for Creation Engine", "Project", {});
     if (commandID == kOpenProjectBrowserCommand)
@@ -327,6 +327,7 @@ bool MainComponent::perform(const juce::ApplicationCommandTarget::InvocationInfo
     if (info.commandID == kImportCommand)
     {
         if (dockManager_ != nullptr) dockManager_->activatePanel("assets");
+        importPanel_.BrowseAndImport();
         return true;
     }
     if (info.commandID == kNewProjectCommand) { createNewProject(); return true; }

@@ -59,6 +59,13 @@ public:
 
     void SetProjectContent(creation::assets::ProjectSession* session, const juce::String& gameAssetRoot);
 
+    // Opens a native file picker and imports whatever's chosen through the
+    // exact same path filesDropped() uses -- drag-and-drop was the only
+    // way in before this, which meant importing anything required a real
+    // cross-window OS drag (source file's window -> this app's window).
+    // MainComponent's File > Import... menu entry calls this too.
+    void BrowseAndImport();
+
     // For ContentBrowserPanel -- deleting an audio asset needs to evict it
     // from the same runtime catalog this panel's preview rows read from,
     // and there's exactly one AudioCatalog per running app, owned here.
@@ -127,6 +134,8 @@ private:
     juce::Label dropZoneLabel_{ {},
                                  "Drag files here to import\n(currently: glTF/GLB/OBJ models, WAV/AIFF/FLAC audio, "
                                  "PNG/JPG/TGA/BMP/HDR textures)" };
+    juce::TextButton browseButton_{ "Browse..." };
+    std::unique_ptr<juce::FileChooser> activeImportChooser_; // kept alive for the duration of one async pick.
     juce::TextEditor log_;
 
     juce::Label audioClipsLabel_{ {}, "Audio Clips" };

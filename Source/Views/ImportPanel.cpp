@@ -103,6 +103,10 @@ ImportPanel::ImportPanel(engine::World& world, ViewportComponent& viewport,
     dropZoneLabel_.setColour(juce::Label::textColourId, juce::Colours::grey);
     addAndMakeVisible(dropZoneLabel_);
 
+    browseButton_.onClick = [this] { BrowseAndImport(); };
+    browseButton_.setTooltip("Pick files with a native file browser instead of dragging them in.");
+    addAndMakeVisible(browseButton_);
+
     log_.setMultiLine(true);
     log_.setReadOnly(true);
     log_.setScrollbarsShown(true);
@@ -161,6 +165,25 @@ void ImportPanel::fileDragEnter(const juce::StringArray&, int, int) {
 void ImportPanel::fileDragExit(const juce::StringArray&) {
     isDragHovering_ = false;
     repaint();
+}
+
+void ImportPanel::BrowseAndImport() {
+    activeImportChooser_ = std::make_unique<juce::FileChooser>(
+        "Import assets", juce::File(),
+        "*.gltf;*.glb;*.obj;*.wav;*.aiff;*.flac;*.png;*.jpg;*.jpeg;*.tga;*.bmp;*.hdr");
+
+    activeImportChooser_->launchAsync(
+        juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles |
+            juce::FileBrowserComponent::canSelectMultipleItems,
+        [this](const juce::FileChooser& chooser) {
+            const auto chosen = chooser.getResults();
+            activeImportChooser_.reset();
+            if (chosen.isEmpty()) return;
+
+            juce::StringArray paths;
+            for (const auto& file : chosen) paths.add(file.getFullPathName());
+            filesDropped(paths, 0, 0);
+        });
 }
 
 void ImportPanel::filesDropped(const juce::StringArray& files, int, int) {
@@ -336,7 +359,9 @@ void ImportPanel::resized() {
     auto area = getLocalBounds().reduced(16);
     titleLabel_.setBounds(area.removeFromTop(28));
     area.removeFromTop(8);
-    dropZoneLabel_.setBounds(area.removeFromTop(100));
+    auto dropZoneArea = area.removeFromTop(100);
+    dropZoneLabel_.setBounds(dropZoneArea);
+    browseButton_.setBounds(dropZoneArea.removeFromBottom(26).removeFromRight(100).reduced(4));
     area.removeFromTop(12);
 
     auto sidebarArea = area.removeFromRight(300);
