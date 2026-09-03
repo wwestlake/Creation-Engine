@@ -103,6 +103,12 @@ struct Folder {};
 struct SceneFlags {
     bool visible = true; // false: ViewportComponent skips drawing this entity.
     bool locked = false; // true: this entity can't be reparented (or, once SC4 exists, transform-edited) in the editor.
+    // true: this entity exists only for the privileged editor experience
+    // (e.g. the VR edit-mode cart) and must not render or be pickable
+    // while Play is active -- hidden, not despawned, so re-entering the
+    // editor brings it straight back with no respawn logic needed.
+    // VR Editor Cart plan Phase 2.
+    bool editorOnly = false;
 };
 
 // AI4: a skinned mesh's bind-pose skeleton, flattened into a

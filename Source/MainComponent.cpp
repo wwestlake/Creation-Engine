@@ -516,6 +516,7 @@ void MainComponent::SetPlaying(bool playing) {
     }
 
     isPlaying_ = playing;
+    viewport_.SetPlaying(playing); // hides SceneFlags::editorOnly entities (e.g. the cart) while playing.
     const auto tick = static_cast<std::int64_t>(world_.CurrentTick());
     if (playing) {
         frustHost_.beginPlay(tick);

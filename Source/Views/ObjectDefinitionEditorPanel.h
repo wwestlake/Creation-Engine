@@ -57,6 +57,8 @@ private:
     juce::Label meshLabel_{ {}, "(none)" };
     juce::TextButton pickMeshButton_{ "Choose Mesh..." };
 
+    juce::ToggleButton editorOnlyToggle_{ "Editor only (excluded from Play)" };
+
     juce::Label podsSectionLabel_{ {}, "Attached Pods" };
     juce::TextButton addPodButton_{ "+ Add Pod" };
     class PodRow;

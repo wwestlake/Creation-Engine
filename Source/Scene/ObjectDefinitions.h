@@ -35,6 +35,10 @@ struct ObjectDefinition
     juce::NamedValueSet defaultState;
     std::vector<juce::String> behaviorPods;
     std::vector<ObjectChildDefinition> children;
+    // Instances of this definition are excluded from Play (hidden, not
+    // despawned) -- see scene::SceneFlags::editorOnly. VR Editor Cart
+    // plan Phase 2 (the cart is the first thing that sets this true).
+    bool editorOnly = false;
 };
 
 class ObjectDefinitionCatalog final

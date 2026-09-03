@@ -53,6 +53,9 @@ ObjectDefinitionEditorPanel::ObjectDefinitionEditorPanel(scene::ObjectDefinition
     pickMeshButton_.onClick = [this] { PickMesh(); };
     addAndMakeVisible(pickMeshButton_);
 
+    editorOnlyToggle_.setTooltip("Instances of this definition are hidden (not despawned) while Play is active -- e.g. the VR edit-mode cart.");
+    addAndMakeVisible(editorOnlyToggle_);
+
     podsSectionLabel_.setFont(juce::Font(juce::FontOptions(13.0f)).boldened());
     podsSectionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
     addAndMakeVisible(podsSectionLabel_);
@@ -79,6 +82,7 @@ void ObjectDefinitionEditorPanel::OpenDefinition(const juce::String& id) {
     meshAssetId_ = definition ? definition->meshAssetId : juce::String();
     meshAssetVersionId_ = definition ? definition->meshAssetVersionId : juce::String();
     attachedPods_ = definition ? definition->behaviorPods : std::vector<juce::String>();
+    editorOnlyToggle_.setToggleState(definition && definition->editorOnly, juce::dontSendNotification);
 
     meshDisplayName_.clear();
     if (meshAssetId_.isNotEmpty() && projectSession_.isValid()) {
@@ -168,6 +172,7 @@ void ObjectDefinitionEditorPanel::SaveContent() {
     definition.meshAssetId = meshAssetId_;
     definition.meshAssetVersionId = meshAssetVersionId_;
     definition.behaviorPods = attachedPods_;
+    definition.editorOnly = editorOnlyToggle_.getToggleState();
 
     juce::String upsertError;
     if (!catalog_.upsert(definition, upsertError)) {
@@ -200,6 +205,8 @@ void ObjectDefinitionEditorPanel::resized() {
     pickMeshButton_.setBounds(meshRow.removeFromRight(110).reduced(1));
     meshRow.removeFromRight(8);
     meshLabel_.setBounds(meshRow);
+    area.removeFromTop(8);
+    editorOnlyToggle_.setBounds(area.removeFromTop(22));
     area.removeFromTop(12);
 
     podsSectionLabel_.setBounds(area.removeFromTop(18));

@@ -365,7 +365,8 @@ entt::entity ViewportComponent::desktopPick(const juce::Vector3D<float>& origin,
     const auto view = world_.Registry().view<const scene::Transform, const scene::MeshAssetReference>();
     for (const auto entity : view) {
         const auto& transform = view.get<const scene::Transform>(entity);
-        if (const auto* flags = world_.Registry().try_get<const scene::SceneFlags>(entity); flags != nullptr && !flags->visible)
+        if (const auto* flags = world_.Registry().try_get<const scene::SceneFlags>(entity);
+            flags != nullptr && (!flags->visible || (flags->editorOnly && isPlaying_)))
             continue;
         const auto halfExtents = juce::Vector3D<float>{ std::abs(transform.scale.x) * 0.5f,
                                                           std::abs(transform.scale.y) * 0.5f,
@@ -1193,7 +1194,7 @@ void ViewportComponent::renderOpenGL() {
             continue;
         }
         if (const auto* sceneFlags = world_.Registry().try_get<const scene::SceneFlags>(entity)) {
-            if (!sceneFlags->visible) {
+            if (!sceneFlags->visible || (sceneFlags->editorOnly && isPlaying_)) {
                 continue;
             }
         }

@@ -71,6 +71,7 @@ juce::ValueTree SerializeOne(const ObjectDefinition& definition)
     node.setProperty("meshAssetVersionId", definition.meshAssetVersionId, nullptr);
     node.setProperty("meshPackId", definition.meshPackId, nullptr);
     node.setProperty("meshPackVersion", definition.meshPackVersion, nullptr);
+    node.setProperty("editorOnly", definition.editorOnly, nullptr);
     node.addChild(serializeTransform(definition.initialTransform, "InitialTransform"), -1, nullptr);
 
     juce::ValueTree state("DefaultState");
@@ -107,6 +108,7 @@ ObjectDefinition RestoreOne(const juce::ValueTree& node)
     definition.meshAssetVersionId = node.getProperty("meshAssetVersionId").toString();
     definition.meshPackId = node.getProperty("meshPackId").toString();
     definition.meshPackVersion = node.getProperty("meshPackVersion").toString();
+    definition.editorOnly = static_cast<bool>(node.getProperty("editorOnly", false));
     definition.initialTransform = restoreTransform(node.getChildWithName("InitialTransform"));
 
     const auto defaultState = node.getChildWithName("DefaultState");
@@ -157,7 +159,9 @@ entt::entity instantiateDefinition(engine::World& world, const ObjectDefinitionC
     auto& registry = world.Registry();
     registry.emplace<Name>(entity, Name{ definition.displayName });
     registry.emplace<Transform>(entity, transform);
-    registry.emplace<SceneFlags>(entity, SceneFlags{});
+    SceneFlags flags;
+    flags.editorOnly = definition.editorOnly;
+    registry.emplace<SceneFlags>(entity, flags);
     registry.emplace<Parent>(entity, Parent{ parent });
     registry.emplace<ObjectDefinitionRef>(entity, ObjectDefinitionRef{ definition.id });
     registry.emplace<ObjectState>(entity, ObjectState{ definition.defaultState });

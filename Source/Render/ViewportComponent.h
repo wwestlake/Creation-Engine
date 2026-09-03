@@ -114,6 +114,12 @@ public:
 
     void EnableFirstPersonMode() { freeCamera_.EnableFirstPersonMode(); }
 
+    // Mirrors MainComponent::isPlaying_ -- editor-only entities
+    // (SceneFlags::editorOnly, e.g. the VR edit-mode cart) are skipped by
+    // both rendering and picking while true, hidden rather than
+    // destroyed/despawned. VR Editor Cart plan Phase 2.
+    void SetPlaying(bool playing) { isPlaying_ = playing; }
+
     // Catalog access for SC5's "+ Add" menu (HierarchyPanel) to list/look
     // up placeable assets, and for Source/Import's importers to register
     // newly-imported ones. Safe to call from any thread without an
@@ -173,6 +179,11 @@ private:
     engine::World& world_;
     interaction::EditorInteraction& interactions_;
     juce::Component& renderSurfaceHost_;
+    // Set via SetPlaying() above; read from both the message thread
+    // (desktopPick, on mouseDown) and the render thread (drawMeshes) --
+    // a plain bool is fine here, same tolerance every other simple
+    // editor-state flag in this class already relies on.
+    bool isPlaying_ = false;
 
     juce::OpenGLContext openGLContext_;
     std::unique_ptr<vr::OpenXRProvider> openXRProvider_;
