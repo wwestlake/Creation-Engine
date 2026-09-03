@@ -39,8 +39,12 @@ constexpr DockPanelMenuEntry kDockPanelMenuEntries[] = {
     { "materials", "Materials" },
     { "assets", "Assets & Import" },
     { "content-browser", "Content Browser" },
-    { "server", "Server" },
-    { "settings", "Settings" },
+    // "server"/"settings" deliberately not listed here -- both are still
+    // non-functional PlaceholderPanel stubs ("coming soon"), which only
+    // clutters the dock/menu right now. Not registered below either.
+    // Pod Editor UX & Architecture Fixes plan, Phase 3. serverPanel_/
+    // settingsPanel_ themselves are untouched -- trivially reversible
+    // once either is real.
     { "runtime-status", "Runtime Status" },
 };
 
@@ -422,8 +426,8 @@ void MainComponent::initialiseDockingWorkspace()
     dockManager_->registerPanel("materials", "Materials", std::make_unique<NonOwningPanelHost>(materialsPanel_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("assets", "Assets & Import", std::make_unique<NonOwningPanelHost>(importPanel_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("content-browser", "Content Browser", std::make_unique<NonOwningPanelHost>(contentBrowserPanel_), CreationDock::DockTargetZone::CenterTab);
-    dockManager_->registerPanel("server", "Server", std::make_unique<NonOwningPanelHost>(serverPanel_), CreationDock::DockTargetZone::Bottom);
-    dockManager_->registerPanel("settings", "Settings", std::make_unique<NonOwningPanelHost>(settingsPanel_), CreationDock::DockTargetZone::Right);
+    // "server"/"settings" not registered -- see kDockPanelMenuEntries'
+    // comment above.
     dockManager_->registerPanel("runtime-status", "Runtime Status", std::make_unique<NonOwningPanelHost>(tickLabel_), CreationDock::DockTargetZone::Bottom);
 }
 
