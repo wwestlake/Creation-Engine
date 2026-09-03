@@ -76,6 +76,14 @@ class ContentBrowserPanel::AssetRow final : public juce::Component,
 public:
     AssetRow(ContentBrowserPanel& owner, creation::assets::AssetDescriptor descriptor)
         : owner_(owner), descriptor_(std::move(descriptor)), placeable_(IsPlaceableKind(descriptor_.kind)) {
+        // Every plain label below opts out of its own mouse handling --
+        // juce::Label claims clicks for itself by default (it needs to,
+        // to detect a double-click into inline-edit mode even when not
+        // currently editable), which otherwise swallows every click/drag
+        // before it ever reaches this row's own mouseDown/mouseDrag/mouseUp
+        // -- exactly why rows were neither clickable nor draggable despite
+        // this class's own handlers being entirely correct.
+        nameLabel_.setInterceptsMouseClicks(false, false);
         nameLabel_.setText(descriptor_.displayName, juce::dontSendNotification);
         nameLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
         addAndMakeVisible(nameLabel_);
@@ -85,15 +93,18 @@ public:
         // palette had. Category, size, and modified time show here instead
         // -- real metadata, not just a name (the whole point of this being
         // a file organizer and not a bare list).
+        categoryLabel_.setInterceptsMouseClicks(false, false);
         categoryLabel_.setText(descriptor_.category, juce::dontSendNotification);
         categoryLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
         addAndMakeVisible(categoryLabel_);
 
+        sizeLabel_.setInterceptsMouseClicks(false, false);
         sizeLabel_.setText(FormatFileSize(descriptor_.fileSizeBytes), juce::dontSendNotification);
         sizeLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6c7a8c));
         sizeLabel_.setJustificationType(juce::Justification::centredRight);
         addAndMakeVisible(sizeLabel_);
 
+        modifiedLabel_.setInterceptsMouseClicks(false, false);
         modifiedLabel_.setText(descriptor_.modifiedAt.formatted("%Y-%m-%d %H:%M"), juce::dontSendNotification);
         modifiedLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6c7a8c));
         modifiedLabel_.setJustificationType(juce::Justification::centredRight);
