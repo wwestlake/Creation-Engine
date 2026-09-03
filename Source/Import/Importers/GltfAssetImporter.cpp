@@ -1,7 +1,5 @@
 #include "Import/Importers/GltfAssetImporter.h"
 
-#include <mutex>
-
 #include <creation/assets/ProjectAssetService.h>
 
 #include "Assets/ProjectContentAssetStore.h"
@@ -9,7 +7,6 @@
 #include "Render/ViewportComponent.h"
 #include "Scene/AnimationSlicer.h"
 #include "Scene/AssetCatalog.h"
-#include "Scene/AssetPlacement.h"
 #include "Scene/Components.h"
 
 namespace ce::import {
@@ -112,19 +109,11 @@ ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportConte
         ! context.catalog->AddAlias(sourceDescriptor.id, assetName))
         return ImportResult::Failed("The imported model could not be registered with its project asset identity.");
 
-    // Drop the model straight into the scene rather than only staging it
-    // in the catalog for a manual "+ Add" follow-up -- a dragged-in file
-    // should show up, same expectation as every other creative tool's
-    // import flow. The catalog entry still exists afterward for placing
-    // additional copies via "+ Add".
-    const auto asset = context.catalog->Find(assetName);
-    {
-        std::lock_guard<std::mutex> lock(context.world->RegistryMutex());
-        scene::PlaceAssetEntity(*context.world, asset, assetName, scene::ToVec3(context.viewport->SpawnPosition()),
-                                entt::null, sourceDescriptor.id, sourceDescriptor.versionId);
-    }
-
-    return ImportResult::Ok(assetName + " stored in project content and placed in the scene." + animationNote);
+    // Import only stages the asset in the catalog -- it does NOT place an
+    // instance in the scene. Placing is a separate, deliberate action
+    // (Hierarchy's "+ Add", or Content Browser once models get the same
+    // place-from-catalog treatment as Pods/Object Definitions).
+    return ImportResult::Ok(assetName + " stored in project content." + animationNote);
 }
 
 ImportResult GltfAssetImporter::Reimport(const juce::File& sourceFile,

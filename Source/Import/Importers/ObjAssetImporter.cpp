@@ -1,14 +1,11 @@
 #include "Import/Importers/ObjAssetImporter.h"
 
-#include <mutex>
-
 #include <creation/assets/ProjectAssetService.h>
 
 #include "Assets/ProjectContentAssetStore.h"
 #include "Render/Import/ObjLoader.h"
 #include "Render/ViewportComponent.h"
 #include "Scene/AssetCatalog.h"
-#include "Scene/AssetPlacement.h"
 #include "Scene/Components.h"
 
 namespace ce::import {
@@ -48,16 +45,9 @@ ImportResult ObjAssetImporter::Import(const juce::File& sourceFile, ImportContex
         ! context.catalog->AddAlias(sourceDescriptor.id, assetName))
         return ImportResult::Failed("The imported model could not be registered with its project asset identity.");
 
-    // See GltfAssetImporter::Import's matching comment -- same "drop it
-    // straight into the scene" behavior for both formats.
-    const auto asset = context.catalog->Find(assetName);
-    {
-        std::lock_guard<std::mutex> lock(context.world->RegistryMutex());
-        scene::PlaceAssetEntity(*context.world, asset, assetName, scene::ToVec3(context.viewport->SpawnPosition()),
-                                entt::null, sourceDescriptor.id, sourceDescriptor.versionId);
-    }
-
-    return ImportResult::Ok(assetName + " stored in project content and placed in the scene.");
+    // Import only stages the asset in the catalog -- see
+    // GltfAssetImporter::Import's matching comment.
+    return ImportResult::Ok(assetName + " stored in project content.");
 }
 
 ImportResult ObjAssetImporter::Reimport(const juce::File& sourceFile,

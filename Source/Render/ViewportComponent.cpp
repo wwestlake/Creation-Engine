@@ -331,6 +331,17 @@ void ViewportComponent::ResolveProjectAssets(const creation::assets::ProjectSess
     }
 }
 
+bool ViewportComponent::isInterestedInDragSource(const SourceDetails& dragSourceDetails)
+{
+    return dragSourceDetails.description.toString().startsWith("asset|");
+}
+
+void ViewportComponent::itemDropped(const SourceDetails& dragSourceDetails)
+{
+    if (onAssetDropped)
+        onAssetDropped(dragSourceDetails.description.toString(), dragSourceDetails.localPosition);
+}
+
 bool ViewportComponent::desktopRay(const juce::Point<float>& screenPosition,
                                    juce::Vector3D<float>& origin,
                                    juce::Vector3D<float>& direction) const

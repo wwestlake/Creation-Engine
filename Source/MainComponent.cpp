@@ -1,8 +1,11 @@
 #include "MainComponent.h"
 
+#include <mutex>
+
 #include <creation/services/SuiteVfsJsonStore.h>
 
 #include <creation/ui/CreationSuiteLogos.h>
+#include "Scene/Components.h"
 #include "Scene/EngineSceneSerializer.h"
 #include "Project/EngineGameDocument.h"
 #include "engine/foundation_gameplay.h"
@@ -36,7 +39,6 @@ constexpr DockPanelMenuEntry kDockPanelMenuEntries[] = {
     { "behaviors", "Behaviors" },
     { "lighting", "Lighting" },
     { "materials", "Materials" },
-    { "assets", "Assets & Import" },
     { "content-browser", "Content Browser" },
     // "server"/"settings" deliberately not listed here -- both are still
     // non-functional PlaceholderPanel stubs ("coming soon"), which only
@@ -135,6 +137,15 @@ MainComponent::MainComponent()
     contentBrowserPanel_.onObjectDefinitionCreated = [this](const juce::String& id) {
         EnsureObjectDefinitionPanelOpen();
         objectDefinitionEditorPanel_->OpenDefinition(id);
+    };
+    // Content Browser is the only source that produces this description
+    // shape (see ContentBrowserPanel::AssetRow::mouseDrag). Placement lives
+    // here, not in ViewportComponent or ContentBrowserPanel, because it
+    // needs projectSession_/objectDefinitions_/suiteSettings_ together --
+    // an asset browser's job ends at "this asset exists"; where it lands
+    // in a scene is this class's call, not the browser's or the importer's.
+    viewport_.onAssetDropped = [this](const juce::String& description, juce::Point<int> localPosition) {
+        HandleAssetDropped(description, localPosition);
     };
     frustHost_.setSceneTransitionRequestHandler([this](const std::string& reference) {
         const juce::String sceneReference(reference);
@@ -330,7 +341,7 @@ bool MainComponent::perform(const juce::ApplicationCommandTarget::InvocationInfo
     if (info.commandID == kSaveCommand) { saveSessionToDisk(true); return true; }
     if (info.commandID == kImportCommand)
     {
-        if (dockManager_ != nullptr) dockManager_->activatePanel("assets");
+        if (dockManager_ != nullptr) dockManager_->activatePanel("content-browser");
         importPanel_.BrowseAndImport();
         return true;
     }
@@ -463,8 +474,14 @@ void MainComponent::initialiseDockingWorkspace()
     // while a Pod is open, via EnsurePodPanelsOpen(). Pod/Asset Workflow
     // plan Phase 5.
     dockManager_->registerPanel("materials", "Materials", std::make_unique<NonOwningPanelHost>(materialsPanel_), CreationDock::DockTargetZone::CenterTab);
-    dockManager_->registerPanel("assets", "Assets & Import", std::make_unique<NonOwningPanelHost>(importPanel_), CreationDock::DockTargetZone::CenterTab);
-    dockManager_->registerPanel("content-browser", "Content Browser", std::make_unique<NonOwningPanelHost>(contentBrowserPanel_), CreationDock::DockTargetZone::CenterTab);
+    // "assets" (the old standalone Import screen) is gone -- import/export/
+    // browse/place all live in Content Browser now. importPanel_ itself
+    // stays alive as backing logic (importer registry, audio catalog) that
+    // Content Browser and Reimport call into; it's never mounted as a panel.
+    // Docked at the Bottom (not a CenterTab) so it's open by default, same
+    // as Runtime Status -- this is meant to be glanced at constantly while
+    // building a scene, not a screen you navigate to.
+    dockManager_->registerPanel("content-browser", "Content Browser", std::make_unique<NonOwningPanelHost>(contentBrowserPanel_), CreationDock::DockTargetZone::Bottom);
     // "server"/"settings" not registered -- see kDockPanelMenuEntries'
     // comment above.
     dockManager_->registerPanel("runtime-status", "Runtime Status", std::make_unique<NonOwningPanelHost>(tickLabel_), CreationDock::DockTargetZone::Bottom);
@@ -708,6 +725,71 @@ void MainComponent::refreshExplorerPanel()
 {
     explorerPanel_.setDocuments(games_, activeGame_.id, activeScene_.id);
     explorerPanel_.setStatus(activeGame_.id.isEmpty() ? "No active game" : activeGame_.name + " / " + activeScene_.name);
+}
+
+void MainComponent::HandleAssetDropped(const juce::String& description, juce::Point<int> localPosition)
+{
+    const auto parts = juce::StringArray::fromTokens(description, "|", "");
+    if (parts.size() < 5 || parts[0] != "asset") return;
+    const auto kind = creation::assets::assetKindFromStorageToken(parts[1]);
+    const auto id = parts[2];
+    const auto versionId = parts[3];
+    const auto displayName = parts[4];
+
+    // Ray-cast the drop point against the ground plane (y=0, same
+    // convention FoundationGameplay's own ground uses) so an asset lands
+    // roughly where it was dropped rather than always at a fixed spot in
+    // front of the camera; SpawnPosition() is only the fallback for a ray
+    // that can't hit that plane (e.g. dropped above the horizon, looking
+    // up).
+    auto dropPosition = ce::scene::ToVec3(viewport_.SpawnPosition());
+    juce::Vector3D<float> rayOrigin, rayDirection;
+    if (viewport_.desktopRay(localPosition.toFloat(), rayOrigin, rayDirection) && rayDirection.y < -0.001f) {
+        const float t = -rayOrigin.y / rayDirection.y;
+        dropPosition = ce::scene::ToVec3(juce::Vector3D<float>{ rayOrigin.x + rayDirection.x * t, 0.0f,
+                                                                 rayOrigin.z + rayDirection.z * t });
+    }
+
+    juce::String error;
+    if (kind == creation::assets::AssetKind::render) {
+        entt::entity entity = entt::null;
+        {
+            std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+            auto& registry = world_.Registry();
+            entity = world_.CreateEntity();
+            registry.emplace<ce::scene::Name>(entity, ce::scene::Name{ displayName });
+            registry.emplace<ce::scene::Transform>(entity, ce::scene::Transform{ dropPosition });
+            registry.emplace<ce::scene::MeshAssetReference>(entity, ce::scene::MeshAssetReference{ id, versionId, {}, {} });
+            registry.emplace<ce::scene::SceneFlags>(entity);
+            registry.emplace<ce::scene::Parent>(entity);
+        }
+        // Materializes it into the runtime GPU cache right away (rather
+        // than leaving it to resolve lazily next frame) so a skinned
+        // model's Skeleton/Animator can be attached too -- mirrors
+        // PlaceAssetEntity's full component set, just resolved just-in-time
+        // instead of requiring an already-loaded Asset up front.
+        viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
+        const auto asset = viewport_.Catalog().Find(id);
+        if (asset.mesh != nullptr) {
+            std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+            auto& registry = world_.Registry();
+            if (asset.skeleton != nullptr) registry.emplace<ce::scene::Skeleton>(entity, *asset.skeleton);
+            if (asset.animationClips != nullptr && !asset.animationClips->empty())
+                registry.emplace<ce::scene::Animator>(entity, ce::scene::Animator{ asset.animationClips, 0, 0.0f, false, true });
+        } else {
+            headerBar_.setStatusText("Placed \"" + displayName + "\", but its mesh hasn't loaded yet.");
+        }
+    } else if (kind == creation::assets::AssetKind::objectDefinition) {
+        // Unlike the render-kind path above, instantiate() takes the
+        // registry lock itself -- taking it here too would deadlock.
+        const auto result = ce::scene::ObjectFactory::instantiate(world_, objectDefinitions_, displayName, dropPosition, error);
+        if (result.root == entt::null) {
+            headerBar_.setStatusText("Could not place \"" + displayName + "\": " + error);
+        } else {
+            viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
+        }
+    }
+    refreshExplorerPanel();
 }
 
 void MainComponent::selectGame(const juce::String& gameId)

@@ -47,7 +47,8 @@ class MainComponent final : public juce::Component,
                             private juce::Timer,
                             public juce::ApplicationCommandTarget,
                             private juce::MenuBarModel,
-                            private juce::ComponentListener
+                            private juce::ComponentListener,
+                            public juce::DragAndDropContainer
 {
 public:
     MainComponent();
@@ -119,6 +120,18 @@ private:
     // opened project, or restored last-opened project) so podCatalog_
     // reflects whatever Pods that project has already saved.
     void loadPodsForActiveProject();
+
+    // Wired to viewport_.onAssetDropped -- Content Browser drags an asset
+    // (see ContentBrowserPanel::AssetRow) onto the Scene Viewport, this
+    // materializes it (if needed) and places it. A real named member
+    // function rather than inline in the constructor's lambda: an inline
+    // version of this exact logic reproducibly hit an MSVC parser bug
+    // (bare namespace-qualified aggregate-init statements failing with
+    // spurious "dependent type name"/"not a namespace" errors, confirmed
+    // via bisection -- the same code compiles clean as an ordinary member
+    // function, which every other emplace<>-heavy function in this
+    // codebase already is).
+    void HandleAssetDropped(const juce::String& description, juce::Point<int> localPosition);
 
     creation::suite::SuiteSettings suiteSettings_;
     creation::suite::SuiteSettingsStore suiteSettingsStore_;

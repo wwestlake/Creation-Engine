@@ -82,7 +82,8 @@ namespace ce {
 // threads during a drag, only ever touched by the one that already owns
 // it every frame regardless.
 class ViewportComponent final : public juce::Component,
-                                 private juce::OpenGLRenderer {
+                                 private juce::OpenGLRenderer,
+                                 public juce::DragAndDropTarget {
 public:
     // renderSurfaceHost is where the OpenGLContext actually attaches -- an
     // always-alive component owned outside the dock tree (see
@@ -148,6 +149,29 @@ public:
     void ResolveProjectAssets(const creation::assets::ProjectSession& session,
                               const creation::suite::SuiteSettings& settings);
 
+    // Content Browser's rows are the only drag source that produces this
+    // description shape ("asset|<kind-token>|<id>|<versionId>|<displayName>",
+    // see ContentBrowserPanel::AssetRow) -- accept only that, so an
+    // unrelated drag (e.g. OS file icons, which JUCE surfaces through a
+    // different interface entirely) never matches here by accident.
+    bool isInterestedInDragSource(const SourceDetails& dragSourceDetails) override;
+    void itemDropped(const SourceDetails& dragSourceDetails) override;
+
+    // Fired on a successful drop -- MainComponent owns the actual
+    // materialize-and-place logic (it already holds ProjectSession,
+    // ObjectDefinitionCatalog, and SuiteSettings; this class doesn't and
+    // shouldn't need to). Passed the same description string itemDropped
+    // received, plus where in this viewport it landed.
+    std::function<void(const juce::String& description, juce::Point<int> localPosition)> onAssetDropped;
+
+    // Public (moved up from the picking-only section below) so
+    // onAssetDropped's handler can turn a drop point into a real world
+    // position -- the same screen-to-ray math desktopPick already uses for
+    // clicking, not a second implementation of it.
+    [[nodiscard]] bool desktopRay(const juce::Point<float>& screenPosition,
+                                  juce::Vector3D<float>& origin,
+                                  juce::Vector3D<float>& direction) const;
+
 private:
     enum class TranslationHandle { none, xAxis, yAxis, zAxis, xyPlane, xzPlane, yzPlane, free };
 
@@ -162,9 +186,6 @@ private:
     void uploadVRWands();
     void uploadVRTransformGizmo();
     void uploadVREditorCart();
-    [[nodiscard]] bool desktopRay(const juce::Point<float>& screenPosition,
-                                  juce::Vector3D<float>& origin,
-                                  juce::Vector3D<float>& direction) const;
     [[nodiscard]] entt::entity desktopPick(const juce::Vector3D<float>& origin,
                                            const juce::Vector3D<float>& direction,
                                            float& distance) const;
