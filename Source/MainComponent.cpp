@@ -35,17 +35,22 @@ constexpr DockPanelMenuEntry kDockPanelMenuEntries[] = {
     { "materials-pbr", "Material Inspector" },
     { "behaviors", "Behaviors" },
     { "lighting", "Lighting" },
-    { "pods", "Pods" },
-    { "pod-info", "Pod" },
     { "materials", "Materials" },
     { "assets", "Assets & Import" },
     { "content-browser", "Content Browser" },
     // "server"/"settings" deliberately not listed here -- both are still
     // non-functional PlaceholderPanel stubs ("coming soon"), which only
     // clutters the dock/menu right now. Not registered below either.
-    // Pod Editor UX & Architecture Fixes plan, Phase 3. serverPanel_/
-    // settingsPanel_ themselves are untouched -- trivially reversible
-    // once either is real.
+    // serverPanel_/settingsPanel_ themselves are untouched -- trivially
+    // reversible once either is real.
+    //
+    // "pods"/"pod-info" also deliberately not listed here -- unlike every
+    // other entry, they don't exist as dock tabs at all until a Pod is
+    // open (EnsurePodPanelsOpen(), called from the Content Browser), so a
+    // permanent View-menu entry for them would silently no-op most of the
+    // time. Open a Pod from its Content Browser row/right-click menu
+    // instead; once open, its tab is right there to click on directly.
+    // Pod/Asset Workflow plan Phase 5.
     { "runtime-status", "Runtime Status" },
 };
 
@@ -110,8 +115,12 @@ MainComponent::MainComponent()
     podEditorPanel_->onSelectedNodeChanged = [this](ce::node_system::NodeId id) { podInfoPanel_->SetSelectedNode(id); };
     contentBrowserPanel_.onAssetOpened = [this](const creation::assets::AssetDescriptor& descriptor) {
         if (descriptor.kind != creation::assets::AssetKind::pod) return;
-        if (dockManager_ != nullptr) dockManager_->activatePanel("pods");
+        EnsurePodPanelsOpen();
         podEditorPanel_->OpenPod(descriptor.displayName);
+    };
+    contentBrowserPanel_.onPodCreated = [this](const juce::String& name) {
+        EnsurePodPanelsOpen();
+        podEditorPanel_->OpenPod(name);
     };
     frustHost_.setSceneTransitionRequestHandler([this](const std::string& reference) {
         const juce::String sceneReference(reference);
@@ -435,14 +444,44 @@ void MainComponent::initialiseDockingWorkspace()
     dockManager_->registerPanel("materials-pbr", "Material Inspector", std::make_unique<NonOwningPanelHost>(pbrMaterialPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("behaviors", "Behaviors", std::make_unique<NonOwningPanelHost>(behaviorAttachmentPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("lighting", "Lighting", std::make_unique<NonOwningPanelHost>(lightPanel_), CreationDock::DockTargetZone::Right);
-    dockManager_->registerPanel("pods", "Pods", std::make_unique<NonOwningPanelHost>(*podEditorPanel_), CreationDock::DockTargetZone::CenterTab);
-    dockManager_->registerPanel("pod-info", "Pod", std::make_unique<NonOwningPanelHost>(*podInfoPanel_), CreationDock::DockTargetZone::Right);
+    // "pods"/"pod-info" deliberately NOT registered here -- they exist only
+    // while a Pod is open, via EnsurePodPanelsOpen(). Pod/Asset Workflow
+    // plan Phase 5.
     dockManager_->registerPanel("materials", "Materials", std::make_unique<NonOwningPanelHost>(materialsPanel_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("assets", "Assets & Import", std::make_unique<NonOwningPanelHost>(importPanel_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("content-browser", "Content Browser", std::make_unique<NonOwningPanelHost>(contentBrowserPanel_), CreationDock::DockTargetZone::CenterTab);
     // "server"/"settings" not registered -- see kDockPanelMenuEntries'
     // comment above.
     dockManager_->registerPanel("runtime-status", "Runtime Status", std::make_unique<NonOwningPanelHost>(tickLabel_), CreationDock::DockTargetZone::Bottom);
+}
+
+void MainComponent::EnsurePodPanelsOpen() {
+    if (dockManager_ == nullptr) return;
+
+    if (!dockManager_->isRegistered("pods")) {
+        auto* panel = dockManager_->registerPanel("pods", "Pods", std::make_unique<NonOwningPanelHost>(*podEditorPanel_),
+                                                   CreationDock::DockTargetZone::CenterTab);
+        panel->onCloseRequested = [this](CreationDock::DockPanel*) { ClosePodPanels(); };
+    }
+    if (!dockManager_->isRegistered("pod-info")) {
+        auto* panel = dockManager_->registerPanel("pod-info", "Pod", std::make_unique<NonOwningPanelHost>(*podInfoPanel_),
+                                                   CreationDock::DockTargetZone::Right);
+        panel->onCloseRequested = [this](CreationDock::DockPanel*) { ClosePodPanels(); };
+    }
+    dockManager_->activatePanel("pods");
+}
+
+void MainComponent::ClosePodPanels() {
+    if (dockManager_ == nullptr) return;
+    dockManager_->unregisterPanel("pods");
+    dockManager_->unregisterPanel("pod-info");
+    // PodEditorPanel's own openName_ is intentionally left as-is -- OpenPod()
+    // always fully resets its state on the next open, and it isn't visible
+    // (no dock tab) while nothing is open, so stale content never shows.
+    // PodInfoPanel's "No Pod open" placeholder does need resetting though,
+    // since it's the one thing that could otherwise show stale info if
+    // some other panel happened to still reference it.
+    podInfoPanel_->SetOpenPod({});
 }
 
 void MainComponent::SetPlaying(bool playing) {
