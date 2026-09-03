@@ -27,6 +27,11 @@ node_system::NodeTypeRegistry CopyRegistry(const node_system::NodeLibraryRegistr
     // reasoning, plus these are host-extern calls (see
     // NodeTypeDescriptor::isHostExtern).
     node_system::RegisterCoreVariableNodes(result);
+    // Asset Exists -- the first real capability node (Phase 8), gated by
+    // "engine.asset.query" (documentation of intent; see
+    // core_control_flow.h's note on why enforcement doesn't apply to
+    // this first-party registration path).
+    node_system::RegisterCoreCapabilityNodes(result);
     for (const auto& [name, descriptor] : libraries.TypeRegistry().Types())
         result.Register(descriptor);
     return result;
@@ -223,7 +228,7 @@ PodEditorPanel::PodEditorPanel(frust::EngineFrustHost& frustHost, frust::PodCata
       registry_(CopyRegistry(frustHost.nodeLibraries())),
       palette_(registry_),
       graphView_(graph_, registry_),
-      inspector_(graph_)
+      inspector_(graph_, &registry_)
 {
     browseTitle_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
     browseTitle_.setColour(juce::Label::textColourId, juce::Colours::white);

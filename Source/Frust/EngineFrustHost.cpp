@@ -39,6 +39,7 @@ EngineFrustHost::EngineFrustHost(engine::World& worldToHost)
     runtime.registerHostFunction("pod_set_variable_int", reinterpret_cast<void*>(&EngineFrustHost::podSetVariableInt));
     runtime.registerHostFunction("pod_get_variable_string", reinterpret_cast<void*>(&EngineFrustHost::podGetVariableString));
     runtime.registerHostFunction("pod_set_variable_string", reinterpret_cast<void*>(&EngineFrustHost::podSetVariableString));
+    runtime.registerHostFunction("engine_asset_exists", reinterpret_cast<void*>(&EngineFrustHost::assetExists));
 
     // Real, pre-existing gap fixed here: control-flow/Event/Variable node
     // types were only ever registered into PodEditorPanel's own palette
@@ -56,6 +57,7 @@ EngineFrustHost::EngineFrustHost(engine::World& worldToHost)
         node_system::RegisterCoreControlFlowNodes(structuralTypes);
         node_system::RegisterCoreEventNodes(structuralTypes);
         node_system::RegisterCoreVariableNodes(structuralTypes);
+        node_system::RegisterCoreCapabilityNodes(structuralTypes);
 
         node_system::NodeLibraryDescriptor library;
         library.id = "core-structural";
@@ -213,6 +215,11 @@ void EngineFrustHost::setActiveSceneIdProvider(std::function<std::string()> prov
     activeSceneIdProvider = std::move(provider);
 }
 
+void EngineFrustHost::setAssetExistsProvider(std::function<bool(const std::string&)> provider)
+{
+    assetExistsProvider = std::move(provider);
+}
+
 bool EngineFrustHost::isLoaded() const noexcept
 {
     return runtime.isLoaded();
@@ -225,7 +232,16 @@ bool EngineFrustHost::isObjectBehaviorLoaded(const std::string& podId) const noe
 
 bool EngineFrustHost::registerNodeLibraries(const std::string& key, std::string& error)
 {
-    return RegisterPluginNodeLibraries(runtime.nodeLibraries(key), nodeLibraries_, error);
+    // The capabilities this host actually provides, checked against every
+    // loaded library's requiredCapabilities (Phase 8 of the Node/
+    // Behavior Graph Foundations plan). engine.entity.query backs
+    // core.entity.self (Phase 5); engine.asset.query backs the new
+    // core.asset.exists node below.
+    static const std::set<std::string, std::less<>> kSupportedCapabilities {
+        "engine.entity.query",
+        "engine.asset.query",
+    };
+    return RegisterPluginNodeLibraries(runtime.nodeLibraries(key), nodeLibraries_, kSupportedCapabilities, error);
 }
 
 std::int64_t EngineFrustHost::currentTick()
@@ -313,6 +329,12 @@ const char* EngineFrustHost::podGetVariableString(std::int64_t entityId, const c
         value = state->values[PodVariableKey(podId, name)].toString().toStdString();
     }
     return value.c_str();
+}
+
+bool EngineFrustHost::assetExists(const char* assetDisplayName)
+{
+    if (activeHost == nullptr || !activeHost->assetExistsProvider || assetDisplayName == nullptr) return false;
+    return activeHost->assetExistsProvider(assetDisplayName);
 }
 
 std::int64_t EngineFrustHost::podSetVariableString(std::int64_t entityId, const char* podId, const char* name, const char* value)
