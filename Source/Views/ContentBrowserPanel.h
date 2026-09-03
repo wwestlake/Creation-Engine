@@ -40,11 +40,20 @@ public:
     void SetProjectContent(creation::assets::ProjectSession* session);
     void Refresh();
 
+    // Fired when a row is clicked (not one of its buttons) -- built
+    // generically on the clicked descriptor so MainComponent can decide
+    // what "open" means per AssetKind (today: AssetKind::pod opens the
+    // Pod editor); wiring another kind's open-behavior later is additive
+    // here, not a rewrite. Pod Editor UX & Architecture Fixes plan
+    // Phase 6.
+    std::function<void(creation::assets::AssetDescriptor)> onAssetOpened;
+
     void paint(juce::Graphics& g) override;
     void resized() override;
 
 private:
     class AssetRow;
+    void OpenAsset(const creation::assets::AssetDescriptor& descriptor);
 
     // Runs the delete-with-dependency-check operation (Suite-Asset-
     // Pipeline-Model.md) for one logical asset: findDependents() first: if

@@ -38,6 +38,8 @@ public:
         reimportButton_.setTooltip("Re-read this asset's source file (or locate it, if it's moved) and save the "
                                     "result as a new version.");
         addAndMakeVisible(reimportButton_);
+
+        setMouseCursor(juce::MouseCursor::PointingHandCursor);
     }
 
     void resized() override {
@@ -47,6 +49,11 @@ public:
         kindLabel_.setBounds(bounds.removeFromRight(160));
         nameLabel_.setBounds(bounds);
     }
+
+    // Click anywhere on the row outside of Delete/Reimport (those are
+    // child buttons and consume their own clicks first) opens the asset
+    // -- e.g. a Pod row opens straight into the Pod editor.
+    void mouseUp(const juce::MouseEvent&) override { owner_.OpenAsset(descriptor_); }
 
 private:
     ContentBrowserPanel& owner_;
@@ -123,6 +130,10 @@ void ContentBrowserPanel::Refresh() {
                          juce::dontSendNotification);
     emptyLabel_.setVisible(rows_.isEmpty());
     resized();
+}
+
+void ContentBrowserPanel::OpenAsset(const creation::assets::AssetDescriptor& descriptor) {
+    if (onAssetOpened) onAssetOpened(descriptor);
 }
 
 void ContentBrowserPanel::DeleteAsset(const creation::assets::AssetDescriptor& latest) {
