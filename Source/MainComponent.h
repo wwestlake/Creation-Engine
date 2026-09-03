@@ -11,10 +11,12 @@
 #include "Frust/PodCatalog.h"
 #include "Interaction/EditorInteraction.h"
 #include "Render/ViewportComponent.h"
+#include "Scene/ObjectDefinitions.h"
 #include "Views/BehaviorAttachmentPanel.h"
 #include "Views/ContentBrowserPanel.h"
 #include "Views/HierarchyPanel.h"
 #include "Views/ImportPanel.h"
+#include "Views/ObjectDefinitionEditorPanel.h"
 #include "Views/PodEditorPanel.h"
 #include "Views/PodInfoPanel.h"
 #include "Views/LightPanel.h"
@@ -92,6 +94,13 @@ private:
     void EnsurePodPanelsOpen();
     void ClosePodPanels();
 
+    // Same lazy-registration shape as the Pod editor pair above, for the
+    // (much smaller) Object Definition editor -- opened from
+    // ContentBrowserPanel's Object Definitions section (open an existing
+    // one, or a newly-created one).
+    void EnsureObjectDefinitionPanelOpen();
+    void CloseObjectDefinitionPanel();
+
     void createNewProject();
     void openProject(const juce::String& projectId);
     void saveSessionToDisk(bool userInitiated = false);
@@ -129,6 +138,11 @@ private:
     // (attaching a compiled Behavior Pod to a selected entity) need the
     // same catalog.
     ce::frust::PodCatalog podCatalog_;
+    // Named registry of reusable "mesh + materials + Pods" object recipes
+    // (docs/OBJECT_MODEL.md) -- owned here for the same reason podCatalog_
+    // is: both ContentBrowserPanel (browse/create) and
+    // ObjectDefinitionEditorPanel (edit) need the same catalog.
+    ce::scene::ObjectDefinitionCatalog objectDefinitions_;
     bool isPlaying_ = false;
 
     CreationSuiteHeaderBar headerBar_;
@@ -209,6 +223,11 @@ private:
     // podEditorPanel_ since it needs a reference to that panel's live
     // Graph& (Pod Editor UX & Architecture Fixes plan Phase 6).
     std::unique_ptr<ce::views::PodInfoPanel> podInfoPanel_;
+    // Small mesh-picker + attached-Pods editor for one Object Definition --
+    // lazily opened/closed the same way podEditorPanel_/podInfoPanel_ are
+    // (EnsureObjectDefinitionPanelOpen/CloseObjectDefinitionPanel), never a
+    // standing tab. No node graph -- far simpler than the Pod editor.
+    std::unique_ptr<ce::views::ObjectDefinitionEditorPanel> objectDefinitionEditorPanel_;
     ce::PlaceholderPanel serverPanel_ { "Server", "Dedicated server operational view - coming soon" };
     ce::PlaceholderPanel settingsPanel_ { "Settings", "Application settings - coming soon" };
 

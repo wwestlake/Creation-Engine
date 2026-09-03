@@ -73,7 +73,7 @@ MainComponent::MainComponent()
       importPanel_(world_, viewport_, projectSession_),
       lightPanel_(viewport_),
       materialsPanel_(viewport_),
-      contentBrowserPanel_(viewport_, importPanel_, podCatalog_) {
+      contentBrowserPanel_(viewport_, importPanel_, podCatalog_, objectDefinitions_) {
     commandManager_.registerAllCommandsForTarget(this);
     commandManager_.getKeyMappings()->addKeyPress(
         kRunGameClientCommand,
@@ -108,19 +108,29 @@ MainComponent::MainComponent()
     podEditorPanel_ = std::make_unique<ce::views::PodEditorPanel>(frustHost_, podCatalog_, projectSession_);
     podInfoPanel_ = std::make_unique<ce::views::PodInfoPanel>(podCatalog_, projectSession_, podEditorPanel_->Graph(),
                                                                podEditorPanel_->Registry());
+    objectDefinitionEditorPanel_ =
+        std::make_unique<ce::views::ObjectDefinitionEditorPanel>(objectDefinitions_, podCatalog_, projectSession_);
     // Same fan-out-from-a-callback shape as hierarchyPanel_.onSelectionChanged
     // below -- PodEditorPanel no longer owns the Pod's identity/interface UI
     // or the node inspector itself, PodInfoPanel does.
     podEditorPanel_->onOpenPodChanged = [this](const juce::String& name) { podInfoPanel_->SetOpenPod(name); };
     podEditorPanel_->onSelectedNodeChanged = [this](ce::node_system::NodeId id) { podInfoPanel_->SetSelectedNode(id); };
     contentBrowserPanel_.onAssetOpened = [this](const creation::assets::AssetDescriptor& descriptor) {
-        if (descriptor.kind != creation::assets::AssetKind::pod) return;
-        EnsurePodPanelsOpen();
-        podEditorPanel_->OpenPod(descriptor.displayName);
+        if (descriptor.kind == creation::assets::AssetKind::pod) {
+            EnsurePodPanelsOpen();
+            podEditorPanel_->OpenPod(descriptor.displayName);
+        } else if (descriptor.kind == creation::assets::AssetKind::objectDefinition) {
+            EnsureObjectDefinitionPanelOpen();
+            objectDefinitionEditorPanel_->OpenDefinition(descriptor.displayName);
+        }
     };
     contentBrowserPanel_.onPodCreated = [this](const juce::String& name) {
         EnsurePodPanelsOpen();
         podEditorPanel_->OpenPod(name);
+    };
+    contentBrowserPanel_.onObjectDefinitionCreated = [this](const juce::String& id) {
+        EnsureObjectDefinitionPanelOpen();
+        objectDefinitionEditorPanel_->OpenDefinition(id);
     };
     frustHost_.setSceneTransitionRequestHandler([this](const std::string& reference) {
         const juce::String sceneReference(reference);
@@ -484,6 +494,22 @@ void MainComponent::ClosePodPanels() {
     podInfoPanel_->SetOpenPod({});
 }
 
+void MainComponent::EnsureObjectDefinitionPanelOpen() {
+    if (dockManager_ == nullptr) return;
+    if (!dockManager_->isRegistered("object-definition")) {
+        auto* panel = dockManager_->registerPanel("object-definition", "Object Definition",
+                                                   std::make_unique<NonOwningPanelHost>(*objectDefinitionEditorPanel_),
+                                                   CreationDock::DockTargetZone::Right);
+        panel->onCloseRequested = [this](CreationDock::DockPanel*) { CloseObjectDefinitionPanel(); };
+    }
+    dockManager_->activatePanel("object-definition");
+}
+
+void MainComponent::CloseObjectDefinitionPanel() {
+    if (dockManager_ == nullptr) return;
+    dockManager_->unregisterPanel("object-definition");
+}
+
 void MainComponent::SetPlaying(bool playing) {
     if (isPlaying_ == playing) {
         return;
@@ -825,6 +851,10 @@ void MainComponent::loadPodsForActiveProject()
     juce::String error;
     if (!podCatalog_.LoadAll(projectSession_, error))
         headerBar_.setStatusText("Some Pods could not be loaded: " + error);
+
+    juce::String objectDefinitionError;
+    if (!objectDefinitions_.LoadAll(projectSession_, objectDefinitionError))
+        headerBar_.setStatusText("Some Object Definitions could not be loaded: " + objectDefinitionError);
 }
 
 void MainComponent::saveAppSettings()

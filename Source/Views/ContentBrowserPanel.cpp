@@ -32,6 +32,23 @@ juce::String GenerateDefaultPodName(frust::PodCatalog& catalog, frust::PodKind k
     }
     return base + " " + juce::String(juce::Time::currentTimeMillis());
 }
+
+// Same shape as GenerateDefaultPodName above -- kind-only creation, no
+// name box, so a default identifier is generated instead.
+juce::String GenerateDefaultObjectDefinitionName(scene::ObjectDefinitionCatalog& catalog) {
+    const juce::String base = "New Object Definition";
+    const auto existing = catalog.ids();
+    auto isTaken = [&](const juce::String& candidate) {
+        return std::any_of(existing.begin(), existing.end(),
+                            [&](const juce::String& id) { return id.equalsIgnoreCase(candidate); });
+    };
+    if (!isTaken(base)) return base;
+    for (int i = 2; i < 1000; ++i) {
+        const auto candidate = base + " " + juce::String(i);
+        if (!isTaken(candidate)) return candidate;
+    }
+    return base + " " + juce::String(juce::Time::currentTimeMillis());
+}
 }
 
 // One row: the durable project asset's display name/kind/category, plus
@@ -118,7 +135,7 @@ public:
 
     int GetPreferredHeight() const {
         if (!expanded_) return kHeaderHeight;
-        if (rows_.isEmpty()) return kHeaderHeight + (IsPods() ? kHintHeight : 0);
+        if (rows_.isEmpty()) return kHeaderHeight + (HasCreationMenu() ? kHintHeight : 0);
         return kHeaderHeight + rows_.size() * kRowHeight;
     }
 
@@ -144,10 +161,11 @@ public:
         g.drawText(chevron + creation::assets::toDisplayName(kind_) + "  (" + juce::String(rows_.size()) + ")",
                    header.reduced(8, 0), juce::Justification::centredLeft, true);
 
-        if (expanded_ && rows_.isEmpty() && IsPods()) {
+        if (expanded_ && rows_.isEmpty() && HasCreationMenu()) {
             g.setColour(juce::Colour(0xff5c6b7d));
             g.setFont(juce::Font(juce::FontOptions(11.0f)).italicised());
-            g.drawText("Right-click to create a new Pod", bounds.reduced(8, 0), juce::Justification::centredLeft, true);
+            g.drawText("Right-click to create a new " + creation::assets::toDisplayName(kind_), bounds.reduced(8, 0),
+                       juce::Justification::centredLeft, true);
         }
     }
 
@@ -164,17 +182,29 @@ public:
     }
 
 private:
-    bool IsPods() const { return kind_ == creation::assets::AssetKind::pod; }
+    // Which kinds currently have a right-click "New" affordance -- other
+    // kinds are populated via Import instead, no creation menu needed for
+    // them yet (see the class comment above).
+    bool HasCreationMenu() const {
+        return kind_ == creation::assets::AssetKind::pod || kind_ == creation::assets::AssetKind::objectDefinition;
+    }
 
     void ShowContextMenu() {
-        if (!IsPods()) return;
-        juce::PopupMenu menu;
-        menu.addItem(1, "New Behavior Pod");
-        menu.addItem(2, "New Processing Pod");
-        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this), [this](int result) {
-            if (result == 1) owner_.CreateNewPod(frust::PodKind::Behavior);
-            else if (result == 2) owner_.CreateNewPod(frust::PodKind::Processing);
-        });
+        if (kind_ == creation::assets::AssetKind::pod) {
+            juce::PopupMenu menu;
+            menu.addItem(1, "New Behavior Pod");
+            menu.addItem(2, "New Processing Pod");
+            menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this), [this](int result) {
+                if (result == 1) owner_.CreateNewPod(frust::PodKind::Behavior);
+                else if (result == 2) owner_.CreateNewPod(frust::PodKind::Processing);
+            });
+        } else if (kind_ == creation::assets::AssetKind::objectDefinition) {
+            juce::PopupMenu menu;
+            menu.addItem(1, "New Object Definition");
+            menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this), [this](int result) {
+                if (result == 1) owner_.CreateNewObjectDefinition();
+            });
+        }
     }
 
     ContentBrowserPanel& owner_;
@@ -183,8 +213,9 @@ private:
     juce::OwnedArray<AssetRow> rows_;
 };
 
-ContentBrowserPanel::ContentBrowserPanel(ViewportComponent& viewport, ImportPanel& importPanel, frust::PodCatalog& podCatalog)
-    : viewport_(viewport), importPanel_(importPanel), podCatalog_(podCatalog) {
+ContentBrowserPanel::ContentBrowserPanel(ViewportComponent& viewport, ImportPanel& importPanel, frust::PodCatalog& podCatalog,
+                                         scene::ObjectDefinitionCatalog& objectDefinitions)
+    : viewport_(viewport), importPanel_(importPanel), podCatalog_(podCatalog), objectDefinitions_(objectDefinitions) {
     titleLabel_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
     titleLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
     addAndMakeVisible(titleLabel_);
@@ -200,10 +231,11 @@ ContentBrowserPanel::ContentBrowserPanel(ViewportComponent& viewport, ImportPane
     emptyLabel_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(emptyLabel_);
 
-    // The Pods section always exists -- created once here, never removed --
-    // so there's always somewhere to right-click "New Pod" even before a
-    // project is open or before any Pod exists.
+    // Sections with a "New" affordance always exist -- created once here,
+    // never removed -- so there's always somewhere to right-click even
+    // before a project is open or before any asset of that kind exists.
     FindOrCreateSection(creation::assets::AssetKind::pod);
+    FindOrCreateSection(creation::assets::AssetKind::objectDefinition);
 }
 
 ContentBrowserPanel::~ContentBrowserPanel() = default;
@@ -243,6 +275,7 @@ void ContentBrowserPanel::Refresh() {
     const auto filterText = searchBox_.getText().trim();
     std::unordered_map<creation::assets::AssetKind, std::vector<creation::assets::AssetDescriptor>> byKind;
     byKind[creation::assets::AssetKind::pod]; // always present, even filtered/empty.
+    byKind[creation::assets::AssetKind::objectDefinition]; // same.
     for (const auto& [id, descriptor] : latestById) {
         if (filterText.isNotEmpty() && !descriptor.displayName.containsIgnoreCase(filterText)) continue;
         byKind[descriptor.kind].push_back(descriptor);
@@ -256,10 +289,12 @@ void ContentBrowserPanel::Refresh() {
     }
 
     // Drop sections for kinds that no longer have any (matching) assets --
-    // except Pods, which always stays.
+    // except the ones that always stay (see the constructor).
     for (int i = sections_.size() - 1; i >= 0; --i) {
         auto* section = sections_.getUnchecked(i);
-        if (section->Kind() != creation::assets::AssetKind::pod && section->IsEmpty()) sections_.remove(i);
+        const bool alwaysStays = section->Kind() == creation::assets::AssetKind::pod ||
+                                  section->Kind() == creation::assets::AssetKind::objectDefinition;
+        if (!alwaysStays && section->IsEmpty()) sections_.remove(i);
     }
 
     struct SectionComparator {
@@ -294,6 +329,32 @@ void ContentBrowserPanel::CreateNewPod(frust::PodKind kind) {
 
     Refresh();
     if (onPodCreated) onPodCreated(name);
+}
+
+void ContentBrowserPanel::CreateNewObjectDefinition() {
+    if (projectSession_ == nullptr || !projectSession_->isValid()) return;
+
+    const auto name = GenerateDefaultObjectDefinitionName(objectDefinitions_);
+    scene::ObjectDefinition definition;
+    definition.id = name;
+    definition.displayName = name;
+
+    juce::String upsertError;
+    if (!objectDefinitions_.upsert(definition, upsertError)) {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Cannot Create Object Definition",
+                                                "Could not create the new Object Definition: " + upsertError);
+        return;
+    }
+
+    juce::String saveError;
+    if (!objectDefinitions_.Save(*projectSession_, name, saveError)) {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Cannot Create Object Definition",
+                                                "Could not save the new Object Definition: " + saveError);
+        return;
+    }
+
+    Refresh();
+    if (onObjectDefinitionCreated) onObjectDefinitionCreated(name);
 }
 
 void ContentBrowserPanel::DeleteAsset(const creation::assets::AssetDescriptor& latest) {

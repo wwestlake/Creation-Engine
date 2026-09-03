@@ -11,6 +11,8 @@
 #include "engine/math.h"
 #include "engine/world.h"
 
+namespace creation::assets { class ProjectSession; }
+
 namespace ce::scene
 {
 struct ObjectChildDefinition
@@ -40,8 +42,22 @@ class ObjectDefinitionCatalog final
 public:
     bool upsert(ObjectDefinition definition, juce::String& error);
     [[nodiscard]] const ObjectDefinition* find(const juce::String& id) const;
+    [[nodiscard]] std::vector<juce::String> ids() const;
     [[nodiscard]] juce::ValueTree serialize() const;
     bool restore(const juce::ValueTree& state, juce::String& error);
+
+    // Persists ONE definition (looked up by id) as its own AssetKind::
+    // objectDefinition asset -- mirrors PodCatalog::Save exactly, same
+    // one-asset-per-definition shape the Content Browser's per-kind
+    // section expects (each definition is its own row, not one asset
+    // holding the whole catalog).
+    bool Save(creation::assets::ProjectSession& session, const juce::String& id, juce::String& error);
+
+    // Inverse of Save -- queries every AssetKind::objectDefinition asset
+    // in the project, reads and restores each one into `definitions`.
+    // Existing in-memory definitions not backed by a persisted asset are
+    // left untouched, same convention as PodCatalog::LoadAll.
+    bool LoadAll(creation::assets::ProjectSession& session, juce::String& error);
 
 private:
     std::unordered_map<std::string, ObjectDefinition> definitions;

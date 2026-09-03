@@ -5,6 +5,7 @@
 #include <creation/assets/ProjectSession.h>
 
 #include "Frust/PodCatalog.h"
+#include "Scene/ObjectDefinitions.h"
 #include "Views/ImportPanel.h"
 
 namespace ce {
@@ -47,7 +48,8 @@ namespace ce::views {
 // Pod/Asset Workflow plan, Phase 3.
 class ContentBrowserPanel final : public juce::Component {
 public:
-    ContentBrowserPanel(ViewportComponent& viewport, ImportPanel& importPanel, frust::PodCatalog& podCatalog);
+    ContentBrowserPanel(ViewportComponent& viewport, ImportPanel& importPanel, frust::PodCatalog& podCatalog,
+                        scene::ObjectDefinitionCatalog& objectDefinitions);
     ~ContentBrowserPanel() override;
 
     void SetProjectContent(creation::assets::ProjectSession* session);
@@ -66,6 +68,10 @@ public:
     // they're not already open.
     std::function<void(juce::String)> onPodCreated;
 
+    // Same idea, for a newly created Object Definition -- MainComponent
+    // opens it in the (much smaller) Object Definition editor.
+    std::function<void(juce::String)> onObjectDefinitionCreated;
+
     void paint(juce::Graphics& g) override;
     void resized() override;
 
@@ -74,6 +80,7 @@ private:
     class Section;
     void OpenAsset(const creation::assets::AssetDescriptor& descriptor);
     void CreateNewPod(frust::PodKind kind);
+    void CreateNewObjectDefinition();
     Section* FindOrCreateSection(creation::assets::AssetKind kind);
 
     // Runs the delete-with-dependency-check operation (Suite-Asset-
@@ -97,6 +104,7 @@ private:
     ViewportComponent& viewport_;
     ImportPanel& importPanel_;
     frust::PodCatalog& podCatalog_;
+    scene::ObjectDefinitionCatalog& objectDefinitions_;
     creation::assets::ProjectSession* projectSession_ = nullptr;
 
     juce::Label titleLabel_{ {}, "Content Browser" };

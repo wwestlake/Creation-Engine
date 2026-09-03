@@ -210,6 +210,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/PodEditorPanel.cpp
     Source/Views/PodInfoPanel.h
     Source/Views/PodInfoPanel.cpp
+    Source/Views/ObjectDefinitionEditorPanel.h
+    Source/Views/ObjectDefinitionEditorPanel.cpp
     Source/Views/BehaviorAttachmentPanel.h
     Source/Views/BehaviorAttachmentPanel.cpp
     Source/Runtime/GameClientWindow.h
