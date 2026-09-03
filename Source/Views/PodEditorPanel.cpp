@@ -39,25 +39,6 @@ node_system::NodeTypeRegistry CopyRegistry(const node_system::NodeLibraryRegistr
 
 juce::String KindLabel(frust::PodKind kind) { return kind == frust::PodKind::Processing ? "Processing" : "Behavior"; }
 
-// Kind-only creation (Phase 6) has no name box to fill in, so a default
-// name is generated instead -- "New Behavior Pod", then "New Behavior
-// Pod 2", etc., the same "first free numbered slot" shape most editors
-// use for untitled documents.
-juce::String GenerateDefaultPodName(frust::PodCatalog& catalog, frust::PodKind kind) {
-    const juce::String base = "New " + KindLabel(kind) + " Pod";
-    const auto existing = catalog.Names(kind);
-    auto isTaken = [&](const juce::String& candidate) {
-        return std::any_of(existing.begin(), existing.end(),
-                            [&](const juce::String& name) { return name.equalsIgnoreCase(candidate); });
-    };
-    if (!isTaken(base)) return base;
-    for (int i = 2; i < 1000; ++i) {
-        const auto candidate = base + " " + juce::String(i);
-        if (!isTaken(candidate)) return candidate;
-    }
-    return base + " " + juce::String(juce::Time::currentTimeMillis());
-}
-
 // Syntax highlighting for hand-typed Source Pods (Phase 8). Reuses
 // JUCE's generic C-like lexer (CppTokeniserFunctions) for comments,
 // strings, numbers, operators and brackets -- FRust's surface syntax is
@@ -96,27 +77,6 @@ public:
     }
 };
 
-// Per-Kind starting content for a new Source Pod -- the same idea as a
-// Graph Pod simply starting empty, just with real starter text since a
-// blank source file gives an author nothing to go on the way a blank
-// canvas at least offers a palette to drag from.
-juce::String SourceTemplateFor(frust::PodKind kind) {
-    if (kind == frust::PodKind::Processing) {
-        return "// Processing Pod -- invoked on demand, not entity-scoped.\n"
-               "// Check \"Expose as node\" is not needed here: a Source Pod\n"
-               "// reflects as a node automatically if you prefix a function\n"
-               "// with `node pure` or `node callable` yourself, same as any\n"
-               "// other FRust node declaration.\n"
-               "node pure pub fn process(value: i64) -> i64 = {\n"
-               "    value\n"
-               "}\n";
-    }
-    return "// Behavior Pod -- invoked per-entity by EngineFrustHost's lifecycle.\n"
-           "pub fn on_tick() -> i64 = {\n"
-           "    0\n"
-           "}\n";
-}
-
 struct Snippet { const char* label; const char* text; };
 constexpr Snippet kSnippets[] = {
     { "node pure fn", "node pure pub fn name(value: i64) -> i64 = {\n    value\n}\n" },
@@ -128,37 +88,6 @@ constexpr Snippet kSnippets[] = {
 };
 }
 
-// One row in Browse mode: a Pod's name plus Open. Deliberately no
-// Delete here yet -- see docs/BEHAVIOR_COMPONENT_MODEL.md's open asset-
-// tracking-depth question; a real delete needs the same dependency-check
-// treatment ContentBrowserPanel gives project assets, which Pods aren't
-// tracked through the full pipeline as yet.
-class PodEditorPanel::PodRow final : public juce::Component {
-public:
-    PodRow(PodEditorPanel& owner, juce::String name) : owner_(owner), name_(std::move(name)) {
-        nameLabel_.setText(name_, juce::dontSendNotification);
-        nameLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
-        addAndMakeVisible(nameLabel_);
-
-        openButton_.onClick = [this] { owner_.OpenPod(name_); };
-        addAndMakeVisible(openButton_);
-    }
-
-    void resized() override {
-        auto bounds = getLocalBounds();
-        openButton_.setBounds(bounds.removeFromRight(70).reduced(2));
-        nameLabel_.setBounds(bounds);
-    }
-
-private:
-    PodEditorPanel& owner_;
-    juce::String name_;
-    juce::Label nameLabel_;
-    juce::TextButton openButton_ { "Open" };
-};
-
-PodEditorPanel::~PodEditorPanel() = default;
-
 PodEditorPanel::PodEditorPanel(frust::EngineFrustHost& frustHost, frust::PodCatalog& catalog,
                                creation::assets::ProjectSession& projectSession)
     : frustHost_(frustHost),
@@ -168,29 +97,6 @@ PodEditorPanel::PodEditorPanel(frust::EngineFrustHost& frustHost, frust::PodCata
       palette_(registry_),
       graphView_(graph_, registry_)
 {
-    browseTitle_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
-    browseTitle_.setColour(juce::Label::textColourId, juce::Colours::white);
-    addAndMakeVisible(browseTitle_);
-
-    newBehaviorPodButton_.onClick = [this] { CreatePod(frust::PodKind::Behavior); };
-    addAndMakeVisible(newBehaviorPodButton_);
-    newProcessingPodButton_.onClick = [this] { CreatePod(frust::PodKind::Processing); };
-    addAndMakeVisible(newProcessingPodButton_);
-    newAuthoringModeCombo_.addItemList(juce::StringArray { "Graph", "Source" }, 1);
-    newAuthoringModeCombo_.setSelectedItemIndex(0, juce::dontSendNotification);
-    newAuthoringModeCombo_.setTooltip("Graph: node canvas. Source: hand-typed FRust.");
-    addAndMakeVisible(newAuthoringModeCombo_);
-
-    behaviorSectionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
-    behaviorSectionLabel_.setFont(juce::Font(juce::FontOptions(13.0f)).boldened());
-    addAndMakeVisible(behaviorSectionLabel_);
-    processingSectionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
-    processingSectionLabel_.setFont(juce::Font(juce::FontOptions(13.0f)).boldened());
-    addAndMakeVisible(processingSectionLabel_);
-
-    backButton_.onClick = [this] { ShowBrowseMode(); };
-    addAndMakeVisible(backButton_);
-
     editTitle_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
     editTitle_.setColour(juce::Label::textColourId, juce::Colours::white);
     addAndMakeVisible(editTitle_);
@@ -235,46 +141,6 @@ PodEditorPanel::PodEditorPanel(frust::EngineFrustHost& frustHost, frust::PodCata
     addChildComponent(snippetCombo_);
     insertSnippetButton_.onClick = [this] { InsertSnippet(); };
     addChildComponent(insertSnippetButton_);
-
-    RefreshBrowseList();
-    ShowBrowseMode();
-}
-
-void PodEditorPanel::RefreshBrowseList() {
-    behaviorRows_.clear();
-    processingRows_.clear();
-
-    auto behaviorNames = catalog_.Names(frust::PodKind::Behavior);
-    auto processingNames = catalog_.Names(frust::PodKind::Processing);
-    auto sortNames = [](std::vector<juce::String>& names) {
-        std::sort(names.begin(), names.end(), [](const juce::String& a, const juce::String& b) {
-            return a.compareIgnoreCase(b) < 0;
-        });
-    };
-    sortNames(behaviorNames);
-    sortNames(processingNames);
-
-    for (const auto& name : behaviorNames) {
-        auto* row = behaviorRows_.add(new PodRow(*this, name));
-        addAndMakeVisible(row);
-    }
-    for (const auto& name : processingNames) {
-        auto* row = processingRows_.add(new PodRow(*this, name));
-        addAndMakeVisible(row);
-    }
-    resized();
-}
-
-void PodEditorPanel::CreatePod(frust::PodKind kind) {
-    const auto name = GenerateDefaultPodName(catalog_, kind);
-    if (newAuthoringModeCombo_.getSelectedItemIndex() == 1) {
-        auto& source = catalog_.GetOrCreateSource(name, kind);
-        source = SourceTemplateFor(kind);
-    } else {
-        catalog_.GetOrCreateGraph(name, kind); // registers an empty graph under this name.
-    }
-    RefreshBrowseList();
-    OpenPod(name);
 }
 
 void PodEditorPanel::OpenPod(const juce::String& name) {
@@ -284,7 +150,8 @@ void PodEditorPanel::OpenPod(const juce::String& name) {
     editTitle_.setText(KindLabel(kind) + " Pod: " + name, juce::dontSendNotification);
     sourceView_.setText("Compile to see generated FRust and validation errors here.", juce::dontSendNotification);
 
-    if (mode == frust::PodAuthoringMode::Source) {
+    const bool isSource = mode == frust::PodAuthoringMode::Source;
+    if (isSource) {
         auto* entry = catalog_.FindEntry(name);
         sourceCodeDocument_.replaceAllContent(entry ? entry->sourceText : juce::String());
         status_.setText("Editing FRust source directly", juce::dontSendNotification);
@@ -306,68 +173,16 @@ void PodEditorPanel::OpenPod(const juce::String& name) {
         graphView_.GraphReplaced();
         status_.setText(juce::String(static_cast<int>(registry_.Types().size())) + " FRust nodes available", juce::dontSendNotification);
     }
-    ShowEditMode();
-    if (onOpenPodChanged) onOpenPodChanged(openName_);
-    if (onSelectedNodeChanged) onSelectedNodeChanged(0);
-}
 
-void PodEditorPanel::ShowBrowseMode() {
-    editing_ = false;
-    RefreshBrowseList();
-    browseTitle_.setVisible(true);
-    newBehaviorPodButton_.setVisible(true);
-    newProcessingPodButton_.setVisible(true);
-    newAuthoringModeCombo_.setVisible(true);
-    behaviorSectionLabel_.setVisible(true);
-    processingSectionLabel_.setVisible(true);
-    for (auto* row : behaviorRows_) row->setVisible(true);
-    for (auto* row : processingRows_) row->setVisible(true);
-
-    backButton_.setVisible(false);
-    editTitle_.setVisible(false);
-    hint_.setVisible(false);
-    saveButton_.setVisible(false);
-    compileButton_.setVisible(false);
-    status_.setVisible(false);
-    sourceView_.setVisible(false);
-    palette_.setVisible(false);
-    graphView_.setVisible(false);
-    sourceEditor_->setVisible(false);
-    snippetCombo_.setVisible(false);
-    insertSnippetButton_.setVisible(false);
-    resized();
-
-    openName_.clear();
-    if (onOpenPodChanged) onOpenPodChanged(openName_);
-    if (onSelectedNodeChanged) onSelectedNodeChanged(0);
-}
-
-void PodEditorPanel::ShowEditMode() {
-    editing_ = true;
-    browseTitle_.setVisible(false);
-    newBehaviorPodButton_.setVisible(false);
-    newProcessingPodButton_.setVisible(false);
-    newAuthoringModeCombo_.setVisible(false);
-    behaviorSectionLabel_.setVisible(false);
-    processingSectionLabel_.setVisible(false);
-    for (auto* row : behaviorRows_) row->setVisible(false);
-    for (auto* row : processingRows_) row->setVisible(false);
-
-    const bool isSource = catalog_.AuthoringMode(openName_) == frust::PodAuthoringMode::Source;
-
-    backButton_.setVisible(true);
-    editTitle_.setVisible(true);
-    hint_.setVisible(true);
-    saveButton_.setVisible(true);
-    compileButton_.setVisible(true);
-    status_.setVisible(true);
-    sourceView_.setVisible(true);
     palette_.setVisible(!isSource);
     graphView_.setVisible(!isSource);
     sourceEditor_->setVisible(isSource);
     snippetCombo_.setVisible(isSource);
     insertSnippetButton_.setVisible(isSource);
     resized();
+
+    if (onOpenPodChanged) onOpenPodChanged(openName_);
+    if (onSelectedNodeChanged) onSelectedNodeChanged(0);
 }
 
 void PodEditorPanel::SaveContent() {
@@ -610,37 +425,16 @@ void PodEditorPanel::InsertSnippet() {
 
 void PodEditorPanel::resized()
 {
+    // No Pod has ever been opened yet -- this panel's dock tab shouldn't
+    // even exist in that state (see MainComponent::EnsurePodPanelsOpen),
+    // but a defensive no-op guard costs nothing if resized() somehow runs
+    // before the first OpenPod() call.
+    if (openName_.isEmpty()) return;
+
     auto area = getLocalBounds().reduced(16, 12);
-
-    if (!editing_) {
-        auto header = area.removeFromTop(28);
-        browseTitle_.setBounds(header);
-        area.removeFromTop(8);
-        auto newRow = area.removeFromTop(28);
-        newAuthoringModeCombo_.setBounds(newRow.removeFromRight(80).reduced(1));
-        newRow.removeFromRight(8);
-        newProcessingPodButton_.setBounds(newRow.removeFromRight(150).reduced(2));
-        newRow.removeFromRight(4);
-        newBehaviorPodButton_.setBounds(newRow.removeFromRight(140).reduced(2));
-        area.removeFromTop(12);
-
-        behaviorSectionLabel_.setBounds(area.removeFromTop(20));
-        for (auto* row : behaviorRows_) {
-            row->setBounds(area.removeFromTop(26));
-            area.removeFromTop(2);
-        }
-        area.removeFromTop(10);
-        processingSectionLabel_.setBounds(area.removeFromTop(20));
-        for (auto* row : processingRows_) {
-            row->setBounds(area.removeFromTop(26));
-            area.removeFromTop(2);
-        }
-        return;
-    }
 
     auto header = area.removeFromTop(48);
     auto headerTop = header.removeFromTop(24);
-    backButton_.setBounds(headerTop.removeFromLeft(100));
     editTitle_.setBounds(headerTop);
     hint_.setBounds(header.removeFromTop(24));
 

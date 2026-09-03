@@ -83,6 +83,15 @@ private:
     void initialiseDockingWorkspace();
     void openGameClient();
 
+    // The Pod editor + its Pod-info panel are a lazily-registered, matched
+    // pair -- neither exists as a dock tab at all until a Pod is actually
+    // open. Called from ContentBrowserPanel's onAssetOpened (an existing
+    // Pod row clicked) and onPodCreated (a new one just made); safe to
+    // call repeatedly once both are already registered. ClosePodPanels is
+    // wired to both panels' tab-close (X) button via onCloseRequested.
+    void EnsurePodPanelsOpen();
+    void ClosePodPanels();
+
     void createNewProject();
     void openProject(const juce::String& projectId);
     void saveSessionToDisk(bool userInitiated = false);
