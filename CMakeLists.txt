@@ -208,6 +208,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/TransportBar.cpp
     Source/Views/PodEditorPanel.h
     Source/Views/PodEditorPanel.cpp
+    Source/Views/PodInfoPanel.h
+    Source/Views/PodInfoPanel.cpp
     Source/Views/BehaviorAttachmentPanel.h
     Source/Views/BehaviorAttachmentPanel.cpp
     Source/Runtime/GameClientWindow.h

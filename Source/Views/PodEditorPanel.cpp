@@ -39,25 +39,24 @@ node_system::NodeTypeRegistry CopyRegistry(const node_system::NodeLibraryRegistr
 
 juce::String KindLabel(frust::PodKind kind) { return kind == frust::PodKind::Processing ? "Processing" : "Behavior"; }
 
-juce::String DataTypeLabel(node_system::DataType type) {
-    switch (type) {
-        case node_system::DataType::Float: return "Float";
-        case node_system::DataType::Bool: return "Bool";
-        case node_system::DataType::String: return "String";
-        case node_system::DataType::Entity: return "Entity";
-        case node_system::DataType::Transform: return "Transform";
-        case node_system::DataType::Material: return "Material";
-        case node_system::DataType::Model: return "Model";
-        case node_system::DataType::Controller: return "Controller";
-        default: return "Int";
+// Kind-only creation (Phase 6) has no name box to fill in, so a default
+// name is generated instead -- "New Behavior Pod", then "New Behavior
+// Pod 2", etc., the same "first free numbered slot" shape most editors
+// use for untitled documents.
+juce::String GenerateDefaultPodName(frust::PodCatalog& catalog, frust::PodKind kind) {
+    const juce::String base = "New " + KindLabel(kind) + " Pod";
+    const auto existing = catalog.Names(kind);
+    auto isTaken = [&](const juce::String& candidate) {
+        return std::any_of(existing.begin(), existing.end(),
+                            [&](const juce::String& name) { return name.equalsIgnoreCase(candidate); });
+    };
+    if (!isTaken(base)) return base;
+    for (int i = 2; i < 1000; ++i) {
+        const auto candidate = base + " " + juce::String(i);
+        if (!isTaken(candidate)) return candidate;
     }
+    return base + " " + juce::String(juce::Time::currentTimeMillis());
 }
-
-// Order here must match kTypesByIndex in AddInterfaceInput() below --
-// both are indexed by newInputTypeCombo_'s selected item.
-constexpr const char* kInterfaceTypeNames[] = {
-    "Float", "Bool", "Int", "String", "Entity", "Transform", "Material", "Model", "Controller"
-};
 
 // Syntax highlighting for hand-typed Source Pods (Phase 8). Reuses
 // JUCE's generic C-like lexer (CppTokeniserFunctions) for comments,
@@ -127,26 +126,6 @@ constexpr Snippet kSnippets[] = {
     { "for loop", "for i in 0..10 {\n    \n}\n" },
     { "let binding", "let name = value;\n" },
 };
-
-// Finds a Data pin on `node` matching `type` -- searches inputs (for
-// binding a declared interface input to something the graph can feed a
-// parameter into) or outputs (for binding the single interface output).
-// Inputs additionally require the pin to be currently unwired, since a
-// wired input already gets its value from the graph itself.
-const node_system::Pin* FindBindablePin(const node_system::Graph& graph, const node_system::Node& node,
-                                         node_system::DataType type, bool wantInput) {
-    const auto& pins = wantInput ? node.Inputs() : node.Outputs();
-    for (const auto& pin : pins) {
-        if (pin.type.kind != node_system::PinKind::Data || pin.type.dataType != type) continue;
-        if (wantInput) {
-            const bool wired = std::any_of(graph.Connections().begin(), graph.Connections().end(),
-                                            [&](const node_system::Connection& c) { return c.toNode == node.Id() && c.toPin == pin.id; });
-            if (wired) continue;
-        }
-        return &pin;
-    }
-    return nullptr;
-}
 }
 
 // One row in Browse mode: a Pod's name plus Open. Deliberately no
@@ -178,46 +157,6 @@ private:
     juce::TextButton openButton_ { "Open" };
 };
 
-// One row in the Interface editor's input list: name/type, bound status
-// (which node+pin currently feeds it, or "(unbound)" -- never a block,
-// just a visible state per the plan's never-block editing philosophy),
-// a Bind-to-selected button, and Remove.
-class PodEditorPanel::InterfaceInputRow final : public juce::Component {
-public:
-    InterfaceInputRow(PodEditorPanel& owner, int index, juce::String label, juce::String boundStatus)
-        : owner_(owner), index_(index) {
-        nameLabel_.setText(label, juce::dontSendNotification);
-        nameLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
-        addAndMakeVisible(nameLabel_);
-
-        statusLabel_.setText(boundStatus, juce::dontSendNotification);
-        statusLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
-        statusLabel_.setFont(juce::Font(juce::FontOptions(11.0f)));
-        addAndMakeVisible(statusLabel_);
-
-        bindButton_.onClick = [this] { owner_.BindInterfaceInputAt(index_); };
-        addAndMakeVisible(bindButton_);
-        removeButton_.onClick = [this] { owner_.RemoveInterfaceInputAt(index_); };
-        addAndMakeVisible(removeButton_);
-    }
-
-    void resized() override {
-        auto bounds = getLocalBounds();
-        removeButton_.setBounds(bounds.removeFromRight(24).reduced(1));
-        bindButton_.setBounds(bounds.removeFromRight(44).reduced(1));
-        nameLabel_.setBounds(bounds.removeFromTop(bounds.getHeight() / 2));
-        statusLabel_.setBounds(bounds);
-    }
-
-private:
-    PodEditorPanel& owner_;
-    int index_;
-    juce::Label nameLabel_;
-    juce::Label statusLabel_;
-    juce::TextButton bindButton_ { "Bind" };
-    juce::TextButton removeButton_ { "x" };
-};
-
 PodEditorPanel::~PodEditorPanel() = default;
 
 PodEditorPanel::PodEditorPanel(frust::EngineFrustHost& frustHost, frust::PodCatalog& catalog,
@@ -227,15 +166,11 @@ PodEditorPanel::PodEditorPanel(frust::EngineFrustHost& frustHost, frust::PodCata
       projectSession_(projectSession),
       registry_(CopyRegistry(frustHost.nodeLibraries())),
       palette_(registry_),
-      graphView_(graph_, registry_),
-      inspector_(graph_, &registry_)
+      graphView_(graph_, registry_)
 {
     browseTitle_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
     browseTitle_.setColour(juce::Label::textColourId, juce::Colours::white);
     addAndMakeVisible(browseTitle_);
-
-    newNameEditor_.setTextToShowWhenEmpty("New Pod name...", juce::Colours::grey);
-    addAndMakeVisible(newNameEditor_);
 
     newBehaviorPodButton_.onClick = [this] { CreatePod(frust::PodKind::Behavior); };
     addAndMakeVisible(newBehaviorPodButton_);
@@ -271,36 +206,6 @@ PodEditorPanel::PodEditorPanel(frust::EngineFrustHost& frustHost, frust::PodCata
     compileButton_.setTooltip("Generate FRust, write it as a cached loadable pod, and load it -- not just preview text.");
     addAndMakeVisible(compileButton_);
 
-    exposeAsNodeToggle_.setTooltip("Make this Pod's compiled output usable as a node inside other graphs.");
-    exposeAsNodeToggle_.onClick = [this] {
-        if (openName_.isEmpty()) return;
-        catalog_.SetExposeAsNode(openName_, exposeAsNodeToggle_.getToggleState());
-    };
-    addAndMakeVisible(exposeAsNodeToggle_);
-
-    interfaceLabel_.setFont(juce::Font(juce::FontOptions(14.0f)).boldened());
-    interfaceLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
-    addAndMakeVisible(interfaceLabel_);
-
-    newInputNameEditor_.setTextToShowWhenEmpty("Input name...", juce::Colours::grey);
-    addAndMakeVisible(newInputNameEditor_);
-    {
-        juce::StringArray typeItems;
-        for (const auto* name : kInterfaceTypeNames) typeItems.add(name);
-        newInputTypeCombo_.addItemList(typeItems, 1);
-    }
-    newInputTypeCombo_.setSelectedItemIndex(0, juce::dontSendNotification);
-    addAndMakeVisible(newInputTypeCombo_);
-    addInputButton_.onClick = [this] { AddInterfaceInput(); };
-    addAndMakeVisible(addInputButton_);
-
-    outputRowLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
-    outputRowLabel_.setFont(juce::Font(juce::FontOptions(11.0f)));
-    addAndMakeVisible(outputRowLabel_);
-    bindOutputButton_.setTooltip("Bind the Pod's single output to the selected node's data output.");
-    bindOutputButton_.onClick = [this] { BindInterfaceOutput(); };
-    addAndMakeVisible(bindOutputButton_);
-
     status_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
     addAndMakeVisible(status_);
 
@@ -313,13 +218,11 @@ PodEditorPanel::PodEditorPanel(frust::EngineFrustHost& frustHost, frust::PodCata
     addAndMakeVisible(sourceView_);
 
     graphView_.onSelectionChanged = [this](node_system::NodeId id) {
-        selectedNodeId_ = id;
-        inspector_.SetSelectedNode(id);
+        if (onSelectedNodeChanged) onSelectedNodeChanged(id);
     };
     graphView_.onGraphChanged = [this] { status_.setText("Graph edited", juce::dontSendNotification); };
     addChildComponent(palette_);
     addChildComponent(graphView_);
-    addChildComponent(inspector_);
 
     frustTokeniser_ = std::make_unique<FrustCodeTokeniser>();
     sourceEditor_ = std::make_unique<juce::CodeEditorComponent>(sourceCodeDocument_, frustTokeniser_.get());
@@ -363,15 +266,13 @@ void PodEditorPanel::RefreshBrowseList() {
 }
 
 void PodEditorPanel::CreatePod(frust::PodKind kind) {
-    const auto name = newNameEditor_.getText().trim();
-    if (name.isEmpty()) return;
+    const auto name = GenerateDefaultPodName(catalog_, kind);
     if (newAuthoringModeCombo_.getSelectedItemIndex() == 1) {
         auto& source = catalog_.GetOrCreateSource(name, kind);
         source = SourceTemplateFor(kind);
     } else {
         catalog_.GetOrCreateGraph(name, kind); // registers an empty graph under this name.
     }
-    newNameEditor_.clear();
     RefreshBrowseList();
     OpenPod(name);
 }
@@ -380,9 +281,7 @@ void PodEditorPanel::OpenPod(const juce::String& name) {
     const auto kind = catalog_.Kind(name);
     const auto mode = catalog_.AuthoringMode(name);
     openName_ = name;
-    selectedNodeId_ = 0;
     editTitle_.setText(KindLabel(kind) + " Pod: " + name, juce::dontSendNotification);
-    exposeAsNodeToggle_.setToggleState(catalog_.ExposeAsNode(name), juce::dontSendNotification);
     sourceView_.setText("Compile to see generated FRust and validation errors here.", juce::dontSendNotification);
 
     if (mode == frust::PodAuthoringMode::Source) {
@@ -406,16 +305,16 @@ void PodEditorPanel::OpenPod(const juce::String& name) {
         graph_ = std::move(*copy);
         graphView_.GraphReplaced();
         status_.setText(juce::String(static_cast<int>(registry_.Types().size())) + " FRust nodes available", juce::dontSendNotification);
-        RefreshInterfaceRows();
     }
     ShowEditMode();
+    if (onOpenPodChanged) onOpenPodChanged(openName_);
+    if (onSelectedNodeChanged) onSelectedNodeChanged(0);
 }
 
 void PodEditorPanel::ShowBrowseMode() {
     editing_ = false;
     RefreshBrowseList();
     browseTitle_.setVisible(true);
-    newNameEditor_.setVisible(true);
     newBehaviorPodButton_.setVisible(true);
     newProcessingPodButton_.setVisible(true);
     newAuthoringModeCombo_.setVisible(true);
@@ -429,29 +328,23 @@ void PodEditorPanel::ShowBrowseMode() {
     hint_.setVisible(false);
     saveButton_.setVisible(false);
     compileButton_.setVisible(false);
-    exposeAsNodeToggle_.setVisible(false);
     status_.setVisible(false);
     sourceView_.setVisible(false);
     palette_.setVisible(false);
     graphView_.setVisible(false);
-    inspector_.setVisible(false);
-    interfaceLabel_.setVisible(false);
-    newInputNameEditor_.setVisible(false);
-    newInputTypeCombo_.setVisible(false);
-    addInputButton_.setVisible(false);
-    for (auto* row : interfaceInputRows_) row->setVisible(false);
-    outputRowLabel_.setVisible(false);
-    bindOutputButton_.setVisible(false);
     sourceEditor_->setVisible(false);
     snippetCombo_.setVisible(false);
     insertSnippetButton_.setVisible(false);
     resized();
+
+    openName_.clear();
+    if (onOpenPodChanged) onOpenPodChanged(openName_);
+    if (onSelectedNodeChanged) onSelectedNodeChanged(0);
 }
 
 void PodEditorPanel::ShowEditMode() {
     editing_ = true;
     browseTitle_.setVisible(false);
-    newNameEditor_.setVisible(false);
     newBehaviorPodButton_.setVisible(false);
     newProcessingPodButton_.setVisible(false);
     newAuthoringModeCombo_.setVisible(false);
@@ -467,23 +360,10 @@ void PodEditorPanel::ShowEditMode() {
     hint_.setVisible(true);
     saveButton_.setVisible(true);
     compileButton_.setVisible(true);
-    // The toggle drives Graph compilation's node-pure/node-callable
-    // prefixing; a Source Pod author gets the exact same effect by
-    // typing `node pure`/`node callable` themselves, so the toggle has
-    // nothing to do here.
-    exposeAsNodeToggle_.setVisible(!isSource);
     status_.setVisible(true);
     sourceView_.setVisible(true);
     palette_.setVisible(!isSource);
     graphView_.setVisible(!isSource);
-    inspector_.setVisible(!isSource);
-    interfaceLabel_.setVisible(!isSource);
-    newInputNameEditor_.setVisible(!isSource);
-    newInputTypeCombo_.setVisible(!isSource);
-    addInputButton_.setVisible(!isSource);
-    for (auto* row : interfaceInputRows_) row->setVisible(!isSource);
-    outputRowLabel_.setVisible(!isSource);
-    bindOutputButton_.setVisible(!isSource);
     sourceEditor_->setVisible(isSource);
     snippetCombo_.setVisible(isSource);
     insertSnippetButton_.setVisible(isSource);
@@ -720,106 +600,6 @@ void PodEditorPanel::CompileAndLoad() {
     status_.setColour(juce::Label::textColourId, juce::Colour(0xff67e8a5));
 }
 
-void PodEditorPanel::AddInterfaceInput() {
-    if (openName_.isEmpty()) return;
-    const auto name = newInputNameEditor_.getText().trim();
-    if (name.isEmpty()) return;
-    auto* entry = catalog_.FindEntry(openName_);
-    if (entry == nullptr) return;
-
-    static constexpr node_system::DataType kTypesByIndex[] = {
-        node_system::DataType::Float, node_system::DataType::Bool, node_system::DataType::Int, node_system::DataType::String,
-        node_system::DataType::Entity, node_system::DataType::Transform, node_system::DataType::Material,
-        node_system::DataType::Model, node_system::DataType::Controller
-    };
-    const int typeIndex = newInputTypeCombo_.getSelectedItemIndex();
-
-    frust::PodInterfaceInput input;
-    input.name = name;
-    input.type = (typeIndex >= 0 && static_cast<size_t>(typeIndex) < std::size(kTypesByIndex))
-                      ? kTypesByIndex[typeIndex] : node_system::DataType::Int;
-    entry->interfaceInputs.push_back(input);
-
-    newInputNameEditor_.clear();
-    RefreshInterfaceRows();
-}
-
-void PodEditorPanel::BindInterfaceInputAt(int index) {
-    if (openName_.isEmpty() || selectedNodeId_ == 0) return;
-    auto* entry = catalog_.FindEntry(openName_);
-    if (entry == nullptr || index < 0 || static_cast<size_t>(index) >= entry->interfaceInputs.size()) return;
-    const auto* node = graph_.FindNode(selectedNodeId_);
-    if (node == nullptr) return;
-
-    auto& input = entry->interfaceInputs[static_cast<size_t>(index)];
-    const auto* pin = FindBindablePin(graph_, *node, input.type, /*wantInput=*/true);
-    if (pin == nullptr) {
-        status_.setText("Selected node has no unwired " + DataTypeLabel(input.type) + " input to bind \"" + input.name + "\" to",
-                         juce::dontSendNotification);
-        status_.setColour(juce::Label::textColourId, juce::Colour(0xffffb454));
-        return;
-    }
-    input.boundNode = selectedNodeId_;
-    input.boundPin = pin->id;
-    RefreshInterfaceRows();
-}
-
-void PodEditorPanel::RemoveInterfaceInputAt(int index) {
-    if (openName_.isEmpty()) return;
-    auto* entry = catalog_.FindEntry(openName_);
-    if (entry == nullptr || index < 0 || static_cast<size_t>(index) >= entry->interfaceInputs.size()) return;
-    entry->interfaceInputs.erase(entry->interfaceInputs.begin() + index);
-    RefreshInterfaceRows();
-}
-
-void PodEditorPanel::BindInterfaceOutput() {
-    if (openName_.isEmpty() || selectedNodeId_ == 0) return;
-    auto* entry = catalog_.FindEntry(openName_);
-    if (entry == nullptr) return;
-    const auto* node = graph_.FindNode(selectedNodeId_);
-    if (node == nullptr) return;
-
-    const auto output = std::find_if(node->Outputs().begin(), node->Outputs().end(),
-                                      [](const node_system::Pin& pin) { return pin.type.kind == node_system::PinKind::Data; });
-    if (output == node->Outputs().end()) {
-        status_.setText("Selected node has no data output to bind as the Pod's output", juce::dontSendNotification);
-        status_.setColour(juce::Label::textColourId, juce::Colour(0xffffb454));
-        return;
-    }
-    entry->outputNode = selectedNodeId_;
-    entry->outputPin = output->id;
-    RefreshInterfaceRows();
-}
-
-void PodEditorPanel::RefreshInterfaceRows() {
-    interfaceInputRows_.clear();
-    if (openName_.isEmpty()) { resized(); return; }
-    auto* entry = catalog_.FindEntry(openName_);
-    if (entry == nullptr) { resized(); return; }
-
-    // Unbound is a visible state, never a block -- see the plan's
-    // never-block editing philosophy (a Component with a required input
-    // unwired renders as an error, not a refused action).
-    auto boundStatusFor = [this](node_system::NodeId nodeId, node_system::PinId pinId) -> juce::String {
-        if (nodeId == 0) return "(unbound)";
-        const auto* node = graph_.FindNode(nodeId);
-        const auto* pin = node ? node->FindPin(pinId) : nullptr;
-        return pin ? "-> " + juce::String(node->TypeName()) + "." + pin->name : "(bound node no longer exists)";
-    };
-
-    for (size_t i = 0; i < entry->interfaceInputs.size(); ++i) {
-        const auto& input = entry->interfaceInputs[i];
-        const auto label = input.name + " : " + DataTypeLabel(input.type);
-        auto* row = interfaceInputRows_.add(new InterfaceInputRow(*this, static_cast<int>(i), label,
-                                                                    boundStatusFor(input.boundNode, input.boundPin)));
-        addAndMakeVisible(row);
-        row->setVisible(editing_);
-    }
-
-    outputRowLabel_.setText("Output: " + boundStatusFor(entry->outputNode, entry->outputPin), juce::dontSendNotification);
-    resized();
-}
-
 void PodEditorPanel::InsertSnippet() {
     const int index = snippetCombo_.getSelectedItemIndex();
     if (index < 0 || static_cast<size_t>(index) >= std::size(kSnippets)) return;
@@ -837,13 +617,11 @@ void PodEditorPanel::resized()
         browseTitle_.setBounds(header);
         area.removeFromTop(8);
         auto newRow = area.removeFromTop(28);
+        newAuthoringModeCombo_.setBounds(newRow.removeFromRight(80).reduced(1));
+        newRow.removeFromRight(8);
         newProcessingPodButton_.setBounds(newRow.removeFromRight(150).reduced(2));
         newRow.removeFromRight(4);
         newBehaviorPodButton_.setBounds(newRow.removeFromRight(140).reduced(2));
-        newRow.removeFromRight(4);
-        newAuthoringModeCombo_.setBounds(newRow.removeFromRight(80).reduced(1));
-        newRow.removeFromRight(8);
-        newNameEditor_.setBounds(newRow);
         area.removeFromTop(12);
 
         behaviorSectionLabel_.setBounds(area.removeFromTop(20));
@@ -872,8 +650,6 @@ void PodEditorPanel::resized()
     footerHeader.removeFromLeft(8);
     compileButton_.setBounds(footerHeader.removeFromLeft(100));
     footerHeader.removeFromLeft(8);
-    exposeAsNodeToggle_.setBounds(footerHeader.removeFromLeft(130));
-    footerHeader.removeFromLeft(8);
     status_.setBounds(footerHeader);
     sourceView_.setBounds(footer.reduced(0, 4));
     area.removeFromBottom(8);
@@ -891,28 +667,6 @@ void PodEditorPanel::resized()
     auto left = area.removeFromLeft(190);
     palette_.setBounds(left);
     area.removeFromLeft(8);
-
-    auto right = area.removeFromRight(220);
-    inspector_.setBounds(right.removeFromTop(right.getHeight() * 5 / 9));
-    right.removeFromTop(6);
-
-    auto interfaceArea = right;
-    interfaceLabel_.setBounds(interfaceArea.removeFromTop(18));
-    auto addRow = interfaceArea.removeFromTop(24);
-    addInputButton_.setBounds(addRow.removeFromRight(70).reduced(1));
-    newInputTypeCombo_.setBounds(addRow.removeFromRight(70).reduced(1));
-    addRow.removeFromRight(4);
-    newInputNameEditor_.setBounds(addRow);
-    interfaceArea.removeFromTop(4);
-    for (auto* row : interfaceInputRows_) {
-        row->setBounds(interfaceArea.removeFromTop(32));
-        interfaceArea.removeFromTop(2);
-    }
-    interfaceArea.removeFromTop(6);
-    outputRowLabel_.setBounds(interfaceArea.removeFromTop(16));
-    bindOutputButton_.setBounds(interfaceArea.removeFromTop(24));
-
-    area.removeFromRight(8);
     graphView_.setBounds(area);
 }
 

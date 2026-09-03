@@ -36,6 +36,7 @@ constexpr DockPanelMenuEntry kDockPanelMenuEntries[] = {
     { "behaviors", "Behaviors" },
     { "lighting", "Lighting" },
     { "pods", "Pods" },
+    { "pod-info", "Pod" },
     { "materials", "Materials" },
     { "assets", "Assets & Import" },
     { "content-browser", "Content Browser" },
@@ -100,6 +101,18 @@ MainComponent::MainComponent()
         juce::Logger::writeToLog("Creation Engine FRust host: " + juce::String(frustError));
     }
     podEditorPanel_ = std::make_unique<ce::views::PodEditorPanel>(frustHost_, podCatalog_, projectSession_);
+    podInfoPanel_ = std::make_unique<ce::views::PodInfoPanel>(podCatalog_, projectSession_, podEditorPanel_->Graph(),
+                                                               podEditorPanel_->Registry());
+    // Same fan-out-from-a-callback shape as hierarchyPanel_.onSelectionChanged
+    // below -- PodEditorPanel no longer owns the Pod's identity/interface UI
+    // or the node inspector itself, PodInfoPanel does.
+    podEditorPanel_->onOpenPodChanged = [this](const juce::String& name) { podInfoPanel_->SetOpenPod(name); };
+    podEditorPanel_->onSelectedNodeChanged = [this](ce::node_system::NodeId id) { podInfoPanel_->SetSelectedNode(id); };
+    contentBrowserPanel_.onAssetOpened = [this](const creation::assets::AssetDescriptor& descriptor) {
+        if (descriptor.kind != creation::assets::AssetKind::pod) return;
+        if (dockManager_ != nullptr) dockManager_->activatePanel("pods");
+        podEditorPanel_->OpenPod(descriptor.displayName);
+    };
     frustHost_.setSceneTransitionRequestHandler([this](const std::string& reference) {
         const juce::String sceneReference(reference);
         for (const auto& scene : activeGame_.scenes)
@@ -423,6 +436,7 @@ void MainComponent::initialiseDockingWorkspace()
     dockManager_->registerPanel("behaviors", "Behaviors", std::make_unique<NonOwningPanelHost>(behaviorAttachmentPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("lighting", "Lighting", std::make_unique<NonOwningPanelHost>(lightPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("pods", "Pods", std::make_unique<NonOwningPanelHost>(*podEditorPanel_), CreationDock::DockTargetZone::CenterTab);
+    dockManager_->registerPanel("pod-info", "Pod", std::make_unique<NonOwningPanelHost>(*podInfoPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("materials", "Materials", std::make_unique<NonOwningPanelHost>(materialsPanel_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("assets", "Assets & Import", std::make_unique<NonOwningPanelHost>(importPanel_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("content-browser", "Content Browser", std::make_unique<NonOwningPanelHost>(contentBrowserPanel_), CreationDock::DockTargetZone::CenterTab);

@@ -16,6 +16,7 @@
 #include "Views/HierarchyPanel.h"
 #include "Views/ImportPanel.h"
 #include "Views/PodEditorPanel.h"
+#include "Views/PodInfoPanel.h"
 #include "Views/LightPanel.h"
 #include "Views/MaterialGraphPanel.h"
 #include "Views/MaterialsPanel.h"
@@ -194,6 +195,11 @@ private:
 
     // --- Other modes: stand-ins until their milestones land ---
     std::unique_ptr<ce::views::PodEditorPanel> podEditorPanel_;
+    // A Pod's identity/characteristics + selected-node property editor,
+    // as its own dockable panel -- see PodInfoPanel.h. Constructed after
+    // podEditorPanel_ since it needs a reference to that panel's live
+    // Graph& (Pod Editor UX & Architecture Fixes plan Phase 6).
+    std::unique_ptr<ce::views::PodInfoPanel> podInfoPanel_;
     ce::PlaceholderPanel serverPanel_ { "Server", "Dedicated server operational view - coming soon" };
     ce::PlaceholderPanel settingsPanel_ { "Settings", "Application settings - coming soon" };
 
