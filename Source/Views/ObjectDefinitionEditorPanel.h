@@ -9,22 +9,23 @@
 namespace ce::views
 {
 
-// A small editor for ONE Object Definition (docs/OBJECT_MODEL.md) -- a
-// mesh-asset picker, an attach/detach list of Pod ids, and Save. No node
-// graph: unlike the Pod editor, an Object Definition has no logic of its
-// own to wire, it's a recipe (mesh + materials, via the mesh asset's own
-// bundled material + attached behavior Pods). Lazily opened/closed by
-// MainComponent exactly like the Pod editor -- never a standing dock tab.
-// The VR Editor Cart plan, Phase 1.
+// A small editor for ONE Object Definition (docs/OBJECT_MODEL.md) -- one
+// uniform list of components (a mesh reference, an attached Pod, or a
+// nested child object are all the same kind of list entry, per the
+// settled component model), plus Save. No node graph: unlike the Pod
+// editor, an Object Definition has no logic of its own to wire, it's a
+// recipe. Lazily opened/closed by MainComponent exactly like the Pod
+// editor -- never a standing dock tab.
 class ObjectDefinitionEditorPanel final : public juce::Component
 {
 public:
     ObjectDefinitionEditorPanel(scene::ObjectDefinitionCatalog& catalog, frust::PodCatalog& podCatalog,
                                 creation::assets::ProjectSession& projectSession);
     // Declared (not defaulted inline) and defined in the .cpp, after
-    // PodRow's full definition -- same reason PodEditorPanel's own
-    // destructor is out-of-line: OwnedArray<PodRow>'s destructor can't be
-    // instantiated against PodRow as an incomplete (forward-declared) type.
+    // ComponentRow's full definition -- same reason PodEditorPanel's own
+    // destructor is out-of-line: OwnedArray<ComponentRow>'s destructor
+    // can't be instantiated against ComponentRow as an incomplete
+    // (forward-declared) type.
     ~ObjectDefinitionEditorPanel() override;
 
     // The only way anything ever appears in this panel, same shape as
@@ -35,35 +36,32 @@ public:
     void paint(juce::Graphics& g) override;
 
 private:
+    // Shows the Kind-choice popup (Mesh Reference / Pod / Child Object)
+    // and dispatches to whichever of the three below the user picks.
+    void AddComponent();
     void PickMesh();
     void AddPod();
-    void RemovePodAt(int index);
+    void PickChildDefinition();
+    void RemoveComponentAt(int index);
     void SaveContent();
-    void RefreshPodRows();
+    void RefreshComponentRows();
 
     scene::ObjectDefinitionCatalog& catalog_;
     frust::PodCatalog& podCatalog_;
     creation::assets::ProjectSession& projectSession_;
 
     juce::String openId_;
-    juce::String meshDisplayName_; // resolved for display only; the real reference is meshAssetId_/meshAssetVersionId_.
-    juce::String meshAssetId_;
-    juce::String meshAssetVersionId_;
+    std::vector<scene::ObjectComponentEntry> components_;
 
     juce::Label titleLabel_{ {}, "Object Definition" };
     juce::Label nameLabel_;
 
-    juce::Label meshSectionLabel_{ {}, "Mesh" };
-    juce::Label meshLabel_{ {}, "(none)" };
-    juce::TextButton pickMeshButton_{ "Choose Mesh..." };
-
     juce::ToggleButton editorOnlyToggle_{ "Editor only (excluded from Play)" };
 
-    juce::Label podsSectionLabel_{ {}, "Attached Pods" };
-    juce::TextButton addPodButton_{ "+ Add Pod" };
-    class PodRow;
-    juce::OwnedArray<PodRow> podRows_;
-    std::vector<juce::String> attachedPods_;
+    juce::Label componentsSectionLabel_{ {}, "Components" };
+    juce::TextButton addComponentButton_{ "+ Add Component" };
+    class ComponentRow;
+    juce::OwnedArray<ComponentRow> componentRows_;
 
     juce::TextButton saveButton_{ "Save" };
     juce::Label status_;

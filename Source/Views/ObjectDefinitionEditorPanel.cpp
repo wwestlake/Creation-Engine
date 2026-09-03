@@ -5,16 +5,19 @@
 namespace ce::views
 {
 
-// One attached Pod: its id, plus Remove. Mirrors PodEditorPanel's old
-// InterfaceInputRow / PodInfoPanel's InterfaceInputRow shape.
-class ObjectDefinitionEditorPanel::PodRow final : public juce::Component {
+// One component-list entry: its resolved display text (already kind-
+// prefixed, e.g. "Mesh: Barrel", "Pod: Rotator", "Child: TableLamp"), plus
+// Remove. One row shape serves all three kinds -- per docs/OBJECT_MODEL.md
+// they're the same kind of list entry, distinguished only by what they
+// reference, not by having different UI.
+class ObjectDefinitionEditorPanel::ComponentRow final : public juce::Component {
 public:
-    PodRow(ObjectDefinitionEditorPanel& owner, int index, juce::String podId) : owner_(owner), index_(index) {
-        label_.setText(podId, juce::dontSendNotification);
+    ComponentRow(ObjectDefinitionEditorPanel& owner, int index, juce::String displayText) : owner_(owner), index_(index) {
+        label_.setText(displayText, juce::dontSendNotification);
         label_.setColour(juce::Label::textColourId, juce::Colours::white);
         addAndMakeVisible(label_);
 
-        removeButton_.onClick = [this] { owner_.RemovePodAt(index_); };
+        removeButton_.onClick = [this] { owner_.RemoveComponentAt(index_); };
         addAndMakeVisible(removeButton_);
     }
 
@@ -43,25 +46,15 @@ ObjectDefinitionEditorPanel::ObjectDefinitionEditorPanel(scene::ObjectDefinition
     nameLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
     addAndMakeVisible(nameLabel_);
 
-    meshSectionLabel_.setFont(juce::Font(juce::FontOptions(13.0f)).boldened());
-    meshSectionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
-    addAndMakeVisible(meshSectionLabel_);
-
-    meshLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
-    addAndMakeVisible(meshLabel_);
-
-    pickMeshButton_.onClick = [this] { PickMesh(); };
-    addAndMakeVisible(pickMeshButton_);
-
     editorOnlyToggle_.setTooltip("Instances of this definition are hidden (not despawned) while Play is active -- e.g. the VR edit-mode cart.");
     addAndMakeVisible(editorOnlyToggle_);
 
-    podsSectionLabel_.setFont(juce::Font(juce::FontOptions(13.0f)).boldened());
-    podsSectionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
-    addAndMakeVisible(podsSectionLabel_);
+    componentsSectionLabel_.setFont(juce::Font(juce::FontOptions(13.0f)).boldened());
+    componentsSectionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
+    addAndMakeVisible(componentsSectionLabel_);
 
-    addPodButton_.onClick = [this] { AddPod(); };
-    addAndMakeVisible(addPodButton_);
+    addComponentButton_.onClick = [this] { AddComponent(); };
+    addAndMakeVisible(addComponentButton_);
 
     saveButton_.onClick = [this] { SaveContent(); };
     saveButton_.setTooltip("Save this Object Definition to the project.");
@@ -79,23 +72,23 @@ void ObjectDefinitionEditorPanel::OpenDefinition(const juce::String& id) {
     status_.setText({}, juce::dontSendNotification);
 
     const auto* definition = catalog_.find(id);
-    meshAssetId_ = definition ? definition->meshAssetId : juce::String();
-    meshAssetVersionId_ = definition ? definition->meshAssetVersionId : juce::String();
-    attachedPods_ = definition ? definition->behaviorPods : std::vector<juce::String>();
+    components_ = definition ? definition->components : std::vector<scene::ObjectComponentEntry>();
     editorOnlyToggle_.setToggleState(definition && definition->editorOnly, juce::dontSendNotification);
 
-    meshDisplayName_.clear();
-    if (meshAssetId_.isNotEmpty() && projectSession_.isValid()) {
-        for (const auto& asset : projectSession_.getManifest().assetCatalog.query({ creation::assets::AssetKind::render })) {
-            if (asset.id == meshAssetId_) { meshDisplayName_ = asset.displayName; break; }
-        }
-    }
-    meshLabel_.setText(meshDisplayName_.isNotEmpty() ? meshDisplayName_
-                                                      : (meshAssetId_.isNotEmpty() ? "(unresolved: " + meshAssetId_ + ")" : "(none)"),
-                        juce::dontSendNotification);
-
-    RefreshPodRows();
+    RefreshComponentRows();
     resized();
+}
+
+void ObjectDefinitionEditorPanel::AddComponent() {
+    juce::PopupMenu menu;
+    menu.addItem(1, "Mesh Reference...");
+    menu.addItem(2, "Pod...");
+    menu.addItem(3, "Child Object...");
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&addComponentButton_), [this](int result) {
+        if (result == 1) PickMesh();
+        else if (result == 2) AddPod();
+        else if (result == 3) PickChildDefinition();
+    });
 }
 
 void ObjectDefinitionEditorPanel::PickMesh() {
@@ -117,13 +110,15 @@ void ObjectDefinitionEditorPanel::PickMesh() {
     for (std::size_t i = 0; i < meshes.size(); ++i) {
         menu.addItem(static_cast<int>(i) + 1, meshes[i].displayName);
     }
-    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&pickMeshButton_), [this, meshes](int result) {
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&addComponentButton_), [this, meshes](int result) {
         if (result <= 0 || result > static_cast<int>(meshes.size())) return;
         const auto& chosen = meshes[static_cast<std::size_t>(result - 1)];
-        meshAssetId_ = chosen.id;
-        meshAssetVersionId_ = chosen.versionId;
-        meshDisplayName_ = chosen.displayName;
-        meshLabel_.setText(meshDisplayName_, juce::dontSendNotification);
+        scene::ObjectComponentEntry entry;
+        entry.kind = scene::ObjectComponentKind::Mesh;
+        entry.meshAssetId = chosen.id;
+        entry.meshAssetVersionId = chosen.versionId;
+        components_.push_back(std::move(entry));
+        RefreshComponentRows();
     });
 }
 
@@ -136,27 +131,78 @@ void ObjectDefinitionEditorPanel::AddPod() {
     }
     juce::PopupMenu menu;
     for (std::size_t i = 0; i < podNames.size(); ++i) {
-        const bool alreadyAttached =
-            std::find(attachedPods_.begin(), attachedPods_.end(), podNames[i]) != attachedPods_.end();
+        const bool alreadyAttached = std::any_of(components_.begin(), components_.end(), [&](const auto& component) {
+            return component.kind == scene::ObjectComponentKind::Pod && component.podId == podNames[i];
+        });
         menu.addItem(static_cast<int>(i) + 1, podNames[i], !alreadyAttached);
     }
-    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&addPodButton_), [this, podNames](int result) {
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&addComponentButton_), [this, podNames](int result) {
         if (result <= 0 || result > static_cast<int>(podNames.size())) return;
-        attachedPods_.push_back(podNames[static_cast<std::size_t>(result - 1)]);
-        RefreshPodRows();
+        scene::ObjectComponentEntry entry;
+        entry.kind = scene::ObjectComponentKind::Pod;
+        entry.podId = podNames[static_cast<std::size_t>(result - 1)];
+        components_.push_back(std::move(entry));
+        RefreshComponentRows();
     });
 }
 
-void ObjectDefinitionEditorPanel::RemovePodAt(int index) {
-    if (index < 0 || static_cast<std::size_t>(index) >= attachedPods_.size()) return;
-    attachedPods_.erase(attachedPods_.begin() + index);
-    RefreshPodRows();
+void ObjectDefinitionEditorPanel::PickChildDefinition() {
+    auto ids = catalog_.ids();
+    ids.erase(std::remove(ids.begin(), ids.end(), openId_), ids.end());
+    if (ids.empty()) {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "No Other Object Definitions",
+                                                "Create another Object Definition (Content Browser's Object Definitions "
+                                                "section) before nesting one here.");
+        return;
+    }
+    std::sort(ids.begin(), ids.end(), [](const auto& a, const auto& b) { return a.compareIgnoreCase(b) < 0; });
+
+    juce::PopupMenu menu;
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        menu.addItem(static_cast<int>(i) + 1, ids[i]);
+    }
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&addComponentButton_), [this, ids](int result) {
+        if (result <= 0 || result > static_cast<int>(ids.size())) return;
+        scene::ObjectComponentEntry entry;
+        entry.kind = scene::ObjectComponentKind::Child;
+        entry.childDefinitionId = ids[static_cast<std::size_t>(result - 1)];
+        // Identity transform -- editing a child's local placement isn't
+        // exposed in this pass; see the plan's Phase 3 note.
+        components_.push_back(std::move(entry));
+        RefreshComponentRows();
+    });
 }
 
-void ObjectDefinitionEditorPanel::RefreshPodRows() {
-    podRows_.clear();
-    for (std::size_t i = 0; i < attachedPods_.size(); ++i) {
-        auto* row = podRows_.add(new PodRow(*this, static_cast<int>(i), attachedPods_[i]));
+void ObjectDefinitionEditorPanel::RemoveComponentAt(int index) {
+    if (index < 0 || static_cast<std::size_t>(index) >= components_.size()) return;
+    components_.erase(components_.begin() + index);
+    RefreshComponentRows();
+}
+
+void ObjectDefinitionEditorPanel::RefreshComponentRows() {
+    componentRows_.clear();
+    for (std::size_t i = 0; i < components_.size(); ++i) {
+        const auto& component = components_[i];
+        juce::String displayText;
+        switch (component.kind) {
+            case scene::ObjectComponentKind::Mesh: {
+                juce::String meshDisplayName;
+                if (projectSession_.isValid()) {
+                    for (const auto& asset : projectSession_.getManifest().assetCatalog.query({ creation::assets::AssetKind::render })) {
+                        if (asset.id == component.meshAssetId) { meshDisplayName = asset.displayName; break; }
+                    }
+                }
+                displayText = "Mesh: " + (meshDisplayName.isNotEmpty() ? meshDisplayName : component.meshAssetId);
+                break;
+            }
+            case scene::ObjectComponentKind::Pod:
+                displayText = "Pod: " + component.podId;
+                break;
+            case scene::ObjectComponentKind::Child:
+                displayText = "Child: " + component.childDefinitionId;
+                break;
+        }
+        auto* row = componentRows_.add(new ComponentRow(*this, static_cast<int>(i), displayText));
         addAndMakeVisible(row);
     }
     resized();
@@ -169,9 +215,7 @@ void ObjectDefinitionEditorPanel::SaveContent() {
     if (const auto* existing = catalog_.find(openId_)) definition = *existing;
     definition.id = openId_;
     if (definition.displayName.isEmpty()) definition.displayName = openId_;
-    definition.meshAssetId = meshAssetId_;
-    definition.meshAssetVersionId = meshAssetVersionId_;
-    definition.behaviorPods = attachedPods_;
+    definition.components = components_;
     definition.editorOnly = editorOnlyToggle_.getToggleState();
 
     juce::String upsertError;
@@ -200,22 +244,16 @@ void ObjectDefinitionEditorPanel::resized() {
     nameLabel_.setBounds(area.removeFromTop(22));
     area.removeFromTop(12);
 
-    meshSectionLabel_.setBounds(area.removeFromTop(18));
-    auto meshRow = area.removeFromTop(26);
-    pickMeshButton_.setBounds(meshRow.removeFromRight(110).reduced(1));
-    meshRow.removeFromRight(8);
-    meshLabel_.setBounds(meshRow);
-    area.removeFromTop(8);
     editorOnlyToggle_.setBounds(area.removeFromTop(22));
     area.removeFromTop(12);
 
-    podsSectionLabel_.setBounds(area.removeFromTop(18));
+    componentsSectionLabel_.setBounds(area.removeFromTop(18));
     area.removeFromTop(2);
-    for (auto* row : podRows_) {
+    for (auto* row : componentRows_) {
         row->setBounds(area.removeFromTop(24));
         area.removeFromTop(2);
     }
-    addPodButton_.setBounds(area.removeFromTop(24));
+    addComponentButton_.setBounds(area.removeFromTop(24));
     area.removeFromTop(12);
 
     auto footer = area.removeFromTop(26);

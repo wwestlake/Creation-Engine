@@ -62,15 +62,21 @@ engine::Transform composeTransform(const engine::Transform& parent, const engine
 // so Save()/LoadAll() (one asset per definition) can reuse the exact same
 // schema as the whole-catalog round-trip those already use, without a
 // second parallel format.
+juce::String ComponentKindToken(ObjectComponentKind kind)
+{
+    switch (kind) {
+        case ObjectComponentKind::Mesh: return "Mesh";
+        case ObjectComponentKind::Pod: return "Pod";
+        case ObjectComponentKind::Child: return "Child";
+    }
+    return "Mesh";
+}
+
 juce::ValueTree SerializeOne(const ObjectDefinition& definition)
 {
     juce::ValueTree node("ObjectDefinition");
     node.setProperty("id", definition.id, nullptr);
     node.setProperty("displayName", definition.displayName, nullptr);
-    node.setProperty("meshAssetId", definition.meshAssetId, nullptr);
-    node.setProperty("meshAssetVersionId", definition.meshAssetVersionId, nullptr);
-    node.setProperty("meshPackId", definition.meshPackId, nullptr);
-    node.setProperty("meshPackVersion", definition.meshPackVersion, nullptr);
     node.setProperty("editorOnly", definition.editorOnly, nullptr);
     node.addChild(serializeTransform(definition.initialTransform, "InitialTransform"), -1, nullptr);
 
@@ -80,22 +86,31 @@ juce::ValueTree SerializeOne(const ObjectDefinition& definition)
     }
     node.addChild(state, -1, nullptr);
 
-    juce::ValueTree behaviors("Behaviors");
-    for (const auto& podId : definition.behaviorPods) {
-        juce::ValueTree behavior("Behavior");
-        behavior.setProperty("podId", podId, nullptr);
-        behaviors.addChild(behavior, -1, nullptr);
+    // One uniform list -- a mesh reference, a pod reference, and a child
+    // object are the same kind of entry here, distinguished only by the
+    // "kind" property. See docs/OBJECT_MODEL.md.
+    juce::ValueTree components("Components");
+    for (const auto& component : definition.components) {
+        juce::ValueTree entry("Component");
+        entry.setProperty("kind", ComponentKindToken(component.kind), nullptr);
+        switch (component.kind) {
+            case ObjectComponentKind::Mesh:
+                entry.setProperty("meshAssetId", component.meshAssetId, nullptr);
+                entry.setProperty("meshAssetVersionId", component.meshAssetVersionId, nullptr);
+                entry.setProperty("meshPackId", component.meshPackId, nullptr);
+                entry.setProperty("meshPackVersion", component.meshPackVersion, nullptr);
+                break;
+            case ObjectComponentKind::Pod:
+                entry.setProperty("podId", component.podId, nullptr);
+                break;
+            case ObjectComponentKind::Child:
+                entry.setProperty("definitionId", component.childDefinitionId, nullptr);
+                entry.addChild(serializeTransform(component.childLocalTransform, "LocalTransform"), -1, nullptr);
+                break;
+        }
+        components.addChild(entry, -1, nullptr);
     }
-    node.addChild(behaviors, -1, nullptr);
-
-    juce::ValueTree children("Children");
-    for (const auto& child : definition.children) {
-        juce::ValueTree childNode("Child");
-        childNode.setProperty("definitionId", child.definitionId, nullptr);
-        childNode.addChild(serializeTransform(child.localTransform, "LocalTransform"), -1, nullptr);
-        children.addChild(childNode, -1, nullptr);
-    }
-    node.addChild(children, -1, nullptr);
+    node.addChild(components, -1, nullptr);
     return node;
 }
 
@@ -104,10 +119,6 @@ ObjectDefinition RestoreOne(const juce::ValueTree& node)
     ObjectDefinition definition;
     definition.id = node.getProperty("id").toString();
     definition.displayName = node.getProperty("displayName").toString();
-    definition.meshAssetId = node.getProperty("meshAssetId").toString();
-    definition.meshAssetVersionId = node.getProperty("meshAssetVersionId").toString();
-    definition.meshPackId = node.getProperty("meshPackId").toString();
-    definition.meshPackVersion = node.getProperty("meshPackVersion").toString();
     definition.editorOnly = static_cast<bool>(node.getProperty("editorOnly", false));
     definition.initialTransform = restoreTransform(node.getChildWithName("InitialTransform"));
 
@@ -116,16 +127,31 @@ ObjectDefinition RestoreOne(const juce::ValueTree& node)
         definition.defaultState.set(defaultState.getPropertyName(index), defaultState.getProperty(defaultState.getPropertyName(index)));
     }
 
-    for (const auto behavior : node.getChildWithName("Behaviors")) {
-        if (behavior.hasType("Behavior")) {
-            definition.behaviorPods.push_back(behavior.getProperty("podId").toString());
+    for (const auto entry : node.getChildWithName("Components")) {
+        if (!entry.hasType("Component")) continue;
+        const auto kindToken = entry.getProperty("kind").toString();
+        ObjectComponentEntry component;
+        if (kindToken == "Mesh") {
+            component.kind = ObjectComponentKind::Mesh;
+            component.meshAssetId = entry.getProperty("meshAssetId").toString();
+            component.meshAssetVersionId = entry.getProperty("meshAssetVersionId").toString();
+            component.meshPackId = entry.getProperty("meshPackId").toString();
+            component.meshPackVersion = entry.getProperty("meshPackVersion").toString();
+        } else if (kindToken == "Pod") {
+            component.kind = ObjectComponentKind::Pod;
+            component.podId = entry.getProperty("podId").toString();
+        } else if (kindToken == "Child") {
+            component.kind = ObjectComponentKind::Child;
+            component.childDefinitionId = entry.getProperty("definitionId").toString();
+            component.childLocalTransform = restoreTransform(entry.getChildWithName("LocalTransform"));
+        } else {
+            // Unrecognized kind (e.g. a stale pre-refactor asset with no
+            // "kind" property at all) -- skip rather than fail the whole
+            // definition. A stale asset degrades to missing components,
+            // not a crash; see the plan's "No migration path" note.
+            continue;
         }
-    }
-    for (const auto child : node.getChildWithName("Children")) {
-        if (child.hasType("Child")) {
-            definition.children.push_back({ child.getProperty("definitionId").toString(),
-                                            restoreTransform(child.getChildWithName("LocalTransform")) });
-        }
+        definition.components.push_back(std::move(component));
     }
 
     definition.id = definition.id.trim();
@@ -165,26 +191,42 @@ entt::entity instantiateDefinition(engine::World& world, const ObjectDefinitionC
     registry.emplace<Parent>(entity, Parent{ parent });
     registry.emplace<ObjectDefinitionRef>(entity, ObjectDefinitionRef{ definition.id });
     registry.emplace<ObjectState>(entity, ObjectState{ definition.defaultState });
-    registry.emplace<BehaviorAttachments>(entity, BehaviorAttachments{ definition.behaviorPods });
-    if (definition.meshAssetId.isNotEmpty()) {
-        registry.emplace<MeshAssetReference>(entity, MeshAssetReference{
-            definition.meshAssetId, definition.meshAssetVersionId, definition.meshPackId, definition.meshPackVersion });
+
+    // One pass over the uniform component list: Pod entries accumulate
+    // into BehaviorAttachments (still unconditionally emplaced below, even
+    // if empty -- matches prior behavior exactly), the first non-empty
+    // Mesh entry becomes this entity's MeshAssetReference (today's single-
+    // mesh-slot semantics preserved; multiple Mesh entries on one
+    // definition is a future concern, not handled here), Child entries are
+    // recursed after the entity itself is fully built.
+    BehaviorAttachments attachments;
+    bool meshAssigned = false;
+    for (const auto& component : definition.components) {
+        if (component.kind == ObjectComponentKind::Pod) {
+            attachments.podIds.push_back(component.podId);
+        } else if (component.kind == ObjectComponentKind::Mesh && !meshAssigned && component.meshAssetId.isNotEmpty()) {
+            registry.emplace<MeshAssetReference>(entity, MeshAssetReference{
+                component.meshAssetId, component.meshAssetVersionId, component.meshPackId, component.meshPackVersion });
+            meshAssigned = true;
+        }
     }
+    registry.emplace<BehaviorAttachments>(entity, std::move(attachments));
     result.entities.push_back(entity);
 
     ancestry.insert(definition.id.toStdString());
-    for (const auto& child : definition.children) {
-        const auto childId = child.definitionId.toStdString();
+    for (const auto& component : definition.components) {
+        if (component.kind != ObjectComponentKind::Child) continue;
+        const auto childId = component.childDefinitionId.toStdString();
         if (ancestry.contains(childId)) {
-            error = "Object definition cycle detected at '" + child.definitionId + "'.";
+            error = "Object definition cycle detected at '" + component.childDefinitionId + "'.";
             return entt::null;
         }
-        const auto* childDefinition = catalog.find(child.definitionId);
+        const auto* childDefinition = catalog.find(component.childDefinitionId);
         if (childDefinition == nullptr) {
-            error = "Object definition '" + definition.id + "' refers to missing child '" + child.definitionId + "'.";
+            error = "Object definition '" + definition.id + "' refers to missing child '" + component.childDefinitionId + "'.";
             return entt::null;
         }
-        const auto childParentTransform = composeTransform(transform, child.localTransform);
+        const auto childParentTransform = composeTransform(transform, component.childLocalTransform);
         if (instantiateDefinition(world, catalog, *childDefinition, childParentTransform, entity, ancestry, result, error) == entt::null) {
             return entt::null;
         }

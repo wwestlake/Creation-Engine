@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 
+#include <algorithm>
 #include <mutex>
 
 #include <creation/services/SuiteVfsJsonStore.h>
@@ -65,6 +66,46 @@ private:
     juce::Component& content;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NonOwningPanelHost)
 };
+
+// Same first-free-numbered-slot dedup shape as ContentBrowserPanel.cpp's
+// GenerateDefaultObjectDefinitionName, seeded from a real name (the
+// dropped mesh's display name) instead of the generic "New Object
+// Definition" -- so a mesh dragged in twice reuses one definition (see
+// FindPureMeshWrapperDefinition below) and a genuinely new name only
+// takes this path once.
+juce::String GenerateWrapperDefinitionName(const ce::scene::ObjectDefinitionCatalog& catalog, const juce::String& baseName)
+{
+    const auto existing = catalog.ids();
+    auto isTaken = [&](const juce::String& candidate) {
+        return std::any_of(existing.begin(), existing.end(),
+                            [&](const juce::String& id) { return id.equalsIgnoreCase(candidate); });
+    };
+    if (!isTaken(baseName)) return baseName;
+    for (int i = 2; i < 1000; ++i) {
+        const auto candidate = baseName + " " + juce::String(i);
+        if (!isTaken(candidate)) return candidate;
+    }
+    return baseName + " " + juce::String(juce::Time::currentTimeMillis());
+}
+
+// Finds an existing Object Definition that's a pure single-mesh wrapper
+// for `meshAssetId` -- exactly one component, a Mesh entry matching this
+// asset, nothing else -- so dragging the same raw mesh in twice reuses
+// one definition rather than creating a near-duplicate each time. A
+// definition with additional components (a Pod, a Child) is deliberately
+// NOT matched here even if one of its components happens to reference
+// this mesh -- reusing someone's hand-built, richer definition just
+// because it shares a mesh would be a surprising, wrong guess.
+juce::String FindPureMeshWrapperDefinition(const ce::scene::ObjectDefinitionCatalog& catalog, const juce::String& meshAssetId)
+{
+    for (const auto& id : catalog.ids()) {
+        const auto* definition = catalog.find(id);
+        if (definition == nullptr || definition->components.size() != 1) continue;
+        const auto& only = definition->components.front();
+        if (only.kind == ce::scene::ObjectComponentKind::Mesh && only.meshAssetId == meshAssetId) return id;
+    }
+    return {};
+}
 }
 
 MainComponent::MainComponent()
@@ -750,43 +791,68 @@ void MainComponent::HandleAssetDropped(const juce::String& description, juce::Po
                                                                  rayOrigin.z + rayDirection.z * t });
     }
 
-    juce::String error;
+    // Placing an asset always goes through an Object Definition -- never a
+    // bare entity referencing a raw mesh directly. Per
+    // docs/ENGINE_ASSET_MANAGEMENT_PLAN.md: "Placing an object creates a
+    // scene entity referencing the object asset." A dropped raw mesh gets
+    // (or reuses) a single-component wrapper definition so it has a real,
+    // reopenable object identity, same as any hand-built Object Definition.
+    juce::String definitionId;
     if (kind == creation::assets::AssetKind::render) {
-        entt::entity entity = entt::null;
-        {
-            std::lock_guard<std::mutex> lock(world_.RegistryMutex());
-            auto& registry = world_.Registry();
-            entity = world_.CreateEntity();
-            registry.emplace<ce::scene::Name>(entity, ce::scene::Name{ displayName });
-            registry.emplace<ce::scene::Transform>(entity, ce::scene::Transform{ dropPosition });
-            registry.emplace<ce::scene::MeshAssetReference>(entity, ce::scene::MeshAssetReference{ id, versionId, {}, {} });
-            registry.emplace<ce::scene::SceneFlags>(entity);
-            registry.emplace<ce::scene::Parent>(entity);
+        definitionId = FindPureMeshWrapperDefinition(objectDefinitions_, id);
+        if (definitionId.isEmpty()) {
+            ce::scene::ObjectDefinition wrapper;
+            wrapper.id = GenerateWrapperDefinitionName(objectDefinitions_, displayName);
+            wrapper.displayName = displayName;
+            ce::scene::ObjectComponentEntry meshComponent;
+            meshComponent.kind = ce::scene::ObjectComponentKind::Mesh;
+            meshComponent.meshAssetId = id;
+            meshComponent.meshAssetVersionId = versionId;
+            wrapper.components.push_back(std::move(meshComponent));
+
+            juce::String upsertError;
+            if (!objectDefinitions_.upsert(wrapper, upsertError)) {
+                headerBar_.setStatusText("Could not place \"" + displayName + "\": " + upsertError);
+                return;
+            }
+            juce::String saveError;
+            if (!objectDefinitions_.Save(projectSession_, wrapper.id, saveError)) {
+                headerBar_.setStatusText("Could not place \"" + displayName + "\": " + saveError);
+                return;
+            }
+            definitionId = wrapper.id;
         }
-        // Materializes it into the runtime GPU cache right away (rather
-        // than leaving it to resolve lazily next frame) so a skinned
-        // model's Skeleton/Animator can be attached too -- mirrors
-        // PlaceAssetEntity's full component set, just resolved just-in-time
-        // instead of requiring an already-loaded Asset up front.
-        viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
+    } else if (kind == creation::assets::AssetKind::objectDefinition) {
+        definitionId = displayName;
+    } else {
+        return;
+    }
+
+    juce::String error;
+    // instantiate() takes the registry lock itself -- don't take it again here.
+    const auto result = ce::scene::ObjectFactory::instantiate(world_, objectDefinitions_, definitionId, dropPosition, error);
+    if (result.root == entt::null) {
+        headerBar_.setStatusText("Could not place \"" + displayName + "\": " + error);
+        refreshExplorerPanel();
+        return;
+    }
+
+    // Materializes the mesh into the runtime GPU cache right away (rather
+    // than leaving it to resolve lazily next frame) so a skinned model's
+    // Skeleton/Animator can be attached too -- ObjectFactory::instantiate
+    // only emplaces MeshAssetReference, not Skeleton/Animator, so that part
+    // still happens here, targeted at the instantiated root entity.
+    viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
+    if (kind == creation::assets::AssetKind::render) {
         const auto asset = viewport_.Catalog().Find(id);
         if (asset.mesh != nullptr) {
             std::lock_guard<std::mutex> lock(world_.RegistryMutex());
             auto& registry = world_.Registry();
-            if (asset.skeleton != nullptr) registry.emplace<ce::scene::Skeleton>(entity, *asset.skeleton);
+            if (asset.skeleton != nullptr) registry.emplace<ce::scene::Skeleton>(result.root, *asset.skeleton);
             if (asset.animationClips != nullptr && !asset.animationClips->empty())
-                registry.emplace<ce::scene::Animator>(entity, ce::scene::Animator{ asset.animationClips, 0, 0.0f, false, true });
+                registry.emplace<ce::scene::Animator>(result.root, ce::scene::Animator{ asset.animationClips, 0, 0.0f, false, true });
         } else {
             headerBar_.setStatusText("Placed \"" + displayName + "\", but its mesh hasn't loaded yet.");
-        }
-    } else if (kind == creation::assets::AssetKind::objectDefinition) {
-        // Unlike the render-kind path above, instantiate() takes the
-        // registry lock itself -- taking it here too would deadlock.
-        const auto result = ce::scene::ObjectFactory::instantiate(world_, objectDefinitions_, displayName, dropPosition, error);
-        if (result.root == entt::null) {
-            headerBar_.setStatusText("Could not place \"" + displayName + "\": " + error);
-        } else {
-            viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
         }
     }
     refreshExplorerPanel();
