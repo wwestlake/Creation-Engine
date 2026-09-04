@@ -876,16 +876,28 @@ void MainComponent::HandleAssetDropped(const juce::String& description, juce::Po
     // than leaving it to resolve lazily next frame) so a skinned model's
     // Skeleton/Animator can be attached too -- ObjectFactory::instantiate
     // only emplaces MeshAssetReference, not Skeleton/Animator, so that part
-    // still happens here, targeted at the instantiated root entity.
+    // still happens here. Every Mesh component is now its own child entity
+    // (never result.root itself, per ObjectFactory::instantiateDefinition's
+    // uniform-child-per-mesh rule) -- find the child actually carrying this
+    // asset's MeshAssetReference rather than assuming the root is it.
     viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
     if (kind == creation::assets::AssetKind::render) {
         const auto asset = viewport_.Catalog().Find(id);
         if (asset.mesh != nullptr) {
             std::lock_guard<std::mutex> lock(world_.RegistryMutex());
             auto& registry = world_.Registry();
-            if (asset.skeleton != nullptr) registry.emplace<ce::scene::Skeleton>(result.root, *asset.skeleton);
-            if (asset.animationClips != nullptr && !asset.animationClips->empty())
-                registry.emplace<ce::scene::Animator>(result.root, ce::scene::Animator{ asset.animationClips, 0, 0.0f, false, true });
+            entt::entity meshEntity = entt::null;
+            for (const auto candidate : result.entities) {
+                if (const auto* ref = registry.try_get<ce::scene::MeshAssetReference>(candidate); ref != nullptr && ref->assetId == id) {
+                    meshEntity = candidate;
+                    break;
+                }
+            }
+            if (meshEntity != entt::null) {
+                if (asset.skeleton != nullptr) registry.emplace<ce::scene::Skeleton>(meshEntity, *asset.skeleton);
+                if (asset.animationClips != nullptr && !asset.animationClips->empty())
+                    registry.emplace<ce::scene::Animator>(meshEntity, ce::scene::Animator{ asset.animationClips, 0, 0.0f, false, true });
+            }
         } else {
             headerBar_.setStatusText("Placed \"" + displayName + "\", but its mesh hasn't loaded yet.");
         }

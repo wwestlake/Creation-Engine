@@ -171,6 +171,22 @@ entt::entity instantiateDefinition(engine::World& world, const ObjectDefinitionC
                                    entt::entity parent, std::unordered_set<std::string>& ancestry,
                                    ObjectInstantiationResult& result, juce::String& error)
 {
+    // This entity's own Transform component value -- `parentTransform`
+    // composed with this definition's own authored `initialTransform`.
+    // WorldModelMatrix (Source/Scene/TransformHierarchy.h) composes a
+    // component's Transform against its Parent chain dynamically, at
+    // render/pick/gizmo time. That means `parentTransform` must ALWAYS be
+    // a purely LOCAL value relative to `parent` -- never something that
+    // already has `parent`'s own world-equivalent transform baked into it,
+    // or WorldModelMatrix double-counts it (composed once here, again at
+    // query time). For the true root (ObjectFactory::instantiate's own
+    // call, parent == entt::null) that local value legitimately IS the
+    // real world placement, since there's nothing above it to compose
+    // against. For a recursive Child call (below), it's
+    // component.childLocalTransform alone -- see that call site's comment
+    // for why NOT the calling entity's own `transform`, which was the
+    // actual bug (identical in shape to the one just fixed for Mesh-kind
+    // children).
     const auto transform = composeTransform(parentTransform, definition.initialTransform);
     const auto entity = world.CreateEntity();
     auto& registry = world.Registry();
@@ -185,48 +201,44 @@ entt::entity instantiateDefinition(engine::World& world, const ObjectDefinitionC
 
     // One pass over the uniform component list: Pod entries accumulate
     // into BehaviorAttachments (still unconditionally emplaced below, even
-    // if empty -- matches prior behavior exactly), the first non-empty Mesh
-    // entry becomes this entity's own MeshAssetReference (today's single-
-    // mesh-slot semantics preserved exactly WHEN there's exactly one Mesh
-    // component -- its meshLocalTransform is identity by construction in
-    // that case, so attaching it directly costs nothing. A multi-part
-    // definition (docs/OBJECT_MODEL.md's "Multi-part import decomposes
-    // into components") is different: which mesh-bearing node happened to
-    // be found first is an accident of file order, not a meaningful
-    // "root" -- attaching just that one directly to `entity` would apply
-    // its own file-relative offset only some of the time (whenever it's
-    // non-identity) while every OTHER part gets it correctly. So once
-    // there's more than one Mesh component, NONE of them attaches to
-    // `entity` directly -- every one spawns its own child entity (Transform
-    // composed against this entity's), and `entity` itself carries no
-    // MeshAssetReference at all. Child (kind == Child) entries are
-    // recursed separately, after this loop.
-    int meshComponentCount = 0;
-    for (const auto& component : definition.components) {
-        if (component.kind == ObjectComponentKind::Mesh && component.meshAssetId.isNotEmpty()) ++meshComponentCount;
-    }
-
+    // if empty -- matches prior behavior exactly). Every Mesh entry spawns
+    // its own child entity -- deliberately uniform regardless of how many
+    // Mesh entries there are (see docs/OBJECT_MODEL.md's "no privileged
+    // tier": there is no principled reason exactly-one should be special-
+    // cased to attach directly to `entity` while two-or-more don't; that
+    // WAS the previous behavior and it was wrong -- an object with exactly
+    // one part is not architecturally different from one with five).
+    //
+    // The child's Transform is `meshLocalTransform` AS-IS -- relative to
+    // `entity`, not pre-composed against it. WorldModelMatrix (Source/
+    // Scene/TransformHierarchy.h, used by every render/pick/gizmo call
+    // site) walks the Parent chain and composes LOCAL transforms into a
+    // world matrix at the moment it's needed; a component's own Transform
+    // must always hold a value relative to its Parent, never a pre-baked
+    // world value. Composing here (`composeTransform(transform,
+    // meshLocalTransform)`) was a real bug: it baked `entity`'s position
+    // into the child's Transform once at instantiate time, which
+    // WorldModelMatrix then composed AGAINST `entity`'s transform a SECOND
+    // time at render time -- double-counting it, and never correctly
+    // reflecting the root moving afterward (a gizmo edit on the root
+    // changed a value the child's already-baked position had no live
+    // relationship to). Child (kind == Child) entries are recursed
+    // separately, after this loop.
     BehaviorAttachments attachments;
     for (const auto& component : definition.components) {
         if (component.kind == ObjectComponentKind::Pod) {
             attachments.podIds.push_back(component.podId);
         } else if (component.kind == ObjectComponentKind::Mesh && component.meshAssetId.isNotEmpty()) {
-            if (meshComponentCount == 1) {
-                registry.emplace<MeshAssetReference>(entity, MeshAssetReference{
-                    component.meshAssetId, component.meshAssetVersionId, component.meshPackId, component.meshPackVersion,
-                    component.meshNodeIndex, component.meshNodeName });
-            } else {
-                const auto meshEntity = world.CreateEntity();
-                registry.emplace<Name>(meshEntity, Name{ component.meshNodeName.isNotEmpty() ? component.meshNodeName
-                                                                                              : definition.displayName });
-                registry.emplace<Transform>(meshEntity, composeTransform(transform, component.meshLocalTransform));
-                registry.emplace<SceneFlags>(meshEntity, flags);
-                registry.emplace<Parent>(meshEntity, Parent{ entity });
-                registry.emplace<MeshAssetReference>(meshEntity, MeshAssetReference{
-                    component.meshAssetId, component.meshAssetVersionId, component.meshPackId, component.meshPackVersion,
-                    component.meshNodeIndex, component.meshNodeName });
-                result.entities.push_back(meshEntity);
-            }
+            const auto meshEntity = world.CreateEntity();
+            registry.emplace<Name>(meshEntity, Name{ component.meshNodeName.isNotEmpty() ? component.meshNodeName
+                                                                                          : definition.displayName });
+            registry.emplace<Transform>(meshEntity, component.meshLocalTransform);
+            registry.emplace<SceneFlags>(meshEntity, flags);
+            registry.emplace<Parent>(meshEntity, Parent{ entity });
+            registry.emplace<MeshAssetReference>(meshEntity, MeshAssetReference{
+                component.meshAssetId, component.meshAssetVersionId, component.meshPackId, component.meshPackVersion,
+                component.meshNodeIndex, component.meshNodeName });
+            result.entities.push_back(meshEntity);
         }
     }
     registry.emplace<BehaviorAttachments>(entity, std::move(attachments));
@@ -245,8 +257,15 @@ entt::entity instantiateDefinition(engine::World& world, const ObjectDefinitionC
             error = "Object definition '" + definition.id + "' refers to missing child '" + component.childDefinitionId + "'.";
             return entt::null;
         }
-        const auto childParentTransform = composeTransform(transform, component.childLocalTransform);
-        if (instantiateDefinition(world, catalog, *childDefinition, childParentTransform, entity, ancestry, result, error) == entt::null) {
+        // Pass component.childLocalTransform ALONE -- the child's local
+        // offset relative to `entity` -- not composed against `transform`
+        // (this entity's own, now-correctly-local-or-world value). Parent{
+        // entity} (set inside the recursive call, since `entity` is passed
+        // as `parent` below) is what WorldModelMatrix uses to compose
+        // against `entity`'s world position at query time; pre-mixing
+        // `transform` in here too was exactly the double-bake bug just
+        // fixed for Mesh-kind children, just one architectural layer up.
+        if (instantiateDefinition(world, catalog, *childDefinition, component.childLocalTransform, entity, ancestry, result, error) == entt::null) {
             return entt::null;
         }
     }

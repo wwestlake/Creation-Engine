@@ -70,12 +70,17 @@ void ApplyAnimationImportOptions(LoadedModel& model, const AnimationImportOption
     }
 }
 
-// A source file with more than one mesh-bearing node decomposes into one
-// Object Definition, one Mesh-kind component per mesh-bearing node -- see
+// A source file's mesh-bearing nodes ALWAYS decompose into one Object
+// Definition, one Mesh-kind component per mesh-bearing node -- see
 // docs/OBJECT_MODEL.md's "Multi-part import decomposes into components".
-// A single-mesh (or zero-mesh) file is a silent no-op (returns an empty
-// string): no definition is created, exactly today's pre-multi-part
-// behavior. `meshAssetId` is the asset's DURABLE id (stable across
+// There is deliberately no special case for exactly one mesh-bearing node:
+// a node's own local transform (relative to its parent) is real authored
+// data regardless of how many sibling nodes it has, and silently dropping
+// it for a single-node file was a real, confirmed bug (a boulder asset
+// with a nonzero node offset rendered at the wrong position because the
+// old ">1 nodes" threshold skipped decomposition entirely for it). A file
+// with genuinely zero mesh-bearing nodes is the only real no-op -- nothing
+// exists to place. `meshAssetId` is the asset's DURABLE id (stable across
 // Reimport's version bumps), not its version -- so re-detecting the same
 // asset on Reimport finds and updates the same definition rather than
 // creating a duplicate. A failure here does NOT fail the whole import --
@@ -84,16 +89,15 @@ void ApplyAnimationImportOptions(LoadedModel& model, const AnimationImportOption
 // importer's own result message instead of disappearing silently (this
 // used to only go to std::cout, which a windowed app with no attached
 // console never shows anyone).
-juce::String MaybeBuildMultiPartDefinition(scene::ObjectDefinitionCatalog& catalog, creation::assets::ProjectSession& session,
+juce::String BuildNodeDecomposedDefinition(scene::ObjectDefinitionCatalog& catalog, creation::assets::ProjectSession& session,
                                            const LoadedModel& model, const juce::String& meshAssetId,
                                            const juce::String& meshAssetVersionId, const juce::String& displayName) {
     std::vector<int> meshNodeIndices;
     for (std::size_t i = 0; i < model.nodes.size(); ++i) {
         if (model.nodes[i].meshIndex >= 0) meshNodeIndices.push_back(static_cast<int>(i));
     }
-    if (meshNodeIndices.size() <= 1) {
-        diagnostics::EngineLog::Info("Import", displayName + ": " + juce::String(static_cast<int>(meshNodeIndices.size())) +
-                                                    " mesh-bearing node(s) -- single-mesh, no Object Definition needed.");
+    if (meshNodeIndices.empty()) {
+        diagnostics::EngineLog::Info("Import", displayName + ": no mesh-bearing nodes -- no Object Definition needed.");
         return {};
     }
 
@@ -136,9 +140,8 @@ juce::String MaybeBuildMultiPartDefinition(scene::ObjectDefinitionCatalog& catal
 
     juce::String upsertError;
     if (!catalog.upsert(definition, upsertError)) {
-        diagnostics::EngineLog::Error("Import", "Could not build multi-part Object Definition for " + displayName + ": " +
-                                                     upsertError);
-        return " Could not build its multi-part Object Definition: " + upsertError;
+        diagnostics::EngineLog::Error("Import", "Could not build Object Definition for " + displayName + ": " + upsertError);
+        return " Could not build its Object Definition: " + upsertError;
     }
     juce::String saveError;
     if (!catalog.Save(session, definition.id, saveError)) {
@@ -197,7 +200,7 @@ ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportConte
 
     juce::String objectDefinitionNote;
     if (context.objectDefinitions != nullptr) {
-        objectDefinitionNote = MaybeBuildMultiPartDefinition(*context.objectDefinitions, *context.projectSession, model,
+        objectDefinitionNote = BuildNodeDecomposedDefinition(*context.objectDefinitions, *context.projectSession, model,
                                                              sourceDescriptor.id, sourceDescriptor.versionId, assetName);
     }
 
@@ -248,7 +251,7 @@ ImportResult GltfAssetImporter::Reimport(const juce::File& sourceFile,
 
     juce::String objectDefinitionNote;
     if (context.objectDefinitions != nullptr) {
-        objectDefinitionNote = MaybeBuildMultiPartDefinition(*context.objectDefinitions, *context.projectSession, model,
+        objectDefinitionNote = BuildNodeDecomposedDefinition(*context.objectDefinitions, *context.projectSession, model,
                                                              newDescriptor.id, newDescriptor.versionId, existingAsset.displayName);
     }
 
