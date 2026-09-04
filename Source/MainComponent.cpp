@@ -6,11 +6,15 @@
 #include <creation/services/SuiteVfsJsonStore.h>
 
 #include <creation/ui/CreationSuiteLogos.h>
+#include "Assets/AssetPackStore.h"
+#include "Assets/EngineAssetPack.h"
 #include "Diagnostics/EngineLog.h"
+#include "Import/Importers/GltfAssetImporter.h"
 #include "Scene/Components.h"
 #include "Scene/EngineSceneSerializer.h"
 #include "Scene/ObjectDefinitionNaming.h"
 #include "Project/EngineGameDocument.h"
+#include "Views/NewGameDialog.h"
 #include "engine/foundation_gameplay.h"
 
 namespace {
@@ -143,6 +147,22 @@ MainComponent::MainComponent()
         } else if (descriptor.kind == creation::assets::AssetKind::objectDefinition) {
             EnsureObjectDefinitionPanelOpen();
             objectDefinitionEditorPanel_->OpenDefinition(descriptor.displayName);
+        } else if (descriptor.kind == creation::assets::AssetKind::game) {
+            for (const auto& game : games_)
+                if (game.catalogAssetId == descriptor.id) { selectGame(game.id); return; }
+        } else if (descriptor.kind == creation::assets::AssetKind::scene) {
+            // Content Browser browses every scene project-wide, not just
+            // the active game's -- find which game owns this scene first,
+            // switching games via selectGame (which already does the
+            // save-then-load dance) before selecting the scene itself.
+            for (const auto& game : games_) {
+                for (const auto& scene : game.scenes) {
+                    if (scene.catalogAssetId != descriptor.id) continue;
+                    if (game.id != activeGame_.id) selectGame(game.id);
+                    selectScene(scene.id);
+                    return;
+                }
+            }
         }
     };
     contentBrowserPanel_.onPodCreated = [this](const juce::String& name) {
@@ -152,6 +172,42 @@ MainComponent::MainComponent()
     contentBrowserPanel_.onObjectDefinitionCreated = [this](const juce::String& id) {
         EnsureObjectDefinitionPanelOpen();
         objectDefinitionEditorPanel_->OpenDefinition(id);
+    };
+    contentBrowserPanel_.onGameDeleteRequested = [this](const juce::String& catalogAssetId) {
+        juce::String targetGameId;
+        for (const auto& game : games_)
+            if (game.catalogAssetId == catalogAssetId) { targetGameId = game.id; break; }
+        if (targetGameId.isEmpty()) return;
+
+        juce::String error;
+        const bool wasActive = targetGameId == activeGame_.id;
+        if (!ce::project::EngineGameDocumentStore::deleteGame(projectSession_, games_, targetGameId, error)) {
+            headerBar_.setStatusText("Could not delete game: " + error);
+            return;
+        }
+        contentBrowserPanel_.Refresh();
+        if (wasActive && !games_.isEmpty()) selectGame(games_.getFirst().id);
+        else refreshExplorerPanel();
+    };
+    contentBrowserPanel_.onSceneDeleteRequested = [this](const juce::String& catalogAssetId) {
+        for (auto& game : games_) {
+            juce::String targetSceneId;
+            for (const auto& scene : game.scenes)
+                if (scene.catalogAssetId == catalogAssetId) { targetSceneId = scene.id; break; }
+            if (targetSceneId.isEmpty()) continue;
+
+            juce::String error;
+            const bool wasActive = targetSceneId == activeScene_.id && game.id == activeGame_.id;
+            if (!ce::project::EngineGameDocumentStore::deleteScene(projectSession_, game, targetSceneId, error)) {
+                headerBar_.setStatusText("Could not delete scene: " + error);
+                return;
+            }
+            if (game.id == activeGame_.id) activeGame_ = game;
+            contentBrowserPanel_.Refresh();
+            if (wasActive) selectScene(game.entrySceneId);
+            else refreshExplorerPanel();
+            return;
+        }
     };
     // Content Browser is the only source that produces this description
     // shape (see ContentBrowserPanel::AssetRow::mouseDrag). Placement lives
@@ -244,6 +300,10 @@ MainComponent::MainComponent()
     explorerPanel_.onCreateGameRequested = [this] { createGame(); };
     explorerPanel_.onCreateSceneRequested = [this] { createScene(); };
     explorerPanel_.onSaveRequested = [this] { saveSessionToDisk(true); };
+    explorerPanel_.onGameRenameRequested = [this](const juce::String& gameId) { RenameGame(gameId); };
+    explorerPanel_.onSceneRenameRequested = [this](const juce::String& gameId, const juce::String& sceneId) {
+        RenameScene(gameId, sceneId);
+    };
     hierarchyPanel_.onEntityDestroying = [this](entt::entity entity) {
         frustHost_.notifyObjectDestroyed(entity, static_cast<std::int64_t>(world_.CurrentTick()));
     };
@@ -879,19 +939,15 @@ void MainComponent::selectScene(const juce::String& sceneId)
 
 void MainComponent::createGame()
 {
-    auto* dialog = new juce::AlertWindow("New Game", "Name the game to add to this Suite project.", juce::MessageBoxIconType::QuestionIcon);
-    dialog->addTextEditor("name", "New Game");
-    dialog->addButton("Create", 1);
-    dialog->addButton("Cancel", 0);
     auto safeThis = juce::Component::SafePointer<MainComponent>(this);
-    dialog->enterModalState(true, juce::ModalCallbackFunction::create([safeThis, dialog](int result) mutable {
-        std::unique_ptr<juce::AlertWindow> owned(dialog);
-        if (result != 1 || safeThis == nullptr) return;
+    ce::views::showNewGameDialog([safeThis](bool created, juce::String name, ce::project::StarterGameTemplate chosenTemplate) {
+        if (!created || safeThis == nullptr) return;
+
         ce::project::GameDocumentInfo game;
         ce::project::SceneDocumentInfo scene;
         juce::String error;
-        if (!ce::project::EngineGameDocumentStore::createGame(safeThis->projectSession_, owned->getTextEditorContents("name"),
-                                                               game, scene, error) ||
+        const auto templateSceneId = chosenTemplate.starterSceneTemplateId.isEmpty() ? "DefaultScene" : chosenTemplate.starterSceneTemplateId;
+        if (!ce::project::EngineGameDocumentStore::createGame(safeThis->projectSession_, name, game, scene, error, templateSceneId) ||
             !safeThis->projectSession_.commit(error)) {
             safeThis->headerBar_.setStatusText("Could not create game: " + error);
             return;
@@ -901,37 +957,202 @@ void MainComponent::createGame()
         safeThis->activeScene_ = scene;
         safeThis->importPanel_.SetProjectContent(&safeThis->projectSession_, safeThis->activeGame_.assetRoot());
         safeThis->contentBrowserPanel_.SetProjectContent(&safeThis->projectSession_);
+
+        // createGame() only writes the new scene's document -- it doesn't
+        // load it into the live world_, the same gap selectGame/selectScene
+        // already fix for switching TO an existing game. Load it here too,
+        // required before any starter-content placement below (which needs
+        // a live world_ to instantiate into).
+        if (!ce::project::EngineGameDocumentStore::loadScene(safeThis->projectSession_, safeThis->activeGame_,
+                                                              safeThis->activeScene_, safeThis->world_, error)) {
+            safeThis->headerBar_.setStatusText("Created " + game.name + ", but could not load its scene: " + error);
+            return;
+        }
+        safeThis->viewport_.ResolveProjectAssets(safeThis->projectSession_, safeThis->suiteSettings_);
+
+        safeThis->PlaceStarterContent(chosenTemplate);
+
+        safeThis->frustHost_.prepareLevel(static_cast<std::int64_t>(safeThis->world_.CurrentTick()));
         safeThis->refreshExplorerPanel();
         safeThis->saveAppSettings();
         safeThis->headerBar_.setStatusText("Created " + game.name + " / " + scene.name);
-    }), true);
+    });
+}
+
+void MainComponent::PlaceStarterContent(const ce::project::StarterGameTemplate& chosenTemplate)
+{
+    if (chosenTemplate.starterModelAssetId.isEmpty()) return;
+
+    juce::String error;
+    juce::File packDirectory;
+    if (!ce::assets::AssetPackStore::materializePack(ce::assets::EngineAssetPack::packId, ce::assets::EngineAssetPack::version,
+                                                     packDirectory, error)) {
+        headerBar_.setStatusText("Scene created, but starter content could not be loaded: " + error);
+        return;
+    }
+    ce::assets::AssetPackStore::Manifest manifest;
+    if (!ce::assets::AssetPackStore::readManifest(ce::assets::EngineAssetPack::packId, ce::assets::EngineAssetPack::version,
+                                                  manifest, error)) {
+        headerBar_.setStatusText("Scene created, but starter content could not be loaded: " + error);
+        return;
+    }
+    const auto* declared = std::find_if(manifest.assets.begin(), manifest.assets.end(), [&](const auto& asset) {
+        return asset.id == chosenTemplate.starterModelAssetId;
+    });
+    if (declared == manifest.assets.end() || declared->payload.isEmpty()) {
+        headerBar_.setStatusText("Scene created, but its starter model \"" + chosenTemplate.starterModelAssetId + "\" was not found in the Engine Pack.");
+        return;
+    }
+    const auto sourceFile = packDirectory.getChildFile(declared->payload);
+
+    ce::import::ImportContext context;
+    context.world = &world_;
+    context.catalog = &viewport_.Catalog();
+    context.viewport = &viewport_;
+    context.projectSession = &projectSession_;
+    context.gameAssetRoot = activeGame_.assetRoot();
+    context.objectDefinitions = &objectDefinitions_;
+
+    ce::import::GltfAssetImporter importer;
+    const auto result = importer.Import(sourceFile, context);
+    if (!result.success || result.createdAssetId.isEmpty()) {
+        headerBar_.setStatusText("Scene created, but starter content import failed: " + result.message);
+        return;
+    }
+
+    auto definitionId = ce::scene::FindWrapperDefinitionForRenderAsset(objectDefinitions_, result.createdAssetId);
+    if (definitionId.isEmpty()) {
+        ce::scene::ObjectDefinition wrapper;
+        wrapper.id = ce::scene::GenerateWrapperDefinitionName(objectDefinitions_, chosenTemplate.displayName);
+        wrapper.displayName = chosenTemplate.displayName;
+        ce::scene::ObjectComponentEntry meshComponent;
+        meshComponent.kind = ce::scene::ObjectComponentKind::Mesh;
+        meshComponent.meshAssetId = result.createdAssetId;
+        wrapper.components.push_back(std::move(meshComponent));
+
+        juce::String upsertError;
+        if (!objectDefinitions_.upsert(wrapper, upsertError)) {
+            headerBar_.setStatusText("Scene created, but starter content could not be placed: " + upsertError);
+            return;
+        }
+        juce::String saveError;
+        if (!objectDefinitions_.Save(projectSession_, wrapper.id, saveError)) {
+            headerBar_.setStatusText("Scene created, but starter content could not be placed: " + saveError);
+            return;
+        }
+        definitionId = wrapper.id;
+    }
+
+    // Placed at the scene's own origin -- the starter environments are
+    // self-contained layouts authored around (0,0,0).
+    const auto instantiation = ce::scene::ObjectFactory::instantiate(world_, objectDefinitions_, definitionId, ce::engine::Vec3{}, error);
+    if (instantiation.root == entt::null) {
+        headerBar_.setStatusText("Scene created, but starter content could not be placed: " + error);
+        return;
+    }
+    viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
+
+    // Persist the placement immediately -- a crash right after creation
+    // shouldn't lose it.
+    juce::String saveSceneError;
+    if (ce::project::EngineGameDocumentStore::saveScene(projectSession_, activeGame_, activeScene_, world_, saveSceneError))
+        projectSession_.commit(saveSceneError);
 }
 
 void MainComponent::createScene()
 {
     if (activeGame_.id.isEmpty()) return;
-    auto* dialog = new juce::AlertWindow("New Scene", "Name the scene to add to this game.", juce::MessageBoxIconType::QuestionIcon);
-    dialog->addTextEditor("name", "New Scene");
-    dialog->addButton("Create", 1);
-    dialog->addButton("Cancel", 0);
     auto safeThis = juce::Component::SafePointer<MainComponent>(this);
-    dialog->enterModalState(true, juce::ModalCallbackFunction::create([safeThis, dialog](int result) mutable {
-        std::unique_ptr<juce::AlertWindow> owned(dialog);
-        if (result != 1 || safeThis == nullptr) return;
+    ce::views::showNewGameDialog([safeThis](bool created, juce::String name, ce::project::StarterGameTemplate chosenTemplate) {
+        if (!created || safeThis == nullptr) return;
+
         ce::project::SceneDocumentInfo scene;
         juce::String error;
-        if (!ce::project::EngineGameDocumentStore::createScene(safeThis->projectSession_, safeThis->activeGame_,
-                                                                owned->getTextEditorContents("name"), scene, error) ||
+        const auto templateSceneId = chosenTemplate.starterSceneTemplateId.isEmpty() ? "DefaultScene" : chosenTemplate.starterSceneTemplateId;
+        if (!ce::project::EngineGameDocumentStore::createScene(safeThis->projectSession_, safeThis->activeGame_, name, scene,
+                                                                error, templateSceneId) ||
             !safeThis->projectSession_.commit(error)) {
             safeThis->headerBar_.setStatusText("Could not create scene: " + error);
             return;
         }
         for (auto& game : safeThis->games_)
             if (game.id == safeThis->activeGame_.id) game = safeThis->activeGame_;
+
+        if (!ce::project::EngineGameDocumentStore::loadScene(safeThis->projectSession_, safeThis->activeGame_, scene,
+                                                              safeThis->world_, error)) {
+            safeThis->headerBar_.setStatusText("Created scene, but could not load it: " + error);
+            return;
+        }
         safeThis->activeScene_ = scene;
+        safeThis->viewport_.ResolveProjectAssets(safeThis->projectSession_, safeThis->suiteSettings_);
+
+        safeThis->PlaceStarterContent(chosenTemplate);
+
+        safeThis->frustHost_.prepareLevel(static_cast<std::int64_t>(safeThis->world_.CurrentTick()));
         safeThis->refreshExplorerPanel();
         safeThis->saveAppSettings();
         safeThis->headerBar_.setStatusText("Created scene: " + scene.name);
+    });
+}
+
+void MainComponent::RenameGame(const juce::String& gameId)
+{
+    const auto* found = std::find_if(games_.begin(), games_.end(), [&](const auto& g) { return g.id == gameId; });
+    if (found == games_.end()) return;
+
+    auto* dialog = new juce::AlertWindow("Rename Game", "New name for \"" + found->name + "\":", juce::MessageBoxIconType::QuestionIcon);
+    dialog->addTextEditor("name", found->name);
+    dialog->addButton("Rename", 1);
+    dialog->addButton("Cancel", 0);
+    auto safeThis = juce::Component::SafePointer<MainComponent>(this);
+    dialog->enterModalState(true, juce::ModalCallbackFunction::create([safeThis, dialog, gameId](int result) mutable {
+        std::unique_ptr<juce::AlertWindow> owned(dialog);
+        if (result != 1 || safeThis == nullptr) return;
+        juce::String error;
+        if (!ce::project::EngineGameDocumentStore::renameGame(safeThis->projectSession_, safeThis->games_, gameId,
+                                                               owned->getTextEditorContents("name"), error)) {
+            safeThis->headerBar_.setStatusText("Could not rename game: " + error);
+            return;
+        }
+        if (safeThis->activeGame_.id == gameId)
+            for (const auto& game : safeThis->games_)
+                if (game.id == gameId) safeThis->activeGame_ = game;
+        safeThis->contentBrowserPanel_.Refresh();
+        safeThis->refreshExplorerPanel();
+    }), true);
+}
+
+void MainComponent::RenameScene(const juce::String& gameId, const juce::String& sceneId)
+{
+    auto* game = std::find_if(games_.begin(), games_.end(), [&](const auto& g) { return g.id == gameId; });
+    if (game == games_.end()) return;
+    const auto* scene = std::find_if(game->scenes.begin(), game->scenes.end(), [&](const auto& s) { return s.id == sceneId; });
+    if (scene == game->scenes.end()) return;
+
+    auto* dialog = new juce::AlertWindow("Rename Scene", "New name for \"" + scene->name + "\":", juce::MessageBoxIconType::QuestionIcon);
+    dialog->addTextEditor("name", scene->name);
+    dialog->addButton("Rename", 1);
+    dialog->addButton("Cancel", 0);
+    auto safeThis = juce::Component::SafePointer<MainComponent>(this);
+    dialog->enterModalState(true, juce::ModalCallbackFunction::create([safeThis, dialog, gameId, sceneId](int result) mutable {
+        std::unique_ptr<juce::AlertWindow> owned(dialog);
+        if (result != 1 || safeThis == nullptr) return;
+        auto* targetGame = std::find_if(safeThis->games_.begin(), safeThis->games_.end(),
+                                        [&](const auto& g) { return g.id == gameId; });
+        if (targetGame == safeThis->games_.end()) return;
+
+        juce::String error;
+        if (!ce::project::EngineGameDocumentStore::renameScene(safeThis->projectSession_, *targetGame, sceneId,
+                                                                owned->getTextEditorContents("name"), error)) {
+            safeThis->headerBar_.setStatusText("Could not rename scene: " + error);
+            return;
+        }
+        if (safeThis->activeGame_.id == gameId) safeThis->activeGame_ = *targetGame;
+        if (safeThis->activeScene_.id == sceneId)
+            for (const auto& s : targetGame->scenes)
+                if (s.id == sceneId) safeThis->activeScene_ = s;
+        safeThis->contentBrowserPanel_.Refresh();
+        safeThis->refreshExplorerPanel();
     }), true);
 }
 

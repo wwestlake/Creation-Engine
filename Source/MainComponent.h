@@ -29,6 +29,7 @@
 #include "Views/ExplorerPanel.h"
 #include "Runtime/GameClientWindow.h"
 #include "Project/EngineGameDocument.h"
+#include "Project/StarterGameTemplates.h"
 
 #include <creation/assets/ProjectSession.h>
 #include <creation/assets/ProjectWorkspaceService.h>
@@ -114,6 +115,14 @@ private:
     void selectScene(const juce::String& sceneId);
     void createGame();
     void createScene();
+    void RenameGame(const juce::String& gameId);
+    void RenameScene(const juce::String& gameId, const juce::String& sceneId);
+
+    // Imports the template's starterModelAssetId (if any) from the Engine
+    // Pack and places it at the current scene's origin -- the shared tail
+    // of createGame()/createScene() once a starter template is chosen. A
+    // no-op if the template names no starter model (e.g. "Empty Scene").
+    void PlaceStarterContent(const ce::project::StarterGameTemplate& chosenTemplate);
     void refreshExplorerPanel();
     bool ensureProjectSessionActive(juce::String& errorMessage);
     void saveAppSettings();

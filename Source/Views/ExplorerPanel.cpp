@@ -35,6 +35,16 @@ public:
         if (isNowSelected && owner_.onSceneSelected) owner_.onSceneSelected(scene_.id);
     }
 
+    void itemClicked(const juce::MouseEvent& event) override
+    {
+        if (!event.mods.isPopupMenu()) return;
+        juce::PopupMenu menu;
+        menu.addItem(1, "Rename...");
+        menu.showMenuAsync(juce::PopupMenu::Options(), [this](int result) {
+            if (result == 1 && owner_.onSceneRenameRequested) owner_.onSceneRenameRequested(gameId_, scene_.id);
+        });
+    }
+
 private:
     ExplorerPanel& owner_;
     juce::String gameId_;
@@ -61,6 +71,16 @@ public:
     void itemSelectionChanged(bool isNowSelected) override
     {
         if (isNowSelected && owner_.onGameSelected) owner_.onGameSelected(game_.id);
+    }
+
+    void itemClicked(const juce::MouseEvent& event) override
+    {
+        if (!event.mods.isPopupMenu()) return;
+        juce::PopupMenu menu;
+        menu.addItem(1, "Rename...");
+        menu.showMenuAsync(juce::PopupMenu::Options(), [this](int result) {
+            if (result == 1 && owner_.onGameRenameRequested) owner_.onGameRenameRequested(game_.id);
+        });
     }
 
 private:

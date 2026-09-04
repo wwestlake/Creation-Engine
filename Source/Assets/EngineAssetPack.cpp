@@ -32,7 +32,12 @@ bool EngineAssetPack::ensureInstalled(juce::String& errorMessage)
 
 bool EngineAssetPack::readDefaultScene(juce::MemoryBlock& sceneData, juce::String& errorMessage)
 {
+    return readScene("DefaultScene", sceneData, errorMessage);
+}
+
+bool EngineAssetPack::readScene(const juce::String& templateSceneId, juce::MemoryBlock& sceneData, juce::String& errorMessage)
+{
     if (! ensureInstalled(errorMessage)) return false;
-    return AssetPackStore::readEntry(packId, version, "scenes/DefaultScene.xml", sceneData, errorMessage);
+    return AssetPackStore::readEntry(packId, version, "scenes/" + templateSceneId + ".xml", sceneData, errorMessage);
 }
 } // namespace ce::assets

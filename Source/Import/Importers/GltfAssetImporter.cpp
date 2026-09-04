@@ -205,7 +205,9 @@ ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportConte
     // instance in the scene. Placing is a separate, deliberate action
     // (Hierarchy's "+ Add", or Content Browser once models get the same
     // place-from-catalog treatment as Pods/Object Definitions).
-    return ImportResult::Ok(assetName + " stored in project content." + animationNote + objectDefinitionNote);
+    auto result = ImportResult::Ok(assetName + " stored in project content." + animationNote + objectDefinitionNote);
+    result.createdAssetId = sourceDescriptor.id;
+    return result;
 }
 
 ImportResult GltfAssetImporter::Reimport(const juce::File& sourceFile,

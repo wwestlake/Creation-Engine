@@ -81,6 +81,13 @@ struct ImportResult {
     bool success = false;
     juce::String message; // human-readable status (success) or reason (failure) -- always set.
 
+    // The durable AssetKind::render id the import produced, when the
+    // importer knows one (GltfAssetImporter sets this; others leave it
+    // empty). Lets a programmatic caller (e.g. the New Game starter-
+    // content placement) skip a lookup-by-display-name round trip. Unused,
+    // harmless default for every importer that doesn't set it.
+    juce::String createdAssetId;
+
     static ImportResult Ok(juce::String msg) { return { true, std::move(msg) }; }
     static ImportResult Failed(juce::String msg) { return { false, std::move(msg) }; }
 };

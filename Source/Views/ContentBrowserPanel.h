@@ -79,6 +79,15 @@ public:
     // opens it in the (much smaller) Object Definition editor.
     std::function<void(juce::String)> onObjectDefinitionCreated;
 
+    // Fired instead of the generic per-version delete (PerformDelete) when
+    // the row being deleted is a Game or a Scene -- deleting either needs
+    // the games.xml cascade EngineGameDocumentStore::deleteGame/deleteScene
+    // provides, not a bare asset-descriptor removal. MainComponent wires
+    // these to that store and refreshes games_/activeGame_/activeScene_
+    // afterward.
+    std::function<void(juce::String catalogAssetId)> onGameDeleteRequested;
+    std::function<void(juce::String catalogAssetId)> onSceneDeleteRequested;
+
     void paint(juce::Graphics& g) override;
     void resized() override;
 

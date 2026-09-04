@@ -153,6 +153,9 @@ target_sources(CreationEngineEditor PRIVATE
     Source/MainComponent.cpp
     Source/Project/EngineGameDocument.h
     Source/Project/EngineGameDocument.cpp
+    Source/Project/StarterGameTemplates.h
+    Source/Views/NewGameDialog.h
+    Source/Views/NewGameDialog.cpp
     Source/Assets/EngineAssetPack.h
     Source/Assets/EngineAssetPack.cpp
     Source/Assets/AssetPackStore.h
@@ -449,6 +452,10 @@ target_sources(CreationEngineServer PRIVATE
     Server/Source/Main.cpp
     Source/Project/EngineGameDocument.h
     Source/Project/EngineGameDocument.cpp
+    Source/Assets/EngineAssetPack.h
+    Source/Assets/EngineAssetPack.cpp
+    Source/Assets/AssetPackStore.h
+    Source/Assets/AssetPackStore.cpp
     Source/Scene/EngineSceneSerializer.h
     Source/Scene/EngineSceneSerializer.cpp
 )
