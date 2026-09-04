@@ -20,10 +20,22 @@ int main()
     ce::scene::ObjectDefinition door;
     door.id = "oak_door";
     door.displayName = "Oak Door";
-    door.meshAssetId = "castle_door";
-    door.behaviorPods.push_back("door_behavior");
     door.defaultState.set("locked", true);
-    door.children.push_back({ "door_handle", {} });
+
+    ce::scene::ObjectComponentEntry meshComponent;
+    meshComponent.kind = ce::scene::ObjectComponentKind::Mesh;
+    meshComponent.meshAssetId = "castle_door";
+    door.components.push_back(meshComponent);
+
+    ce::scene::ObjectComponentEntry podComponent;
+    podComponent.kind = ce::scene::ObjectComponentKind::Pod;
+    podComponent.podId = "door_behavior";
+    door.components.push_back(podComponent);
+
+    ce::scene::ObjectComponentEntry childComponent;
+    childComponent.kind = ce::scene::ObjectComponentKind::Child;
+    childComponent.childDefinitionId = "door_handle";
+    door.components.push_back(childComponent);
     if (!catalog.upsert(std::move(door), error)) {
         std::cerr << error << '\n';
         return 1;

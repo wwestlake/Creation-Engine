@@ -65,6 +65,15 @@ struct MeshAssetReference {
     juce::String versionId;
     juce::String packId;
     juce::String packVersion;
+
+    // Which part of the source model this reference addresses -- mirrors
+    // ObjectComponentEntry's meshNodeIndex/meshNodeName (ObjectDefinitions.h)
+    // exactly. -1 = whole model / first primitive (today's single-mesh
+    // behavior). Carried here too, not just on the definition, because
+    // ViewportComponent::ResolveProjectAssets resolves from the live
+    // entity's component, not the original definition.
+    int nodeIndex = -1;
+    juce::String nodeName;
 };
 
 // Identity and authored behavior remain on the entity rather than inside a
@@ -103,6 +112,12 @@ struct Folder {};
 struct SceneFlags {
     bool visible = true; // false: ViewportComponent skips drawing this entity.
     bool locked = false; // true: this entity can't be reparented (or, once SC4 exists, transform-edited) in the editor.
+    // true: this entity exists only for the privileged editor experience
+    // (e.g. the VR edit-mode cart) and must not render or be pickable
+    // while Play is active -- hidden, not despawned, so re-entering the
+    // editor brings it straight back with no respawn logic needed.
+    // VR Editor Cart plan Phase 2.
+    bool editorOnly = false;
 };
 
 // AI4: a skinned mesh's bind-pose skeleton, flattened into a

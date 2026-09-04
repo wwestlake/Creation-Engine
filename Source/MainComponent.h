@@ -11,10 +11,14 @@
 #include "Frust/PodCatalog.h"
 #include "Interaction/EditorInteraction.h"
 #include "Render/ViewportComponent.h"
+#include "Scene/ObjectDefinitions.h"
 #include "Views/BehaviorAttachmentPanel.h"
+#include "Diagnostics/EngineLogVfsWriter.h"
 #include "Views/ContentBrowserPanel.h"
+#include "Views/LogPanel.h"
 #include "Views/HierarchyPanel.h"
 #include "Views/ImportPanel.h"
+#include "Views/ObjectDefinitionEditorPanel.h"
 #include "Views/PodEditorPanel.h"
 #include "Views/PodInfoPanel.h"
 #include "Views/LightPanel.h"
@@ -28,6 +32,7 @@
 
 #include <creation/assets/ProjectSession.h>
 #include <creation/assets/ProjectWorkspaceService.h>
+#include <creation/services/SuiteProcessRegistry.h>
 #include <creation/suite/SuiteSettings.h>
 
 // The editor and the runtime are the same executable in different modes
@@ -44,7 +49,8 @@ class MainComponent final : public juce::Component,
                             private juce::Timer,
                             public juce::ApplicationCommandTarget,
                             private juce::MenuBarModel,
-                            private juce::ComponentListener
+                            private juce::ComponentListener,
+                            public juce::DragAndDropContainer
 {
 public:
     MainComponent();
@@ -92,6 +98,13 @@ private:
     void EnsurePodPanelsOpen();
     void ClosePodPanels();
 
+    // Same lazy-registration shape as the Pod editor pair above, for the
+    // (much smaller) Object Definition editor -- opened from
+    // ContentBrowserPanel's Object Definitions section (open an existing
+    // one, or a newly-created one).
+    void EnsureObjectDefinitionPanelOpen();
+    void CloseObjectDefinitionPanel();
+
     void createNewProject();
     void openProject(const juce::String& projectId);
     void saveSessionToDisk(bool userInitiated = false);
@@ -110,9 +123,31 @@ private:
     // reflects whatever Pods that project has already saved.
     void loadPodsForActiveProject();
 
+    // Wired to viewport_.onAssetDropped -- Content Browser drags an asset
+    // (see ContentBrowserPanel::AssetRow) onto the Scene Viewport, this
+    // materializes it (if needed) and places it. A real named member
+    // function rather than inline in the constructor's lambda: an inline
+    // version of this exact logic reproducibly hit an MSVC parser bug
+    // (bare namespace-qualified aggregate-init statements failing with
+    // spurious "dependent type name"/"not a namespace" errors, confirmed
+    // via bisection -- the same code compiles clean as an ordinary member
+    // function, which every other emplace<>-heavy function in this
+    // codebase already is).
+    void HandleAssetDropped(const juce::String& description, juce::Point<int> localPosition);
+
     creation::suite::SuiteSettings suiteSettings_;
     creation::suite::SuiteSettingsStore suiteSettingsStore_;
     creation::assets::ProjectSession projectSession_;
+
+    // Makes this process discoverable to CreationSuiteVfsService's idle
+    // check (suiteHasAnyOtherLiveApp() in the service's Main.cpp) --
+    // without this, the service can never see a live suite app and
+    // self-terminates 20s after every on-demand launch, regardless of
+    // whether this app is actively using it (root cause of intermittent
+    // "Could not write the entry into the project" import failures).
+    // Constructed/registered in MainComponent's constructor, held for the
+    // app's whole lifetime per this class's own contract.
+    creation::services::SuiteProcessRegistration suiteProcessRegistration_;
     ce::project::GameDocumentInfo activeGame_;
     ce::project::SceneDocumentInfo activeScene_;
     juce::String pendingSceneTransitionId_;
@@ -129,6 +164,11 @@ private:
     // (attaching a compiled Behavior Pod to a selected entity) need the
     // same catalog.
     ce::frust::PodCatalog podCatalog_;
+    // Named registry of reusable "mesh + materials + Pods" object recipes
+    // (docs/OBJECT_MODEL.md) -- owned here for the same reason podCatalog_
+    // is: both ContentBrowserPanel (browse/create) and
+    // ObjectDefinitionEditorPanel (edit) need the same catalog.
+    ce::scene::ObjectDefinitionCatalog objectDefinitions_;
     bool isPlaying_ = false;
 
     CreationSuiteHeaderBar headerBar_;
@@ -202,6 +242,17 @@ private:
     // ImportPanel& to reach the AudioCatalog it evicts from on delete.
     ce::views::ContentBrowserPanel contentBrowserPanel_;
 
+    // The Log window -- a live, filterable view over ce::diagnostics::
+    // EngineLog (timestamp/level/category/message). See LogPanel.h.
+    ce::views::LogPanel logPanel_;
+    // Periodically persists new EngineLog entries to the active project's
+    // VFS (Logs/engine.log) -- see its own header. Given &projectSession_
+    // once, in the constructor, and never again: ProjectSession::open/
+    // createNew always write INTO the same long-lived instance rather
+    // than replacing it, so the address never changes even as which
+    // project it holds does.
+    ce::diagnostics::EngineLogVfsWriter engineLogVfsWriter_;
+
     // --- Other modes: stand-ins until their milestones land ---
     std::unique_ptr<ce::views::PodEditorPanel> podEditorPanel_;
     // A Pod's identity/characteristics + selected-node property editor,
@@ -209,6 +260,11 @@ private:
     // podEditorPanel_ since it needs a reference to that panel's live
     // Graph& (Pod Editor UX & Architecture Fixes plan Phase 6).
     std::unique_ptr<ce::views::PodInfoPanel> podInfoPanel_;
+    // Small mesh-picker + attached-Pods editor for one Object Definition --
+    // lazily opened/closed the same way podEditorPanel_/podInfoPanel_ are
+    // (EnsureObjectDefinitionPanelOpen/CloseObjectDefinitionPanel), never a
+    // standing tab. No node graph -- far simpler than the Pod editor.
+    std::unique_ptr<ce::views::ObjectDefinitionEditorPanel> objectDefinitionEditorPanel_;
     ce::PlaceholderPanel serverPanel_ { "Server", "Dedicated server operational view - coming soon" };
     ce::PlaceholderPanel settingsPanel_ { "Settings", "Application settings - coming soon" };
 

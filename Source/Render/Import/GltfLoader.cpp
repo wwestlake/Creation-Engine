@@ -1,12 +1,14 @@
 #include "Render/Import/GltfLoader.h"
 
+#include <cmath>
 #include <cstring>
-#include <iostream>
 #include <unordered_map>
 #include <utility>
 
 #define CGLTF_IMPLEMENTATION
 #include <cgltf.h>
+
+#include "Diagnostics/EngineLog.h"
 
 namespace ce {
 
@@ -173,7 +175,70 @@ void ExtractAnimations(const cgltf_data& data, const cgltf_skin* skin, LoadedMod
     }
 
     if (!outModel.animations.empty()) {
-        std::cout << "[gltf] extracted " << outModel.animations.size() << " animation clip(s)" << std::endl;
+        ce::diagnostics::EngineLog::Info("GLTF", "Extracted " + juce::String(static_cast<int>(outModel.animations.size())) +
+                                                     " animation clip(s).");
+    }
+}
+
+// Converts a glTF quaternion (x, y, z, w) into Euler angles (radians,
+// applied X then Y then Z) for LoadedNode::localEulerRotationRadians --
+// engine::Transform has no quaternion field, unlike LoadedJoint::bindRotation
+// which stays quaternion for animation blending. Standard XYZ-order
+// quaternion-to-Euler extraction; verified against identity (0,0,0,1 ->
+// 0,0,0) and simple 90-degree-per-axis cases.
+juce::Vector3D<float> QuaternionToEuler(float x, float y, float z, float w) {
+    const float sinRollCosPitch = 2.0f * (w * x + y * z);
+    const float cosRollCosPitch = 1.0f - 2.0f * (x * x + y * y);
+    const float roll = std::atan2(sinRollCosPitch, cosRollCosPitch);
+
+    const float sinPitch = 2.0f * (w * y - z * x);
+    const float pitch = std::abs(sinPitch) >= 1.0f ? std::copysign(juce::MathConstants<float>::halfPi, sinPitch)
+                                                     : std::asin(sinPitch);
+
+    const float sinYawCosPitch = 2.0f * (w * z + x * y);
+    const float cosYawCosPitch = 1.0f - 2.0f * (y * y + z * z);
+    const float yaw = std::atan2(sinYawCosPitch, cosYawCosPitch);
+
+    return { roll, pitch, yaw };
+}
+
+// Flattens every node in the file's scene graph into LoadedModel::nodes --
+// the whole-file equivalent of ExtractSkin, but with a real parentIndex for
+// every node (no "external parent = root" limitation, since every node in
+// data.nodes is available to map against, not just a skin's joint list).
+void ExtractNodes(const cgltf_data& data, LoadedModel& outModel) {
+    std::unordered_map<const cgltf_node*, int> nodeIndexByNode;
+    for (cgltf_size n = 0; n < data.nodes_count; ++n) {
+        nodeIndexByNode[&data.nodes[n]] = static_cast<int>(n);
+    }
+
+    outModel.nodes.resize(data.nodes_count);
+    for (cgltf_size n = 0; n < data.nodes_count; ++n) {
+        const cgltf_node& node = data.nodes[n];
+        LoadedNode loaded;
+        loaded.name = node.name != nullptr ? juce::String(node.name) : ("Node" + juce::String(static_cast<int>(n)));
+
+        if (node.parent != nullptr) {
+            const auto it = nodeIndexByNode.find(node.parent);
+            if (it != nodeIndexByNode.end()) {
+                loaded.parentIndex = it->second;
+            }
+        }
+
+        // Same has_matrix caveat as ExtractSkin: translation/rotation/scale
+        // stay at cgltf's identity defaults for a node authored with a raw
+        // `matrix` instead of TRS -- accepted for the same reason (rare in
+        // practice for glTF exporters).
+        loaded.localTranslation = { node.translation[0], node.translation[1], node.translation[2] };
+        loaded.localEulerRotationRadians =
+            QuaternionToEuler(node.rotation[0], node.rotation[1], node.rotation[2], node.rotation[3]);
+        loaded.localScale = { node.scale[0], node.scale[1], node.scale[2] };
+
+        if (node.mesh != nullptr) {
+            loaded.meshIndex = static_cast<int>(node.mesh - data.meshes);
+        }
+
+        outModel.nodes[n] = std::move(loaded);
     }
 }
 
@@ -208,9 +273,9 @@ void ExtractModel(const cgltf_data& data, LoadedModel& outModel, std::vector<juc
                 } else {
                     // Embedded (buffer_view) or base64 data-URI images aren't
                     // decoded yet — Texture2D only reads named files/entries today.
-                    std::cout << "[gltf] material " << m
-                               << " has an embedded/data-URI base color image; not yet supported, skipping texture."
-                               << std::endl;
+                    ce::diagnostics::EngineLog::Warning(
+                        "GLTF", "Material " + juce::String(static_cast<int>(m)) +
+                                     " has an embedded/data-URI base color image; not yet supported, skipping texture.");
                 }
             }
         }
@@ -219,20 +284,23 @@ void ExtractModel(const cgltf_data& data, LoadedModel& outModel, std::vector<juc
         outMaterialTextureUris.push_back(textureUri);
     }
 
+    outModel.meshPrimitiveRanges.resize(data.meshes_count);
     for (cgltf_size meshIndex = 0; meshIndex < data.meshes_count; ++meshIndex) {
         const cgltf_mesh& mesh = data.meshes[meshIndex];
+        const std::size_t rangeStart = outModel.primitives.size();
 
         for (cgltf_size primIndex = 0; primIndex < mesh.primitives_count; ++primIndex) {
             const cgltf_primitive& primitive = mesh.primitives[primIndex];
             if (primitive.type != cgltf_primitive_type_triangles) {
-                std::cout << "[gltf] skipping non-triangle primitive in mesh " << meshIndex << std::endl;
+                ce::diagnostics::EngineLog::Warning(
+                    "GLTF", "Skipping non-triangle primitive in mesh " + juce::String(static_cast<int>(meshIndex)) + ".");
                 continue;
             }
 
             const cgltf_accessor* positionAccessor = FindAttributeAccessor(primitive, cgltf_attribute_type_position);
             if (positionAccessor == nullptr) {
-                std::cout << "[gltf] primitive in mesh " << meshIndex << " has no POSITION attribute, skipping"
-                           << std::endl;
+                ce::diagnostics::EngineLog::Warning(
+                    "GLTF", "Primitive in mesh " + juce::String(static_cast<int>(meshIndex)) + " has no POSITION attribute, skipping.");
                 continue;
             }
             const cgltf_accessor* normalAccessor = FindAttributeAccessor(primitive, cgltf_attribute_type_normal);
@@ -311,6 +379,7 @@ void ExtractModel(const cgltf_data& data, LoadedModel& outModel, std::vector<juc
 
             outModel.primitives.push_back(std::move(loaded));
         }
+        outModel.meshPrimitiveRanges[meshIndex] = { rangeStart, outModel.primitives.size() - rangeStart };
     }
 
     // Skins are attached to nodes, not meshes/primitives -- find the
@@ -323,12 +392,14 @@ void ExtractModel(const cgltf_data& data, LoadedModel& outModel, std::vector<juc
         if (node.skin != nullptr) {
             foundSkin = node.skin;
             outModel.skin = ExtractSkin(*node.skin);
-            std::cout << "[gltf] extracted skin: " << outModel.skin->joints.size() << " joint(s)" << std::endl;
+            ce::diagnostics::EngineLog::Info(
+                "GLTF", "Extracted skin: " + juce::String(static_cast<int>(outModel.skin->joints.size())) + " joint(s).");
             break;
         }
     }
 
     ExtractAnimations(data, foundSkin, outModel);
+    ExtractNodes(data, outModel);
 }
 
 cgltf_result VfsFileRead(const cgltf_memory_options* memoryOptions, const cgltf_file_options* fileOptions,
@@ -364,9 +435,24 @@ void VfsFileRelease(const cgltf_memory_options* memoryOptions, const cgltf_file_
 
 } // namespace
 
+namespace {
+// Node count is logged alongside primitive/material count on every load --
+// this is exactly the number GltfAssetImporter's multi-part detection acts
+// on (see docs/OBJECT_MODEL.md's "Multi-part import decomposes into
+// components"), so a load's own summary line is the fastest way to see
+// whether a file was even recognized as multi-part before chasing further.
+int CountMeshBearingNodes(const LoadedModel& model) {
+    int count = 0;
+    for (const auto& node : model.nodes) {
+        if (node.meshIndex >= 0) ++count;
+    }
+    return count;
+}
+} // namespace
+
 bool LoadGltf(const juce::File& gltfFile, LoadedModel& outModel) {
     if (!gltfFile.existsAsFile()) {
-        std::cout << "[gltf] file not found: " << gltfFile.getFullPathName() << std::endl;
+        ce::diagnostics::EngineLog::Error("GLTF", "File not found: " + gltfFile.getFullPathName());
         return false;
     }
 
@@ -376,15 +462,15 @@ bool LoadGltf(const juce::File& gltfFile, LoadedModel& outModel) {
 
     cgltf_result result = cgltf_parse_file(&options, pathUtf8, &data);
     if (result != cgltf_result_success) {
-        std::cout << "[gltf] parse failed (" << static_cast<int>(result) << "): " << gltfFile.getFullPathName()
-                   << std::endl;
+        ce::diagnostics::EngineLog::Error("GLTF", "Parse failed (" + juce::String(static_cast<int>(result)) + "): " +
+                                                       gltfFile.getFullPathName());
         return false;
     }
 
     result = cgltf_load_buffers(&options, data, pathUtf8);
     if (result != cgltf_result_success) {
-        std::cout << "[gltf] failed to load buffers (" << static_cast<int>(result) << ") for "
-                   << gltfFile.getFullPathName() << std::endl;
+        ce::diagnostics::EngineLog::Error("GLTF", "Failed to load buffers (" + juce::String(static_cast<int>(result)) +
+                                                       ") for " + gltfFile.getFullPathName());
         cgltf_free(data);
         return false;
     }
@@ -399,8 +485,13 @@ bool LoadGltf(const juce::File& gltfFile, LoadedModel& outModel) {
         }
     }
 
-    std::cout << "[gltf] loaded " << gltfFile.getFileName() << ": " << outModel.primitives.size()
-               << " primitive(s), " << outModel.materials.size() << " material(s)" << std::endl;
+    ce::diagnostics::EngineLog::Info("GLTF", "Loaded " + gltfFile.getFileName() + ": " +
+                                                  juce::String(static_cast<int>(outModel.primitives.size())) +
+                                                  " primitive(s), " +
+                                                  juce::String(static_cast<int>(outModel.materials.size())) +
+                                                  " material(s), " + juce::String(CountMeshBearingNodes(outModel)) +
+                                                  " mesh-bearing node(s) of " +
+                                                  juce::String(static_cast<int>(outModel.nodes.size())) + " total.");
 
     cgltf_free(data);
     return true;
@@ -409,7 +500,7 @@ bool LoadGltf(const juce::File& gltfFile, LoadedModel& outModel) {
 bool LoadGltfFromVfs(creation::assets::VirtualFileSystem& vfs, const juce::String& virtualGltfPath, LoadedModel& outModel) {
     juce::MemoryBlock gltfBytes;
     if (!vfs.readFile(virtualGltfPath, gltfBytes)) {
-        std::cout << "[gltf] VFS: entry not found: " << virtualGltfPath << std::endl;
+        ce::diagnostics::EngineLog::Error("GLTF", "VFS entry not found: " + virtualGltfPath);
         return false;
     }
 
@@ -421,8 +512,8 @@ bool LoadGltfFromVfs(creation::assets::VirtualFileSystem& vfs, const juce::Strin
     cgltf_data* data = nullptr;
     cgltf_result result = cgltf_parse(&options, gltfBytes.getData(), gltfBytes.getSize(), &data);
     if (result != cgltf_result_success) {
-        std::cout << "[gltf] VFS: parse failed (" << static_cast<int>(result) << "): " << virtualGltfPath
-                   << std::endl;
+        ce::diagnostics::EngineLog::Error("GLTF", "VFS parse failed (" + juce::String(static_cast<int>(result)) + "): " +
+                                                       virtualGltfPath);
         return false;
     }
 
@@ -431,8 +522,8 @@ bool LoadGltfFromVfs(creation::assets::VirtualFileSystem& vfs, const juce::Strin
     // same contract as cgltf_parse_file's gltf_path argument in disk mode.
     result = cgltf_load_buffers(&options, data, virtualGltfPath.toRawUTF8());
     if (result != cgltf_result_success) {
-        std::cout << "[gltf] VFS: failed to load buffers (" << static_cast<int>(result) << ") for "
-                   << virtualGltfPath << std::endl;
+        ce::diagnostics::EngineLog::Error("GLTF", "VFS failed to load buffers (" + juce::String(static_cast<int>(result)) +
+                                                       ") for " + virtualGltfPath);
         cgltf_free(data);
         return false;
     }
@@ -452,8 +543,13 @@ bool LoadGltfFromVfs(creation::assets::VirtualFileSystem& vfs, const juce::Strin
         }
     }
 
-    std::cout << "[gltf] VFS: loaded " << virtualGltfPath << ": " << outModel.primitives.size() << " primitive(s), "
-               << outModel.materials.size() << " material(s)" << std::endl;
+    ce::diagnostics::EngineLog::Info("GLTF", "VFS loaded " + virtualGltfPath + ": " +
+                                                  juce::String(static_cast<int>(outModel.primitives.size())) +
+                                                  " primitive(s), " +
+                                                  juce::String(static_cast<int>(outModel.materials.size())) +
+                                                  " material(s), " + juce::String(CountMeshBearingNodes(outModel)) +
+                                                  " mesh-bearing node(s) of " +
+                                                  juce::String(static_cast<int>(outModel.nodes.size())) + " total.");
 
     cgltf_free(data);
     return true;

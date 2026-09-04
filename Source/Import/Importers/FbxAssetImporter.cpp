@@ -3,11 +3,8 @@
 #include "Render/Import/FbxLoader.h"
 #include "Render/ViewportComponent.h"
 #include "Scene/AssetCatalog.h"
-#include "Scene/AssetPlacement.h"
 #include "Scene/Components.h"
 #include <creation/assets/ProjectAssetService.h>
-
-#include <mutex>
 
 namespace ce::import {
 
@@ -54,13 +51,9 @@ ImportResult FbxAssetImporter::Import(const juce::File& sourceFile, ImportContex
     if (! added)
         return ImportResult::Failed("Failed to build GPU resources for " + sourceFile.getFileName() + ".");
 
-    const auto asset = context.catalog->Find(assetName);
-    {
-        std::lock_guard<std::mutex> lock(context.world->RegistryMutex());
-        scene::PlaceAssetEntity(*context.world, asset, assetName, scene::ToVec3(context.viewport->SpawnPosition()));
-    }
-
-    return ImportResult::Ok(assetName + " imported, preserved as a VFS source asset, and placed in the scene.");
+    // Import only stages the asset in the catalog -- see
+    // GltfAssetImporter::Import's matching comment.
+    return ImportResult::Ok(assetName + " imported and preserved as a VFS source asset.");
 }
 
 ImportResult FbxAssetImporter::Reimport(const juce::File& sourceFile,

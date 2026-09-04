@@ -5,6 +5,7 @@
 #include <creation/assets/ProjectSession.h>
 
 #include "Frust/PodCatalog.h"
+#include "Scene/ObjectDefinitions.h"
 #include "Views/ImportPanel.h"
 
 namespace ce {
@@ -45,10 +46,18 @@ namespace ce::views {
 // a standing dock tab of its own; this panel is what owns discovery and
 // creation, matching Unreal Engine 4's actual Content Browser workflow.
 // Pod/Asset Workflow plan, Phase 3.
-class ContentBrowserPanel final : public juce::Component {
+class ContentBrowserPanel final : public juce::Component,
+                                  public juce::FileDragAndDropTarget {
 public:
-    ContentBrowserPanel(ViewportComponent& viewport, ImportPanel& importPanel, frust::PodCatalog& podCatalog);
+    ContentBrowserPanel(ViewportComponent& viewport, ImportPanel& importPanel, frust::PodCatalog& podCatalog,
+                        scene::ObjectDefinitionCatalog& objectDefinitions);
     ~ContentBrowserPanel() override;
+
+    // Dragging a file onto this panel imports it -- the same underlying
+    // pipeline the old standalone Import screen used (importPanel_ still
+    // owns that logic; it's just never shown as its own panel anymore).
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void filesDropped(const juce::StringArray& files, int x, int y) override;
 
     void SetProjectContent(creation::assets::ProjectSession* session);
     void Refresh();
@@ -66,6 +75,10 @@ public:
     // they're not already open.
     std::function<void(juce::String)> onPodCreated;
 
+    // Same idea, for a newly created Object Definition -- MainComponent
+    // opens it in the (much smaller) Object Definition editor.
+    std::function<void(juce::String)> onObjectDefinitionCreated;
+
     void paint(juce::Graphics& g) override;
     void resized() override;
 
@@ -74,6 +87,7 @@ private:
     class Section;
     void OpenAsset(const creation::assets::AssetDescriptor& descriptor);
     void CreateNewPod(frust::PodKind kind);
+    void CreateNewObjectDefinition();
     Section* FindOrCreateSection(creation::assets::AssetKind kind);
 
     // Runs the delete-with-dependency-check operation (Suite-Asset-
@@ -92,18 +106,35 @@ private:
     void ReimportAsset(const creation::assets::AssetDescriptor& latest);
     void RunReimport(const creation::assets::AssetDescriptor& latest, const juce::File& sourceFile);
 
+    // Writes one asset's stored content back out to a file the user picks
+    // -- the read half of the durable VFS entry this row's descriptor
+    // points at (logicalPath), materialized to plain disk bytes. Doesn't
+    // try to reconstruct sibling files (textures, .bin buffers) that a
+    // model's import may have preserved alongside it -- that's real, but
+    // separate, follow-on scope.
+    void ExportAsset(const creation::assets::AssetDescriptor& latest);
+
     std::unique_ptr<juce::FileChooser> activeRelocateChooser_; // kept alive for the duration of one async pick.
+    std::unique_ptr<juce::FileChooser> activeExportChooser_; // same, for ExportAsset's Save As dialog.
 
     ViewportComponent& viewport_;
     ImportPanel& importPanel_;
     frust::PodCatalog& podCatalog_;
+    scene::ObjectDefinitionCatalog& objectDefinitions_;
     creation::assets::ProjectSession* projectSession_ = nullptr;
 
     juce::Label titleLabel_{ {}, "Content Browser" };
-    juce::Label hintLabel_{ {}, "This project's assets, grouped by kind." };
+    juce::Label hintLabel_{ {}, "Assets by kind. Drag a placeable one into the viewport to add it to the scene." };
     juce::TextEditor searchBox_;
+    juce::TextButton importButton_{ "Import..." };
     juce::Label emptyLabel_{ {}, "Open a project to browse its assets." };
 
+    // Sections live inside this plain host, not directly on `this` --
+    // scrollView_ scrolls the host, so the section list can grow past the
+    // panel's own (often short, docked-at-the-bottom) height without
+    // clipping.
+    juce::Viewport scrollView_;
+    juce::Component sectionsHost_;
     juce::OwnedArray<Section> sections_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ContentBrowserPanel)

@@ -1,5 +1,19 @@
 # Material System — Plan
 
+**Status update:** Stages 1–3 below are DONE and tested — the "Materials"
+dock panel is the real node-graph editor described in
+`Source/Views/MaterialGraphPanel.h` (not the `PlaceholderPanel` this doc
+originally described), backed by the real `CompileMaterialGraph` pipeline,
+with named/reusable Material assets via `AssetCatalog::GetOrCreateMaterial`.
+Stage 4 (copy-on-write / per-instance material detach) is still open --
+confirmed directly against `MaterialGraphPanel.h`'s own current header
+comment: "Compile saves the compiled shader+parameters onto the named
+material's live Material object (**which every mesh slot referencing it
+shares**)." The shared-Material mutation behavior this doc originally
+flagged is real and current, not stale -- only the "what's built" framing
+below was stale. Fix your understanding accordingly before reading Stage 4
+as hypothetical.
+
 ## The core principle
 
 A material *is* a node graph. There is no separate "simple material" tier
@@ -43,8 +57,10 @@ Checked directly against the code, not assumed:
   glTF happened to have a diffuse texture," not as a general material
   system. This is *not* kept as a permanent "simple" tier alongside the
   real graph system — every material becomes a graph, full stop.
-- The "Materials" dock panel — a literal `PlaceholderPanel` ("Node-based
-  material editor - coming soon"), zero wiring to any of the above.
+- The "Materials" dock panel — was a literal `PlaceholderPanel` ("Node-based
+  material editor - coming soon"), zero wiring to any of the above. **Since
+  replaced** by the real `MaterialGraphPanel` (Stage 2, done -- see status
+  note at top of this doc).
 
 ## Progress made tonight (uncommitted, same branch as everything else)
 
@@ -60,7 +76,7 @@ Checked directly against the code, not assumed:
 
 ## What's left, staged
 
-**Stage 1 — prove the pipeline end-to-end (in progress)**
+**Stage 1 — prove the pipeline end-to-end — DONE**
 Extend `ce::Material` with an optional compiled-graph path (when present,
 `Resolve()` requests `material_host.frag` + the compiled source instead of
 the fixed `pbr_lit` pair; `ApplyUniforms()` skips the fixed uniforms for
@@ -68,7 +84,7 @@ that path). Build one hand-authored test graph in code, compile it, apply
 it to one real object, verify it actually renders — visually confirmed,
 not just "should work."
 
-**Stage 2 — the real node-editor UI**
+**Stage 2 — the real node-editor UI — DONE**
 Replace the Materials placeholder panel, reusing the same
 `NodeGraphComponent`/`NodePalette`/`NodeInspector` machinery already proven
 in the FRust Logic panel, pointed at the material node registry instead.
@@ -77,10 +93,17 @@ Sample node *is* how you add a texture, matching how it actually works in
 UE4 (confirmed against the user's own working knowledge of it, not just the
 code).
 
-**Stage 3 — named, reusable Material assets**
+**Stage 3 — named, reusable Material assets — PARTIAL**
 "New Material" name/metadata dialog → its own dedicated diagram window,
 saved as a real VFS-backed asset referenced by objects — not embedded
-per-object, so the same material can be shared and edited once.
+per-object, so the same material can be shared and edited once. Named/
+reusable at the runtime `AssetCatalog` level is done -- confirmed via
+`MaterialGraphPanel.h`'s own header comment. Durable VFS persistence of
+the actual graph (node layout/wiring, not just its compiled shader output)
+is NOT done yet -- same comment states this panel "does not yet persist/
+reload a DIFFERENT named material's own graph... would need each
+material's graph serialized via .frgraph and reloaded on open." Don't
+treat Stage 3 as fully closed without checking that specific gap first.
 
 **Stage 4 — copy-on-write for materials**
 Same asset/instance/detach principle designed for vertex edit mode

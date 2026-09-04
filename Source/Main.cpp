@@ -1,5 +1,6 @@
 #include <JuceHeader.h>
 
+#include "Diagnostics/JuceLoggerBridge.h"
 #include "MainComponent.h"
 #include <creation/ui/CreationSuiteLogos.h>
 
@@ -10,10 +11,18 @@ public:
     bool moreThanOneInstanceAllowed() override { return true; }
 
     void initialise(const juce::String&) override {
+        // Installed before anything else runs so every juce::Logger::
+        // writeToLog call from here on -- including ones inside
+        // MainComponent's own constructor -- reaches EngineLog. See
+        // JuceLoggerBridge's header comment.
+        juce::Logger::setCurrentLogger(&loggerBridge_);
         mainWindow_.reset(new MainWindow(getApplicationName()));
     }
 
-    void shutdown() override { mainWindow_ = nullptr; }
+    void shutdown() override {
+        mainWindow_ = nullptr;
+        juce::Logger::setCurrentLogger(nullptr);
+    }
 
     void systemRequestedQuit() override { quit(); }
 
@@ -37,6 +46,7 @@ private:
     };
 
     std::unique_ptr<MainWindow> mainWindow_;
+    ce::diagnostics::JuceLoggerBridge loggerBridge_;
 };
 
 START_JUCE_APPLICATION(CreationEngineApplication)

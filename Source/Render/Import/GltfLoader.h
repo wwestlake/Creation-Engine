@@ -78,6 +78,31 @@ struct LoadedMaterial {
     juce::String baseColorTextureVirtualPath; // set by LoadGltfFromVfs (VFS mode); empty if unset.
 };
 
+// One node in the glTF file's scene graph, flattened the same way
+// LoadedJoint flattens a skin's joints -- except this covers EVERY node
+// in the file (not just skinned ones), so parentIndex is always
+// resolvable when the node has a real parent (no ExtractSkin-style
+// "external parent treated as root" limitation; see GltfLoader.cpp).
+// Feeds a multi-part model's decomposition into Object Definition
+// components (docs/OBJECT_MODEL.md) -- one LoadedNode with meshIndex >= 0
+// becomes one Mesh-kind component, positioned by this node's own local
+// transform relative to its parent.
+struct LoadedNode {
+    juce::String name;
+    int parentIndex = -1; // index into LoadedModel::nodes; -1 only for a true scene root.
+
+    // This node's transform relative to its immediate parent (or scene-
+    // root space if parentIndex == -1). Decomposed to Euler, not left as
+    // a quaternion (unlike LoadedJoint::bindRotation) -- this feeds
+    // engine::Transform (Source/Scene/ObjectDefinitions.h), which has no
+    // quaternion field.
+    juce::Vector3D<float> localTranslation;
+    juce::Vector3D<float> localEulerRotationRadians;
+    juce::Vector3D<float> localScale{ 1.0f, 1.0f, 1.0f };
+
+    int meshIndex = -1; // index into LoadedModel::meshPrimitiveRanges, -1 if this node has no mesh.
+};
+
 struct LoadedModel {
     std::vector<LoadedPrimitive> primitives;
     std::vector<LoadedMaterial> materials;
@@ -90,6 +115,18 @@ struct LoadedModel {
     // skipped). AnimationChannel::jointIndex indexes into skin->joints /
     // the resulting scene::Skeleton::joints the same way.
     std::vector<AnimationClip> animations;
+
+    // One [first, first+count) span into `primitives` per glTF mesh, in
+    // the exact order the primitive-building loop already produces --
+    // lets LoadedNode::meshIndex map to "which primitives" without
+    // changing how `primitives` itself is built or ordered.
+    struct MeshPrimitiveRange { std::size_t first = 0; std::size_t count = 0; };
+    std::vector<MeshPrimitiveRange> meshPrimitiveRanges;
+
+    // Every node in the file's scene graph -- see LoadedNode. Always
+    // populated (single- and multi-mesh files alike); the caller decides
+    // what to do with one node the same way it decides for many.
+    std::vector<LoadedNode> nodes;
 };
 
 // Parses gltfFile (.gltf with a sibling .bin, or .glb) via cgltf and

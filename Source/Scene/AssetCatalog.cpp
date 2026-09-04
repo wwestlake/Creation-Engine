@@ -101,13 +101,41 @@ bool AssetCatalog::AddFromModel(const juce::String& name, const LoadedModel& mod
     if (model.primitives.empty()) {
         return false;
     }
+    return BuildAssetFromPrimitive(name, model, 0, vfs);
+}
+
+bool AssetCatalog::AddNodeFromModel(const juce::String& name, const LoadedModel& model, int nodeIndex,
+                                    creation::assets::VirtualFileSystem* vfs) {
+    if (nodeIndex < 0 || static_cast<std::size_t>(nodeIndex) >= model.nodes.size()) {
+        return false;
+    }
+    const auto& node = model.nodes[static_cast<std::size_t>(nodeIndex)];
+    if (node.meshIndex < 0 || static_cast<std::size_t>(node.meshIndex) >= model.meshPrimitiveRanges.size()) {
+        return false;
+    }
+    const auto& range = model.meshPrimitiveRanges[static_cast<std::size_t>(node.meshIndex)];
+    if (range.count == 0) {
+        return false;
+    }
+    return BuildAssetFromPrimitive(name, model, range.first, vfs);
+}
+
+juce::String AssetCatalog::NodeAssetKey(const juce::String& assetId, const juce::String& versionId, int nodeIndex) {
+    return assetId + "@" + versionId + "#node" + juce::String(nodeIndex);
+}
+
+bool AssetCatalog::BuildAssetFromPrimitive(const juce::String& name, const LoadedModel& model, std::size_t primitiveIndex,
+                                           creation::assets::VirtualFileSystem* vfs) {
+    if (primitiveIndex >= model.primitives.size()) {
+        return false;
+    }
 
     auto mesh = std::make_shared<Mesh>();
-    mesh->Upload(model.primitives.front().vertices, model.primitives.front().indices);
+    mesh->Upload(model.primitives[primitiveIndex].vertices, model.primitives[primitiveIndex].indices);
 
     auto material = std::make_shared<Material>();
     std::unique_ptr<gl::Texture2D> texture;
-    const int materialIndex = model.primitives.front().materialIndex;
+    const int materialIndex = model.primitives[primitiveIndex].materialIndex;
     if (materialIndex >= 0 && materialIndex < static_cast<int>(model.materials.size())) {
         const auto& srcMaterial = model.materials[static_cast<std::size_t>(materialIndex)];
         material->albedo = srcMaterial.baseColorFactor;

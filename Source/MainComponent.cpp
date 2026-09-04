@@ -1,9 +1,15 @@
 #include "MainComponent.h"
 
+#include <algorithm>
+#include <mutex>
+
 #include <creation/services/SuiteVfsJsonStore.h>
 
 #include <creation/ui/CreationSuiteLogos.h>
+#include "Diagnostics/EngineLog.h"
+#include "Scene/Components.h"
 #include "Scene/EngineSceneSerializer.h"
+#include "Scene/ObjectDefinitionNaming.h"
 #include "Project/EngineGameDocument.h"
 #include "engine/foundation_gameplay.h"
 
@@ -36,7 +42,6 @@ constexpr DockPanelMenuEntry kDockPanelMenuEntries[] = {
     { "behaviors", "Behaviors" },
     { "lighting", "Lighting" },
     { "materials", "Materials" },
-    { "assets", "Assets & Import" },
     { "content-browser", "Content Browser" },
     // "server"/"settings" deliberately not listed here -- both are still
     // non-functional PlaceholderPanel stubs ("coming soon"), which only
@@ -63,6 +68,7 @@ private:
     juce::Component& content;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NonOwningPanelHost)
 };
+
 }
 
 MainComponent::MainComponent()
@@ -73,7 +79,22 @@ MainComponent::MainComponent()
       importPanel_(world_, viewport_, projectSession_),
       lightPanel_(viewport_),
       materialsPanel_(viewport_),
-      contentBrowserPanel_(viewport_, importPanel_, podCatalog_) {
+      contentBrowserPanel_(viewport_, importPanel_, podCatalog_, objectDefinitions_) {
+    // See suiteProcessRegistration_'s header comment: this is what keeps
+    // CreationSuiteVfsService alive while this app is actually running.
+    suiteProcessRegistration_.RegisterSelf("CreationEngine");
+    importPanel_.SetObjectDefinitions(&objectDefinitions_);
+    // ImportPanel is never mounted as a visible panel (Content Browser owns
+    // import UI now) -- its own log_ would otherwise be invisible. Route
+    // every import result line into the real engine log instead (visible
+    // in the Log window, and persisted to the project's VFS) rather than
+    // a transient status-bar line.
+    importPanel_.onLogLine = [](const juce::String& line) { ce::diagnostics::EngineLog::Info("Import", line); };
+    importPanel_.onContentChanged = [this] { contentBrowserPanel_.Refresh(); };
+    // See engineLogVfsWriter_'s own header comment for why this is a
+    // one-time call, not something re-wired on every project open/close.
+    engineLogVfsWriter_.SetSession(&projectSession_);
+
     commandManager_.registerAllCommandsForTarget(this);
     commandManager_.getKeyMappings()->addKeyPress(
         kRunGameClientCommand,
@@ -108,19 +129,38 @@ MainComponent::MainComponent()
     podEditorPanel_ = std::make_unique<ce::views::PodEditorPanel>(frustHost_, podCatalog_, projectSession_);
     podInfoPanel_ = std::make_unique<ce::views::PodInfoPanel>(podCatalog_, projectSession_, podEditorPanel_->Graph(),
                                                                podEditorPanel_->Registry());
+    objectDefinitionEditorPanel_ =
+        std::make_unique<ce::views::ObjectDefinitionEditorPanel>(objectDefinitions_, podCatalog_, projectSession_);
     // Same fan-out-from-a-callback shape as hierarchyPanel_.onSelectionChanged
     // below -- PodEditorPanel no longer owns the Pod's identity/interface UI
     // or the node inspector itself, PodInfoPanel does.
     podEditorPanel_->onOpenPodChanged = [this](const juce::String& name) { podInfoPanel_->SetOpenPod(name); };
     podEditorPanel_->onSelectedNodeChanged = [this](ce::node_system::NodeId id) { podInfoPanel_->SetSelectedNode(id); };
     contentBrowserPanel_.onAssetOpened = [this](const creation::assets::AssetDescriptor& descriptor) {
-        if (descriptor.kind != creation::assets::AssetKind::pod) return;
-        EnsurePodPanelsOpen();
-        podEditorPanel_->OpenPod(descriptor.displayName);
+        if (descriptor.kind == creation::assets::AssetKind::pod) {
+            EnsurePodPanelsOpen();
+            podEditorPanel_->OpenPod(descriptor.displayName);
+        } else if (descriptor.kind == creation::assets::AssetKind::objectDefinition) {
+            EnsureObjectDefinitionPanelOpen();
+            objectDefinitionEditorPanel_->OpenDefinition(descriptor.displayName);
+        }
     };
     contentBrowserPanel_.onPodCreated = [this](const juce::String& name) {
         EnsurePodPanelsOpen();
         podEditorPanel_->OpenPod(name);
+    };
+    contentBrowserPanel_.onObjectDefinitionCreated = [this](const juce::String& id) {
+        EnsureObjectDefinitionPanelOpen();
+        objectDefinitionEditorPanel_->OpenDefinition(id);
+    };
+    // Content Browser is the only source that produces this description
+    // shape (see ContentBrowserPanel::AssetRow::mouseDrag). Placement lives
+    // here, not in ViewportComponent or ContentBrowserPanel, because it
+    // needs projectSession_/objectDefinitions_/suiteSettings_ together --
+    // an asset browser's job ends at "this asset exists"; where it lands
+    // in a scene is this class's call, not the browser's or the importer's.
+    viewport_.onAssetDropped = [this](const juce::String& description, juce::Point<int> localPosition) {
+        HandleAssetDropped(description, localPosition);
     };
     frustHost_.setSceneTransitionRequestHandler([this](const std::string& reference) {
         const juce::String sceneReference(reference);
@@ -295,7 +335,7 @@ void MainComponent::getCommandInfo(juce::CommandID commandID, juce::ApplicationC
         result.addDefaultKeypress('S', juce::ModifierKeys::ctrlModifier);
     }
     if (commandID == kImportCommand)
-        result.setInfo("Import...", "Bring the Assets & Import panel to the front", "File", {});
+        result.setInfo("Import...", "Open a file browser to import assets", "File", {});
     if (commandID == kNewProjectCommand)
         result.setInfo("New Project...", "Create a new Suite project for Creation Engine", "Project", {});
     if (commandID == kOpenProjectBrowserCommand)
@@ -316,7 +356,8 @@ bool MainComponent::perform(const juce::ApplicationCommandTarget::InvocationInfo
     if (info.commandID == kSaveCommand) { saveSessionToDisk(true); return true; }
     if (info.commandID == kImportCommand)
     {
-        if (dockManager_ != nullptr) dockManager_->activatePanel("assets");
+        if (dockManager_ != nullptr) dockManager_->activatePanel("content-browser");
+        importPanel_.BrowseAndImport();
         return true;
     }
     if (info.commandID == kNewProjectCommand) { createNewProject(); return true; }
@@ -448,11 +489,18 @@ void MainComponent::initialiseDockingWorkspace()
     // while a Pod is open, via EnsurePodPanelsOpen(). Pod/Asset Workflow
     // plan Phase 5.
     dockManager_->registerPanel("materials", "Materials", std::make_unique<NonOwningPanelHost>(materialsPanel_), CreationDock::DockTargetZone::CenterTab);
-    dockManager_->registerPanel("assets", "Assets & Import", std::make_unique<NonOwningPanelHost>(importPanel_), CreationDock::DockTargetZone::CenterTab);
-    dockManager_->registerPanel("content-browser", "Content Browser", std::make_unique<NonOwningPanelHost>(contentBrowserPanel_), CreationDock::DockTargetZone::CenterTab);
+    // "assets" (the old standalone Import screen) is gone -- import/export/
+    // browse/place all live in Content Browser now. importPanel_ itself
+    // stays alive as backing logic (importer registry, audio catalog) that
+    // Content Browser and Reimport call into; it's never mounted as a panel.
+    // Docked at the Bottom (not a CenterTab) so it's open by default, same
+    // as Runtime Status -- this is meant to be glanced at constantly while
+    // building a scene, not a screen you navigate to.
+    dockManager_->registerPanel("content-browser", "Content Browser", std::make_unique<NonOwningPanelHost>(contentBrowserPanel_), CreationDock::DockTargetZone::Bottom);
     // "server"/"settings" not registered -- see kDockPanelMenuEntries'
     // comment above.
     dockManager_->registerPanel("runtime-status", "Runtime Status", std::make_unique<NonOwningPanelHost>(tickLabel_), CreationDock::DockTargetZone::Bottom);
+    dockManager_->registerPanel("log", "Log", std::make_unique<NonOwningPanelHost>(logPanel_), CreationDock::DockTargetZone::Bottom);
 }
 
 void MainComponent::EnsurePodPanelsOpen() {
@@ -484,12 +532,29 @@ void MainComponent::ClosePodPanels() {
     podInfoPanel_->SetOpenPod({});
 }
 
+void MainComponent::EnsureObjectDefinitionPanelOpen() {
+    if (dockManager_ == nullptr) return;
+    if (!dockManager_->isRegistered("object-definition")) {
+        auto* panel = dockManager_->registerPanel("object-definition", "Object Definition",
+                                                   std::make_unique<NonOwningPanelHost>(*objectDefinitionEditorPanel_),
+                                                   CreationDock::DockTargetZone::Right);
+        panel->onCloseRequested = [this](CreationDock::DockPanel*) { CloseObjectDefinitionPanel(); };
+    }
+    dockManager_->activatePanel("object-definition");
+}
+
+void MainComponent::CloseObjectDefinitionPanel() {
+    if (dockManager_ == nullptr) return;
+    dockManager_->unregisterPanel("object-definition");
+}
+
 void MainComponent::SetPlaying(bool playing) {
     if (isPlaying_ == playing) {
         return;
     }
 
     isPlaying_ = playing;
+    viewport_.SetPlaying(playing); // hides SceneFlags::editorOnly entities (e.g. the cart) while playing.
     const auto tick = static_cast<std::int64_t>(world_.CurrentTick());
     if (playing) {
         frustHost_.beginPlay(tick);
@@ -678,6 +743,96 @@ void MainComponent::refreshExplorerPanel()
     explorerPanel_.setStatus(activeGame_.id.isEmpty() ? "No active game" : activeGame_.name + " / " + activeScene_.name);
 }
 
+void MainComponent::HandleAssetDropped(const juce::String& description, juce::Point<int> localPosition)
+{
+    const auto parts = juce::StringArray::fromTokens(description, "|", "");
+    if (parts.size() < 5 || parts[0] != "asset") return;
+    const auto kind = creation::assets::assetKindFromStorageToken(parts[1]);
+    const auto id = parts[2];
+    const auto versionId = parts[3];
+    const auto displayName = parts[4];
+
+    // Ray-cast the drop point against the ground plane (y=0, same
+    // convention FoundationGameplay's own ground uses) so an asset lands
+    // roughly where it was dropped rather than always at a fixed spot in
+    // front of the camera; SpawnPosition() is only the fallback for a ray
+    // that can't hit that plane (e.g. dropped above the horizon, looking
+    // up).
+    auto dropPosition = ce::scene::ToVec3(viewport_.SpawnPosition());
+    juce::Vector3D<float> rayOrigin, rayDirection;
+    if (viewport_.desktopRay(localPosition.toFloat(), rayOrigin, rayDirection) && rayDirection.y < -0.001f) {
+        const float t = -rayOrigin.y / rayDirection.y;
+        dropPosition = ce::scene::ToVec3(juce::Vector3D<float>{ rayOrigin.x + rayDirection.x * t, 0.0f,
+                                                                 rayOrigin.z + rayDirection.z * t });
+    }
+
+    // Placing an asset always goes through an Object Definition -- never a
+    // bare entity referencing a raw mesh directly. Per
+    // docs/ENGINE_ASSET_MANAGEMENT_PLAN.md: "Placing an object creates a
+    // scene entity referencing the object asset." A dropped raw mesh gets
+    // (or reuses) a single-component wrapper definition so it has a real,
+    // reopenable object identity, same as any hand-built Object Definition.
+    juce::String definitionId;
+    if (kind == creation::assets::AssetKind::render) {
+        definitionId = ce::scene::FindWrapperDefinitionForRenderAsset(objectDefinitions_, id);
+        if (definitionId.isEmpty()) {
+            ce::scene::ObjectDefinition wrapper;
+            wrapper.id = ce::scene::GenerateWrapperDefinitionName(objectDefinitions_, displayName);
+            wrapper.displayName = displayName;
+            ce::scene::ObjectComponentEntry meshComponent;
+            meshComponent.kind = ce::scene::ObjectComponentKind::Mesh;
+            meshComponent.meshAssetId = id;
+            meshComponent.meshAssetVersionId = versionId;
+            wrapper.components.push_back(std::move(meshComponent));
+
+            juce::String upsertError;
+            if (!objectDefinitions_.upsert(wrapper, upsertError)) {
+                headerBar_.setStatusText("Could not place \"" + displayName + "\": " + upsertError);
+                return;
+            }
+            juce::String saveError;
+            if (!objectDefinitions_.Save(projectSession_, wrapper.id, saveError)) {
+                headerBar_.setStatusText("Could not place \"" + displayName + "\": " + saveError);
+                return;
+            }
+            definitionId = wrapper.id;
+        }
+    } else if (kind == creation::assets::AssetKind::objectDefinition) {
+        definitionId = displayName;
+    } else {
+        return;
+    }
+
+    juce::String error;
+    // instantiate() takes the registry lock itself -- don't take it again here.
+    const auto result = ce::scene::ObjectFactory::instantiate(world_, objectDefinitions_, definitionId, dropPosition, error);
+    if (result.root == entt::null) {
+        headerBar_.setStatusText("Could not place \"" + displayName + "\": " + error);
+        refreshExplorerPanel();
+        return;
+    }
+
+    // Materializes the mesh into the runtime GPU cache right away (rather
+    // than leaving it to resolve lazily next frame) so a skinned model's
+    // Skeleton/Animator can be attached too -- ObjectFactory::instantiate
+    // only emplaces MeshAssetReference, not Skeleton/Animator, so that part
+    // still happens here, targeted at the instantiated root entity.
+    viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
+    if (kind == creation::assets::AssetKind::render) {
+        const auto asset = viewport_.Catalog().Find(id);
+        if (asset.mesh != nullptr) {
+            std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+            auto& registry = world_.Registry();
+            if (asset.skeleton != nullptr) registry.emplace<ce::scene::Skeleton>(result.root, *asset.skeleton);
+            if (asset.animationClips != nullptr && !asset.animationClips->empty())
+                registry.emplace<ce::scene::Animator>(result.root, ce::scene::Animator{ asset.animationClips, 0, 0.0f, false, true });
+        } else {
+            headerBar_.setStatusText("Placed \"" + displayName + "\", but its mesh hasn't loaded yet.");
+        }
+    }
+    refreshExplorerPanel();
+}
+
 void MainComponent::selectGame(const juce::String& gameId)
 {
     for (const auto& game : games_) {
@@ -825,6 +980,10 @@ void MainComponent::loadPodsForActiveProject()
     juce::String error;
     if (!podCatalog_.LoadAll(projectSession_, error))
         headerBar_.setStatusText("Some Pods could not be loaded: " + error);
+
+    juce::String objectDefinitionError;
+    if (!objectDefinitions_.LoadAll(projectSession_, objectDefinitionError))
+        headerBar_.setStatusText("Some Object Definitions could not be loaded: " + objectDefinitionError);
 }
 
 void MainComponent::saveAppSettings()

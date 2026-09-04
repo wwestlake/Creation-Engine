@@ -103,6 +103,10 @@ ImportPanel::ImportPanel(engine::World& world, ViewportComponent& viewport,
     dropZoneLabel_.setColour(juce::Label::textColourId, juce::Colours::grey);
     addAndMakeVisible(dropZoneLabel_);
 
+    browseButton_.onClick = [this] { BrowseAndImport(); };
+    browseButton_.setTooltip("Pick files with a native file browser instead of dragging them in.");
+    addAndMakeVisible(browseButton_);
+
     log_.setMultiLine(true);
     log_.setReadOnly(true);
     log_.setScrollbarsShown(true);
@@ -161,6 +165,25 @@ void ImportPanel::fileDragEnter(const juce::StringArray&, int, int) {
 void ImportPanel::fileDragExit(const juce::StringArray&) {
     isDragHovering_ = false;
     repaint();
+}
+
+void ImportPanel::BrowseAndImport() {
+    activeImportChooser_ = std::make_unique<juce::FileChooser>(
+        "Import assets", juce::File(),
+        "*.gltf;*.glb;*.obj;*.wav;*.aiff;*.flac;*.png;*.jpg;*.jpeg;*.tga;*.bmp;*.hdr");
+
+    activeImportChooser_->launchAsync(
+        juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles |
+            juce::FileBrowserComponent::canSelectMultipleItems,
+        [this](const juce::FileChooser& chooser) {
+            const auto chosen = chooser.getResults();
+            activeImportChooser_.reset();
+            if (chosen.isEmpty()) return;
+
+            juce::StringArray paths;
+            for (const auto& file : chosen) paths.add(file.getFullPathName());
+            filesDropped(paths, 0, 0);
+        });
 }
 
 void ImportPanel::filesDropped(const juce::StringArray& files, int, int) {
@@ -246,6 +269,14 @@ void ImportPanel::RunImporterAndLog(import::AssetImporter& importer, const juce:
     const auto result = importer.Import(file, context_);
     AppendLogLine(juce::String(result.success ? "[ok]   " : "[fail] ") + file.getFileName() + " (" +
                   importer.DisplayName() + "): " + result.message);
+    // A successful import adds something new to the project (a render
+    // asset, possibly an Object Definition too) that Content Browser has
+    // no other way to learn about -- it only ever refreshes in response
+    // to its OWN actions (create/delete/reimport/search), never this
+    // one, since ImportPanel doesn't otherwise know ContentBrowserPanel
+    // exists. Without this, an import silently doesn't show up until
+    // something unrelated happens to trigger a refresh.
+    if (result.success && onContentChanged) onContentChanged();
 }
 
 void ImportPanel::RebuildAudioClipRows() {
@@ -322,6 +353,7 @@ import::AnimationImportOptions ImportPanel::BuildAnimationImportOptions() const 
 void ImportPanel::AppendLogLine(const juce::String& line) {
     log_.moveCaretToEnd();
     log_.insertTextAtCaret(line + juce::newLine);
+    if (onLogLine) onLogLine(line);
 }
 
 void ImportPanel::paint(juce::Graphics& g) {
@@ -336,7 +368,9 @@ void ImportPanel::resized() {
     auto area = getLocalBounds().reduced(16);
     titleLabel_.setBounds(area.removeFromTop(28));
     area.removeFromTop(8);
-    dropZoneLabel_.setBounds(area.removeFromTop(100));
+    auto dropZoneArea = area.removeFromTop(100);
+    dropZoneLabel_.setBounds(dropZoneArea);
+    browseButton_.setBounds(dropZoneArea.removeFromBottom(26).removeFromRight(100).reduced(4));
     area.removeFromTop(12);
 
     auto sidebarArea = area.removeFromRight(300);
