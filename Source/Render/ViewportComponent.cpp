@@ -397,6 +397,33 @@ bool ViewportComponent::desktopRay(const juce::Point<float>& screenPosition,
     return true;
 }
 
+namespace {
+// Clicking any part of a composed object in the viewport must select the
+// WHOLE object, never an individual sub-part directly -- a Mesh-kind
+// component's own child entity is an implementation detail of how the
+// object is built, not something to select/move on its own (the Hierarchy
+// panel is where individual parts are visible/inspectable; the viewport
+// is not). "The whole object" is the OUTERMOST entity carrying
+// ObjectDefinitionRef along the Parent chain from `entity` -- a nested
+// composition (a Child-kind component inside another Object Definition,
+// e.g. a door housing a handle) carries ObjectDefinitionRef at EVERY
+// level, so this must walk past every one of them, not stop at the
+// first, to land on the true top-level object rather than an
+// intermediate one.
+entt::entity ResolveWholeObjectEntity(const entt::registry& registry, entt::entity entity) {
+    entt::entity result = entity;
+    entt::entity current = entity;
+    while (registry.valid(current)) {
+        const auto* parent = registry.try_get<const scene::Parent>(current);
+        if (parent == nullptr || parent->value == entt::null || !registry.valid(parent->value)) break;
+        if (!registry.all_of<const scene::ObjectDefinitionRef>(parent->value)) break;
+        result = parent->value;
+        current = parent->value;
+    }
+    return result;
+}
+} // namespace
+
 entt::entity ViewportComponent::desktopPick(const juce::Vector3D<float>& origin,
                                             const juce::Vector3D<float>& direction,
                                             float& distance) const
@@ -434,7 +461,7 @@ entt::entity ViewportComponent::desktopPick(const juce::Vector3D<float>& origin,
             closest = entity;
         }
     }
-    return closest;
+    return closest == entt::null ? entt::null : ResolveWholeObjectEntity(world_.Registry(), closest);
 }
 
 interaction::TranslationConstraint ViewportComponent::constraintFor(TranslationHandle handle) const
@@ -524,7 +551,7 @@ void ViewportComponent::updateDesktopTransformGizmo()
     // has to be drawn at the WORLD position that matches where the
     // selected entity actually renders, same reasoning as desktopPick's
     // fix above.
-    vrTransformGizmo_.center = scene::ToJuceVector3D(scene::MatrixTranslation(scene::WorldModelMatrix(registry, selected)));
+    vrTransformGizmo_.center = scene::MatrixTranslation(scene::WorldModelMatrix(registry, selected));
     vrTransformGizmo_.scale = 0.8f;
     if (interactions_.gizmoMode() == interaction::GizmoMode::position &&
         interactions_.transformSpace() == interaction::TransformSpace::local) {
@@ -689,7 +716,7 @@ void ViewportComponent::updateVRInteraction()
             vrTransformGizmo_.entity = selected;
             // See updateDesktopTransformGizmo's identical fix -- Transform
             // is local, the gizmo needs the world-composed position.
-            vrTransformGizmo_.center = scene::ToJuceVector3D(scene::MatrixTranslation(scene::WorldModelMatrix(registry, selected)));
+            vrTransformGizmo_.center = scene::MatrixTranslation(scene::WorldModelMatrix(registry, selected));
             vrTransformGizmo_.scale = 0.8f;
         }
     }
