@@ -280,7 +280,10 @@ juce::Vector3D<float> ViewportComponent::SpawnPosition(float distance) const {
 void ViewportComponent::ResolveProjectAssets(const creation::assets::ProjectSession& session,
                                              const creation::suite::SuiteSettings& settings)
 {
-    struct PendingAsset { juce::String id; juce::String versionId; };
+    // nodeIndex mirrors MeshAssetReference::nodeIndex -- -1 means "whole
+    // model / first primitive" (today's exact single-mesh behavior); >= 0
+    // addresses one part of a multi-part model (docs/OBJECT_MODEL.md).
+    struct PendingAsset { juce::String id; juce::String versionId; int nodeIndex; };
     struct PendingPack { juce::String id; juce::String version; };
     std::vector<PendingAsset> pending;
     std::vector<PendingPack> packs;
@@ -297,11 +300,16 @@ void ViewportComponent::ResolveProjectAssets(const creation::assets::ProjectSess
                 });
                 if (packExists == packs.end()) packs.push_back({ reference.packId, reference.packVersion });
             }
-            if (reference.packId.isNotEmpty() || reference.versionId.isEmpty() || assetCatalog_.Find(reference.assetId).mesh != nullptr) continue;
+            if (reference.packId.isNotEmpty() || reference.versionId.isEmpty()) continue;
+            const auto cacheKey = reference.nodeIndex >= 0
+                ? scene::AssetCatalog::NodeAssetKey(reference.assetId, reference.versionId, reference.nodeIndex)
+                : reference.assetId;
+            if (assetCatalog_.Find(cacheKey).mesh != nullptr) continue;
             const auto exists = std::find_if(pending.begin(), pending.end(), [&reference](const PendingAsset& item) {
-                return item.id == reference.assetId && item.versionId == reference.versionId;
+                return item.id == reference.assetId && item.versionId == reference.versionId &&
+                       item.nodeIndex == reference.nodeIndex;
             });
-            if (exists == pending.end()) pending.push_back({ reference.assetId, reference.versionId });
+            if (exists == pending.end()) pending.push_back({ reference.assetId, reference.versionId, reference.nodeIndex });
         }
     }
 
@@ -315,17 +323,40 @@ void ViewportComponent::ResolveProjectAssets(const creation::assets::ProjectSess
             juce::Logger::writeToLog("Creation Engine pack resolver: " + pack.id + " " + pack.version + ": " + error);
     }
 
+    // Grouped by (id, versionId) BEFORE parsing -- a multi-part model's N
+    // pending node-requests must trigger exactly one loadRenderable parse,
+    // not N separate re-parses of the same source file.
+    struct PendingGroup { juce::String id; juce::String versionId; std::vector<int> nodeIndices; };
+    std::vector<PendingGroup> groups;
     for (const auto& item : pending)
+    {
+        const auto groupIt = std::find_if(groups.begin(), groups.end(), [&item](const PendingGroup& group) {
+            return group.id == item.id && group.versionId == item.versionId;
+        });
+        if (groupIt == groups.end()) groups.push_back({ item.id, item.versionId, { item.nodeIndex } });
+        else groupIt->nodeIndices.push_back(item.nodeIndex);
+    }
+
+    for (const auto& group : groups)
     {
         LoadedModel model;
         creation::assets::MaterializedAssetLease lease;
         juce::String error;
-        if (! assets::ProjectContentAssetStore::loadRenderable(session, settings, item.id, item.versionId, model, lease, error))
+        if (! assets::ProjectContentAssetStore::loadRenderable(session, settings, group.id, group.versionId, model, lease, error))
         {
-            juce::Logger::writeToLog("Creation Engine asset resolver: " + item.id + ": " + error);
+            juce::Logger::writeToLog("Creation Engine asset resolver: " + group.id + ": " + error);
             continue;
         }
-        RunOnGLThread([this, &item, &model] { assetCatalog_.AddFromModel(item.id, model); }, true);
+        RunOnGLThread([this, &group, &model] {
+            for (const int nodeIndex : group.nodeIndices)
+            {
+                if (nodeIndex >= 0)
+                    assetCatalog_.AddNodeFromModel(scene::AssetCatalog::NodeAssetKey(group.id, group.versionId, nodeIndex),
+                                                   model, nodeIndex);
+                else
+                    assetCatalog_.AddFromModel(group.id, model);
+            }
+        }, true);
         juce::String releaseError;
         creation::assets::AssetMaterializer::releaseLease(lease, releaseError);
     }
@@ -1181,11 +1212,18 @@ void ViewportComponent::renderOpenGL() {
         // same asset under its plain engine name as an alias (see
         // AssetCatalog::LoadAssetPack's AddAlias call). Fall back to that
         // plain name so a stale pack-version reference still renders.
+        // A multi-part reference (reference.nodeIndex >= 0) was registered
+        // under AssetCatalog::NodeAssetKey, not the bare assetId -- see
+        // ResolveProjectAssets and docs/OBJECT_MODEL.md's "Multi-part
+        // import decomposes into components".
+        const auto plainAssetKey = reference.nodeIndex >= 0
+            ? scene::AssetCatalog::NodeAssetKey(reference.assetId, reference.versionId, reference.nodeIndex)
+            : reference.assetId;
         auto asset = reference.packId.isNotEmpty()
             ? assetCatalog_.Find(scene::AssetCatalog::PackAssetKey(reference.packId, reference.packVersion, reference.assetId))
-            : assetCatalog_.Find(reference.assetId);
+            : assetCatalog_.Find(plainAssetKey);
         if (asset.mesh == nullptr && reference.packId.isNotEmpty()) {
-            asset = assetCatalog_.Find(reference.assetId);
+            asset = assetCatalog_.Find(plainAssetKey);
         }
         if (asset.mesh != nullptr && asset.material != nullptr) {
             if (auto* existing = world_.Registry().try_get<scene::MeshRenderer>(entity)) {

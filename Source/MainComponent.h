@@ -13,7 +13,9 @@
 #include "Render/ViewportComponent.h"
 #include "Scene/ObjectDefinitions.h"
 #include "Views/BehaviorAttachmentPanel.h"
+#include "Diagnostics/EngineLogVfsWriter.h"
 #include "Views/ContentBrowserPanel.h"
+#include "Views/LogPanel.h"
 #include "Views/HierarchyPanel.h"
 #include "Views/ImportPanel.h"
 #include "Views/ObjectDefinitionEditorPanel.h"
@@ -239,6 +241,17 @@ private:
     // declared after viewport_: its constructor needs a fully-constructed
     // ImportPanel& to reach the AudioCatalog it evicts from on delete.
     ce::views::ContentBrowserPanel contentBrowserPanel_;
+
+    // The Log window -- a live, filterable view over ce::diagnostics::
+    // EngineLog (timestamp/level/category/message). See LogPanel.h.
+    ce::views::LogPanel logPanel_;
+    // Periodically persists new EngineLog entries to the active project's
+    // VFS (Logs/engine.log) -- see its own header. Given &projectSession_
+    // once, in the constructor, and never again: ProjectSession::open/
+    // createNew always write INTO the same long-lived instance rather
+    // than replacing it, so the address never changes even as which
+    // project it holds does.
+    ce::diagnostics::EngineLogVfsWriter engineLogVfsWriter_;
 
     // --- Other modes: stand-ins until their milestones land ---
     std::unique_ptr<ce::views::PodEditorPanel> podEditorPanel_;

@@ -269,6 +269,14 @@ void ImportPanel::RunImporterAndLog(import::AssetImporter& importer, const juce:
     const auto result = importer.Import(file, context_);
     AppendLogLine(juce::String(result.success ? "[ok]   " : "[fail] ") + file.getFileName() + " (" +
                   importer.DisplayName() + "): " + result.message);
+    // A successful import adds something new to the project (a render
+    // asset, possibly an Object Definition too) that Content Browser has
+    // no other way to learn about -- it only ever refreshes in response
+    // to its OWN actions (create/delete/reimport/search), never this
+    // one, since ImportPanel doesn't otherwise know ContentBrowserPanel
+    // exists. Without this, an import silently doesn't show up until
+    // something unrelated happens to trigger a refresh.
+    if (result.success && onContentChanged) onContentChanged();
 }
 
 void ImportPanel::RebuildAudioClipRows() {
@@ -345,6 +353,7 @@ import::AnimationImportOptions ImportPanel::BuildAnimationImportOptions() const 
 void ImportPanel::AppendLogLine(const juce::String& line) {
     log_.moveCaretToEnd();
     log_.insertTextAtCaret(line + juce::newLine);
+    if (onLogLine) onLogLine(line);
 }
 
 void ImportPanel::paint(juce::Graphics& g) {

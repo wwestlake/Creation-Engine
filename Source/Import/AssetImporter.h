@@ -15,6 +15,7 @@ class ViewportComponent;
 
 namespace ce::scene {
 class AssetCatalog;
+class ObjectDefinitionCatalog;
 }
 
 namespace creation::assets {
@@ -51,6 +52,11 @@ struct AnimationImportOptions {
 struct ImportContext {
     engine::World* world = nullptr;
     scene::AssetCatalog* catalog = nullptr;
+    // Set only when the importer needs to author an Object Definition
+    // directly (currently: GltfAssetImporter, for multi-part models -- see
+    // docs/OBJECT_MODEL.md's "Multi-part import decomposes into
+    // components"). Every other importer leaves this unused.
+    scene::ObjectDefinitionCatalog* objectDefinitions = nullptr;
     creation::assets::VirtualFileSystem* vfs = nullptr;
     creation::assets::ProjectSession* projectSession = nullptr;
     juce::String gameAssetRoot;

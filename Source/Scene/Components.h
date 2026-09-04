@@ -65,6 +65,15 @@ struct MeshAssetReference {
     juce::String versionId;
     juce::String packId;
     juce::String packVersion;
+
+    // Which part of the source model this reference addresses -- mirrors
+    // ObjectComponentEntry's meshNodeIndex/meshNodeName (ObjectDefinitions.h)
+    // exactly. -1 = whole model / first primitive (today's single-mesh
+    // behavior). Carried here too, not just on the definition, because
+    // ViewportComponent::ResolveProjectAssets resolves from the live
+    // entity's component, not the original definition.
+    int nodeIndex = -1;
+    juce::String nodeName;
 };
 
 // Identity and authored behavior remain on the entity rather than inside a

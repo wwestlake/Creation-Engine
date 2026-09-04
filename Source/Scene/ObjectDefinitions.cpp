@@ -43,21 +43,6 @@ engine::Transform restoreTransform(const juce::ValueTree& state)
     return transform;
 }
 
-engine::Transform composeTransform(const engine::Transform& parent, const engine::Transform& local)
-{
-    engine::Transform result = local;
-    result.position.x += parent.position.x;
-    result.position.y += parent.position.y;
-    result.position.z += parent.position.z;
-    result.eulerRotationRadians.x += parent.eulerRotationRadians.x;
-    result.eulerRotationRadians.y += parent.eulerRotationRadians.y;
-    result.eulerRotationRadians.z += parent.eulerRotationRadians.z;
-    result.scale.x *= parent.scale.x;
-    result.scale.y *= parent.scale.y;
-    result.scale.z *= parent.scale.z;
-    return result;
-}
-
 // One definition's ValueTree node -- factored out of serialize()/restore()
 // so Save()/LoadAll() (one asset per definition) can reuse the exact same
 // schema as the whole-catalog round-trip those already use, without a
@@ -99,6 +84,9 @@ juce::ValueTree SerializeOne(const ObjectDefinition& definition)
                 entry.setProperty("meshAssetVersionId", component.meshAssetVersionId, nullptr);
                 entry.setProperty("meshPackId", component.meshPackId, nullptr);
                 entry.setProperty("meshPackVersion", component.meshPackVersion, nullptr);
+                entry.setProperty("meshNodeIndex", component.meshNodeIndex, nullptr);
+                entry.setProperty("meshNodeName", component.meshNodeName, nullptr);
+                entry.addChild(serializeTransform(component.meshLocalTransform, "MeshLocalTransform"), -1, nullptr);
                 break;
             case ObjectComponentKind::Pod:
                 entry.setProperty("podId", component.podId, nullptr);
@@ -137,6 +125,9 @@ ObjectDefinition RestoreOne(const juce::ValueTree& node)
             component.meshAssetVersionId = entry.getProperty("meshAssetVersionId").toString();
             component.meshPackId = entry.getProperty("meshPackId").toString();
             component.meshPackVersion = entry.getProperty("meshPackVersion").toString();
+            component.meshNodeIndex = static_cast<int>(entry.getProperty("meshNodeIndex", -1));
+            component.meshNodeName = entry.getProperty("meshNodeName").toString();
+            component.meshLocalTransform = restoreTransform(entry.getChildWithName("MeshLocalTransform"));
         } else if (kindToken == "Pod") {
             component.kind = ObjectComponentKind::Pod;
             component.podId = entry.getProperty("podId").toString();
@@ -194,20 +185,48 @@ entt::entity instantiateDefinition(engine::World& world, const ObjectDefinitionC
 
     // One pass over the uniform component list: Pod entries accumulate
     // into BehaviorAttachments (still unconditionally emplaced below, even
-    // if empty -- matches prior behavior exactly), the first non-empty
-    // Mesh entry becomes this entity's MeshAssetReference (today's single-
-    // mesh-slot semantics preserved; multiple Mesh entries on one
-    // definition is a future concern, not handled here), Child entries are
-    // recursed after the entity itself is fully built.
+    // if empty -- matches prior behavior exactly), the first non-empty Mesh
+    // entry becomes this entity's own MeshAssetReference (today's single-
+    // mesh-slot semantics preserved exactly WHEN there's exactly one Mesh
+    // component -- its meshLocalTransform is identity by construction in
+    // that case, so attaching it directly costs nothing. A multi-part
+    // definition (docs/OBJECT_MODEL.md's "Multi-part import decomposes
+    // into components") is different: which mesh-bearing node happened to
+    // be found first is an accident of file order, not a meaningful
+    // "root" -- attaching just that one directly to `entity` would apply
+    // its own file-relative offset only some of the time (whenever it's
+    // non-identity) while every OTHER part gets it correctly. So once
+    // there's more than one Mesh component, NONE of them attaches to
+    // `entity` directly -- every one spawns its own child entity (Transform
+    // composed against this entity's), and `entity` itself carries no
+    // MeshAssetReference at all. Child (kind == Child) entries are
+    // recursed separately, after this loop.
+    int meshComponentCount = 0;
+    for (const auto& component : definition.components) {
+        if (component.kind == ObjectComponentKind::Mesh && component.meshAssetId.isNotEmpty()) ++meshComponentCount;
+    }
+
     BehaviorAttachments attachments;
-    bool meshAssigned = false;
     for (const auto& component : definition.components) {
         if (component.kind == ObjectComponentKind::Pod) {
             attachments.podIds.push_back(component.podId);
-        } else if (component.kind == ObjectComponentKind::Mesh && !meshAssigned && component.meshAssetId.isNotEmpty()) {
-            registry.emplace<MeshAssetReference>(entity, MeshAssetReference{
-                component.meshAssetId, component.meshAssetVersionId, component.meshPackId, component.meshPackVersion });
-            meshAssigned = true;
+        } else if (component.kind == ObjectComponentKind::Mesh && component.meshAssetId.isNotEmpty()) {
+            if (meshComponentCount == 1) {
+                registry.emplace<MeshAssetReference>(entity, MeshAssetReference{
+                    component.meshAssetId, component.meshAssetVersionId, component.meshPackId, component.meshPackVersion,
+                    component.meshNodeIndex, component.meshNodeName });
+            } else {
+                const auto meshEntity = world.CreateEntity();
+                registry.emplace<Name>(meshEntity, Name{ component.meshNodeName.isNotEmpty() ? component.meshNodeName
+                                                                                              : definition.displayName });
+                registry.emplace<Transform>(meshEntity, composeTransform(transform, component.meshLocalTransform));
+                registry.emplace<SceneFlags>(meshEntity, flags);
+                registry.emplace<Parent>(meshEntity, Parent{ entity });
+                registry.emplace<MeshAssetReference>(meshEntity, MeshAssetReference{
+                    component.meshAssetId, component.meshAssetVersionId, component.meshPackId, component.meshPackVersion,
+                    component.meshNodeIndex, component.meshNodeName });
+                result.entities.push_back(meshEntity);
+            }
         }
     }
     registry.emplace<BehaviorAttachments>(entity, std::move(attachments));
@@ -235,6 +254,21 @@ entt::entity instantiateDefinition(engine::World& world, const ObjectDefinitionC
     return entity;
 }
 } // namespace
+
+engine::Transform composeTransform(const engine::Transform& parent, const engine::Transform& local)
+{
+    engine::Transform result = local;
+    result.position.x += parent.position.x;
+    result.position.y += parent.position.y;
+    result.position.z += parent.position.z;
+    result.eulerRotationRadians.x += parent.eulerRotationRadians.x;
+    result.eulerRotationRadians.y += parent.eulerRotationRadians.y;
+    result.eulerRotationRadians.z += parent.eulerRotationRadians.z;
+    result.scale.x *= parent.scale.x;
+    result.scale.y *= parent.scale.y;
+    result.scale.z *= parent.scale.z;
+    return result;
+}
 
 bool ObjectDefinitionCatalog::upsert(ObjectDefinition definition, juce::String& error)
 {

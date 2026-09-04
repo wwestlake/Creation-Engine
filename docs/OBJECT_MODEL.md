@@ -71,23 +71,41 @@ a "real" object. Any component can carry pod-behavior. Nothing about
 having a position or housing children is a prerequisite for having
 behavior, and nothing about having behavior implies a position.
 
-## Where the current implementation still violates this
+## Where the current implementation matches this (fixed)
 
-`ObjectDefinition` (`Source/Scene/ObjectDefinitions.h`) hard-codes three
-separately-typed slots -- `meshAssetId` (a field), `behaviorPods` (its own
-list), `children` (another list) -- instead of one uniform list of typed
-component entries. That is the exact arbitrary category distinction this
-model rejects, reintroduced one level above the ECS runtime, which
-already gets this right at the data level (an `entt::entity` is genuinely
-just an orthogonal bag of components with no inherent type). Collapsing
-`ObjectDefinition` down to "a list of components" is the concrete,
-implied fix here -- not yet done.
+`ObjectDefinition` (`Source/Scene/ObjectDefinitions.h`) used to hard-code
+three separately-typed slots -- `meshAssetId` (a field), `behaviorPods`
+(its own list), `children` (another list). That was the exact arbitrary
+category distinction this model rejects. It's been collapsed into one
+uniform `std::vector<ObjectComponentEntry>`, tagged by
+`ObjectComponentKind::{Mesh, Pod, Child}` -- a mesh reference, an attached
+Pod, and a nested child object are now the same kind of list entry.
 
-The current "object definitions are recipes, object instances are live
-entities created from a definition" split (below) describes today's real
-code, not the target model. It should be read as the mechanism that
-needs to be reshaped to fit the model above, not as a second, competing
-description of what's correct.
+## Multi-part import decomposes into components, not one blob
+
+A source file with multiple mesh parts (each with its own transform
+relative to a parent, e.g. a vehicle model with 26 separate pieces) is
+not one mesh -- it's a component housing multiple mesh-components, each
+carrying its own position. Import reflects this directly: a multi-node
+model produces one Object Definition with one Mesh-kind component per
+mesh-bearing node, each with its own relative transform, rather than
+flattening everything into a single mesh (the old, wrong behavior -- it
+silently discarded every part past the first).
+
+Two accepted limitations of this, named here so they stay tracked rather
+than rediscovered later:
+
+- **Node-index addressing is order-dependent.** A part is addressed as
+  "node N of asset X." Re-exporting a file with reordered nodes silently
+  repoints existing placed instances at the wrong part. A node name is
+  stored as a display/fallback value, but there's no automatic
+  reconciliation-by-name.
+- **`composeTransform` is additive, not a real matrix composition** -- it
+  adds positions and rotations and multiplies scale; it does not rotate a
+  child's offset by its parent's orientation. This was already a latent
+  approximation for nested Child definitions; multi-part import exposes
+  it far more often, for any source rig with a rotated intermediate node.
+  A real fix is matrix-based composition -- future work, not yet built.
 
 ## Today's mechanism (real, working, not yet reshaped)
 

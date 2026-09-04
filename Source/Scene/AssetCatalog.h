@@ -96,6 +96,22 @@ public:
     // need to hop via OpenGLContext::executeOnGLThread first.
     bool AddFromModel(const juce::String& name, const LoadedModel& model, creation::assets::VirtualFileSystem* vfs = nullptr);
 
+    // Same as AddFromModel, but builds from ONE mesh-bearing node of a
+    // multi-part model instead of always the file's first primitive --
+    // see docs/OBJECT_MODEL.md's "Multi-part import decomposes into
+    // components". nodeIndex indexes LoadedModel::nodes; the node's own
+    // meshIndex resolves which primitive range (LoadedModel::
+    // meshPrimitiveRanges) to build from. Returns false if nodeIndex is
+    // out of range or that node has no mesh.
+    bool AddNodeFromModel(const juce::String& name, const LoadedModel& model, int nodeIndex,
+                          creation::assets::VirtualFileSystem* vfs = nullptr);
+
+    // Runtime cache key for one part of a multi-part durable asset --
+    // AddNodeFromModel/Find callers use this instead of the bare assetId
+    // whenever nodeIndex >= 0 (see MeshAssetReference::nodeIndex).
+    [[nodiscard]] static juce::String NodeAssetKey(const juce::String& assetId, const juce::String& versionId,
+                                                    int nodeIndex);
+
     // Registers an already-built mesh/material pair under `name`,
     // overwriting any existing asset with that name -- the generic
     // primitive AddProcedural/AddFromModel are themselves effectively
@@ -189,6 +205,12 @@ public:
 private:
     void AddProcedural(const juce::String& name, const std::vector<Vertex>& vertices,
                         const std::vector<GLuint>& indices, juce::Vector3D<float> albedo);
+
+    // Shared body of AddFromModel/AddNodeFromModel -- builds mesh/
+    // material/texture/skeleton/animations from ONE primitive of an
+    // already-parsed model and registers the result under `name`.
+    bool BuildAssetFromPrimitive(const juce::String& name, const LoadedModel& model, std::size_t primitiveIndex,
+                                 creation::assets::VirtualFileSystem* vfs);
 
     std::unordered_set<std::string> loadedPacks_;
     mutable std::mutex mutex_;

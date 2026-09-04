@@ -3,11 +3,14 @@
 #include <creation/assets/ProjectAssetService.h>
 
 #include "Assets/ProjectContentAssetStore.h"
+#include "Diagnostics/EngineLog.h"
 #include "Render/Import/GltfLoader.h"
 #include "Render/ViewportComponent.h"
 #include "Scene/AnimationSlicer.h"
 #include "Scene/AssetCatalog.h"
 #include "Scene/Components.h"
+#include "Scene/ObjectDefinitionNaming.h"
+#include "Scene/ObjectDefinitions.h"
 
 namespace ce::import {
 
@@ -67,6 +70,89 @@ void ApplyAnimationImportOptions(LoadedModel& model, const AnimationImportOption
     }
 }
 
+// A source file with more than one mesh-bearing node decomposes into one
+// Object Definition, one Mesh-kind component per mesh-bearing node -- see
+// docs/OBJECT_MODEL.md's "Multi-part import decomposes into components".
+// A single-mesh (or zero-mesh) file is a silent no-op (returns an empty
+// string): no definition is created, exactly today's pre-multi-part
+// behavior. `meshAssetId` is the asset's DURABLE id (stable across
+// Reimport's version bumps), not its version -- so re-detecting the same
+// asset on Reimport finds and updates the same definition rather than
+// creating a duplicate. A failure here does NOT fail the whole import --
+// the durable render asset itself is already safely stored either way by
+// the time this runs -- but IS returned as text so it lands in the
+// importer's own result message instead of disappearing silently (this
+// used to only go to std::cout, which a windowed app with no attached
+// console never shows anyone).
+juce::String MaybeBuildMultiPartDefinition(scene::ObjectDefinitionCatalog& catalog, creation::assets::ProjectSession& session,
+                                           const LoadedModel& model, const juce::String& meshAssetId,
+                                           const juce::String& meshAssetVersionId, const juce::String& displayName) {
+    std::vector<int> meshNodeIndices;
+    for (std::size_t i = 0; i < model.nodes.size(); ++i) {
+        if (model.nodes[i].meshIndex >= 0) meshNodeIndices.push_back(static_cast<int>(i));
+    }
+    if (meshNodeIndices.size() <= 1) {
+        diagnostics::EngineLog::Info("Import", displayName + ": " + juce::String(static_cast<int>(meshNodeIndices.size())) +
+                                                    " mesh-bearing node(s) -- single-mesh, no Object Definition needed.");
+        return {};
+    }
+
+    scene::ObjectDefinition definition;
+    const auto existingId = scene::FindWrapperDefinitionForRenderAsset(catalog, meshAssetId);
+    definition.id = existingId.isNotEmpty() ? existingId : scene::GenerateWrapperDefinitionName(catalog, displayName);
+    definition.displayName = displayName;
+
+    for (const int nodeIndex : meshNodeIndices) {
+        // Walk this node's parent chain up to the file's own root, then
+        // compose top-down -- meshLocalTransform ends up relative to the
+        // file's root, matching what instantiateDefinition composes it
+        // against (the definition root entity's own transform).
+        std::vector<int> chain;
+        for (int idx = nodeIndex; idx != -1; idx = model.nodes[static_cast<std::size_t>(idx)].parentIndex) {
+            chain.push_back(idx);
+        }
+        std::reverse(chain.begin(), chain.end());
+
+        engine::Transform composed;
+        for (const int idx : chain) {
+            const auto& node = model.nodes[static_cast<std::size_t>(idx)];
+            engine::Transform local;
+            local.position = { node.localTranslation.x, node.localTranslation.y, node.localTranslation.z };
+            local.eulerRotationRadians = { node.localEulerRotationRadians.x, node.localEulerRotationRadians.y,
+                                           node.localEulerRotationRadians.z };
+            local.scale = { node.localScale.x, node.localScale.y, node.localScale.z };
+            composed = scene::composeTransform(composed, local);
+        }
+
+        scene::ObjectComponentEntry component;
+        component.kind = scene::ObjectComponentKind::Mesh;
+        component.meshAssetId = meshAssetId;
+        component.meshAssetVersionId = meshAssetVersionId;
+        component.meshNodeIndex = nodeIndex;
+        component.meshNodeName = model.nodes[static_cast<std::size_t>(nodeIndex)].name;
+        component.meshLocalTransform = composed;
+        definition.components.push_back(std::move(component));
+    }
+
+    juce::String upsertError;
+    if (!catalog.upsert(definition, upsertError)) {
+        diagnostics::EngineLog::Error("Import", "Could not build multi-part Object Definition for " + displayName + ": " +
+                                                     upsertError);
+        return " Could not build its multi-part Object Definition: " + upsertError;
+    }
+    juce::String saveError;
+    if (!catalog.Save(session, definition.id, saveError)) {
+        diagnostics::EngineLog::Error("Import", "Built Object Definition \"" + definition.id + "\" for " + displayName +
+                                                     " but could not save it: " + saveError);
+        return " Built Object Definition \"" + definition.id + "\" but could not save it: " + saveError;
+    }
+    diagnostics::EngineLog::Info("Import", "Created Object Definition \"" + definition.id + "\" (" +
+                                                juce::String(static_cast<int>(meshNodeIndices.size())) + " parts) for " +
+                                                displayName + ".");
+    return " Also created Object Definition \"" + definition.id + "\" (" +
+           juce::String(static_cast<int>(meshNodeIndices.size())) + " parts).";
+}
+
 } // namespace
 
 ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportContext& context) {
@@ -109,11 +195,17 @@ ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportConte
         ! context.catalog->AddAlias(sourceDescriptor.id, assetName))
         return ImportResult::Failed("The imported model could not be registered with its project asset identity.");
 
+    juce::String objectDefinitionNote;
+    if (context.objectDefinitions != nullptr) {
+        objectDefinitionNote = MaybeBuildMultiPartDefinition(*context.objectDefinitions, *context.projectSession, model,
+                                                             sourceDescriptor.id, sourceDescriptor.versionId, assetName);
+    }
+
     // Import only stages the asset in the catalog -- it does NOT place an
     // instance in the scene. Placing is a separate, deliberate action
     // (Hierarchy's "+ Add", or Content Browser once models get the same
     // place-from-catalog treatment as Pods/Object Definitions).
-    return ImportResult::Ok(assetName + " stored in project content." + animationNote);
+    return ImportResult::Ok(assetName + " stored in project content." + animationNote + objectDefinitionNote);
 }
 
 ImportResult GltfAssetImporter::Reimport(const juce::File& sourceFile,
@@ -152,7 +244,13 @@ ImportResult GltfAssetImporter::Reimport(const juce::File& sourceFile,
         ! context.catalog->AddAlias(newDescriptor.id, existingAsset.displayName))
         return ImportResult::Failed("The reimported model could not be re-registered with its project asset identity.");
 
-    return ImportResult::Ok(existingAsset.displayName + " updated to a new version." + animationNote);
+    juce::String objectDefinitionNote;
+    if (context.objectDefinitions != nullptr) {
+        objectDefinitionNote = MaybeBuildMultiPartDefinition(*context.objectDefinitions, *context.projectSession, model,
+                                                             newDescriptor.id, newDescriptor.versionId, existingAsset.displayName);
+    }
+
+    return ImportResult::Ok(existingAsset.displayName + " updated to a new version." + animationNote + objectDefinitionNote);
 }
 
 } // namespace ce::import

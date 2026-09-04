@@ -70,6 +70,8 @@ juce::ValueTree EngineSceneSerializer::serializeScene(ce::engine::World& world)
             entityNode.setProperty("meshAssetVersionId", meshAsset->versionId, nullptr);
             entityNode.setProperty("meshPackId", meshAsset->packId, nullptr);
             entityNode.setProperty("meshPackVersion", meshAsset->packVersion, nullptr);
+            entityNode.setProperty("meshNodeIndex", meshAsset->nodeIndex, nullptr);
+            entityNode.setProperty("meshNodeName", meshAsset->nodeName, nullptr);
         }
 
         if (auto* tint = reg.try_get<engine::Tint>(entity))
@@ -170,7 +172,9 @@ bool EngineSceneSerializer::restoreScene(ce::engine::World& world, const juce::V
                 meshAssetId,
                 entityNode.getProperty("meshAssetVersionId").toString(),
                 entityNode.getProperty("meshPackId").toString(),
-                entityNode.getProperty("meshPackVersion").toString() });
+                entityNode.getProperty("meshPackVersion").toString(),
+                static_cast<int>(entityNode.getProperty("meshNodeIndex", -1)),
+                entityNode.getProperty("meshNodeName").toString() });
 
         if (const auto tintNode = entityNode.getChildWithName("Tint"); tintNode.isValid())
         {

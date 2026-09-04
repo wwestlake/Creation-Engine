@@ -40,6 +40,20 @@ struct ObjectComponentEntry
     juce::String meshPackId;
     juce::String meshPackVersion;
 
+    // Which part of the source model this entry addresses -- see
+    // docs/OBJECT_MODEL.md's "Multi-part import decomposes into
+    // components" section. -1 means "whole model / first primitive",
+    // today's exact single-mesh behavior; a multi-part import (one entry
+    // per mesh-bearing node) sets this to that node's index. Addressing is
+    // by index, not name -- meshNodeName is a display/fallback value only,
+    // with the accepted order-dependence limitation the doc names.
+    int meshNodeIndex = -1;
+    juce::String meshNodeName;
+    // This node's transform relative to the definition's root, precomputed
+    // at import time by composing the node's parent chain (see
+    // composeTransform). Identity for meshNodeIndex == -1.
+    engine::Transform meshLocalTransform;
+
     // kind == Pod
     juce::String podId;
 
@@ -90,6 +104,13 @@ public:
 private:
     std::unordered_map<std::string, ObjectDefinition> definitions;
 };
+
+// Composes a child's transform relative to its parent's world transform.
+// Additive, not a real matrix composition (see docs/OBJECT_MODEL.md's
+// "Multi-part import decomposes into components" section for the accepted
+// limitation this implies) -- shared by ObjectFactory::instantiate and
+// GltfAssetImporter's node-parent-chain walk so both use identical math.
+engine::Transform composeTransform(const engine::Transform& parent, const engine::Transform& child);
 
 struct ObjectInstantiationResult
 {

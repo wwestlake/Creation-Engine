@@ -212,6 +212,16 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/PodInfoPanel.cpp
     Source/Views/ObjectDefinitionEditorPanel.h
     Source/Views/ObjectDefinitionEditorPanel.cpp
+    Source/Views/TransformFieldEditor.h
+    Source/Views/TransformFieldEditor.cpp
+    Source/Views/LogPanel.h
+    Source/Views/LogPanel.cpp
+    Source/Diagnostics/EngineLog.h
+    Source/Diagnostics/EngineLog.cpp
+    Source/Diagnostics/JuceLoggerBridge.h
+    Source/Diagnostics/JuceLoggerBridge.cpp
+    Source/Diagnostics/EngineLogVfsWriter.h
+    Source/Diagnostics/EngineLogVfsWriter.cpp
     Source/Views/BehaviorAttachmentPanel.h
     Source/Views/BehaviorAttachmentPanel.cpp
     Source/Runtime/GameClientWindow.h
@@ -239,6 +249,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Scene/EngineSceneSerializer.cpp
     Source/Scene/ObjectDefinitions.h
     Source/Scene/ObjectDefinitions.cpp
+    Source/Scene/ObjectDefinitionNaming.h
+    Source/Scene/ObjectDefinitionNaming.cpp
     Source/Scene/AssetCatalog.h
     Source/Scene/AssetCatalog.cpp
     Source/Scene/AssetPlacement.h
@@ -375,6 +387,7 @@ add_executable(CreationEngineObjectDefinitionSmoke
 target_include_directories(CreationEngineObjectDefinitionSmoke PRIVATE Source)
 target_link_libraries(CreationEngineObjectDefinitionSmoke PRIVATE
     engine_core
+    creation_suite_asset_system
     juce::juce_core
     juce::juce_graphics
     juce::juce_opengl

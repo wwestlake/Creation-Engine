@@ -552,6 +552,7 @@ void ContentBrowserPanel::RunReimport(const creation::assets::AssetDescriptor& l
     context.projectSession = projectSession_;
     context.audioCatalog = &importPanel_.GetAudioCatalog();
     context.audioFormatManager = &importPanel_.GetAudioFormatManager();
+    context.objectDefinitions = &objectDefinitions_;
 
     const auto result = importer->Reimport(sourceFile, latest, context);
     if (!result.success) {

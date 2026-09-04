@@ -11,6 +11,8 @@
 
 namespace creation::assets { class ProjectSession; }
 
+namespace ce::scene { class ObjectDefinitionCatalog; }
+
 namespace ce {
 
 // AI1/AI2: the Import Hub shell. Accepts files dragged in from the OS
@@ -58,6 +60,30 @@ public:
     void filesDropped(const juce::StringArray& files, int x, int y) override;
 
     void SetProjectContent(creation::assets::ProjectSession* session, const juce::String& gameAssetRoot);
+
+    // Lets GltfAssetImporter author a multi-part Object Definition
+    // directly at import time (docs/OBJECT_MODEL.md's "Multi-part import
+    // decomposes into components") -- MainComponent calls this once,
+    // handing over its own objectDefinitions_ catalog, the same one the
+    // Content Browser and Object Definition Editor already read from.
+    void SetObjectDefinitions(scene::ObjectDefinitionCatalog* catalog) { context_.objectDefinitions = catalog; }
+
+    // ImportPanel itself is never mounted as a visible dock panel anymore
+    // (Content Browser owns import/export/browse/place -- see
+    // MainComponent's registerPanel comment) -- which means log_ below,
+    // this class's only existing "here's what just happened" surface, is
+    // never on screen. Every line AppendLogLine writes also fires this,
+    // so whoever DOES have a visible status surface (MainComponent's
+    // header bar) can show it. Without this, an import's success/failure
+    // -- including whether GltfAssetImporter built a multi-part Object
+    // Definition -- is completely invisible.
+    std::function<void(const juce::String&)> onLogLine;
+
+    // Fired after any file's Import() succeeds (not on failure -- nothing
+    // new exists to show for a failed import). ContentBrowserPanel has no
+    // other way to learn an import just added something, since it isn't
+    // otherwise connected to ImportPanel's own drop/browse flow.
+    std::function<void()> onContentChanged;
 
     // Opens a native file picker and imports whatever's chosen through the
     // exact same path filesDropped() uses -- drag-and-drop was the only

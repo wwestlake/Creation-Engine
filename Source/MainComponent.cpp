@@ -6,8 +6,10 @@
 #include <creation/services/SuiteVfsJsonStore.h>
 
 #include <creation/ui/CreationSuiteLogos.h>
+#include "Diagnostics/EngineLog.h"
 #include "Scene/Components.h"
 #include "Scene/EngineSceneSerializer.h"
+#include "Scene/ObjectDefinitionNaming.h"
 #include "Project/EngineGameDocument.h"
 #include "engine/foundation_gameplay.h"
 
@@ -67,45 +69,6 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NonOwningPanelHost)
 };
 
-// Same first-free-numbered-slot dedup shape as ContentBrowserPanel.cpp's
-// GenerateDefaultObjectDefinitionName, seeded from a real name (the
-// dropped mesh's display name) instead of the generic "New Object
-// Definition" -- so a mesh dragged in twice reuses one definition (see
-// FindPureMeshWrapperDefinition below) and a genuinely new name only
-// takes this path once.
-juce::String GenerateWrapperDefinitionName(const ce::scene::ObjectDefinitionCatalog& catalog, const juce::String& baseName)
-{
-    const auto existing = catalog.ids();
-    auto isTaken = [&](const juce::String& candidate) {
-        return std::any_of(existing.begin(), existing.end(),
-                            [&](const juce::String& id) { return id.equalsIgnoreCase(candidate); });
-    };
-    if (!isTaken(baseName)) return baseName;
-    for (int i = 2; i < 1000; ++i) {
-        const auto candidate = baseName + " " + juce::String(i);
-        if (!isTaken(candidate)) return candidate;
-    }
-    return baseName + " " + juce::String(juce::Time::currentTimeMillis());
-}
-
-// Finds an existing Object Definition that's a pure single-mesh wrapper
-// for `meshAssetId` -- exactly one component, a Mesh entry matching this
-// asset, nothing else -- so dragging the same raw mesh in twice reuses
-// one definition rather than creating a near-duplicate each time. A
-// definition with additional components (a Pod, a Child) is deliberately
-// NOT matched here even if one of its components happens to reference
-// this mesh -- reusing someone's hand-built, richer definition just
-// because it shares a mesh would be a surprising, wrong guess.
-juce::String FindPureMeshWrapperDefinition(const ce::scene::ObjectDefinitionCatalog& catalog, const juce::String& meshAssetId)
-{
-    for (const auto& id : catalog.ids()) {
-        const auto* definition = catalog.find(id);
-        if (definition == nullptr || definition->components.size() != 1) continue;
-        const auto& only = definition->components.front();
-        if (only.kind == ce::scene::ObjectComponentKind::Mesh && only.meshAssetId == meshAssetId) return id;
-    }
-    return {};
-}
 }
 
 MainComponent::MainComponent()
@@ -120,6 +83,17 @@ MainComponent::MainComponent()
     // See suiteProcessRegistration_'s header comment: this is what keeps
     // CreationSuiteVfsService alive while this app is actually running.
     suiteProcessRegistration_.RegisterSelf("CreationEngine");
+    importPanel_.SetObjectDefinitions(&objectDefinitions_);
+    // ImportPanel is never mounted as a visible panel (Content Browser owns
+    // import UI now) -- its own log_ would otherwise be invisible. Route
+    // every import result line into the real engine log instead (visible
+    // in the Log window, and persisted to the project's VFS) rather than
+    // a transient status-bar line.
+    importPanel_.onLogLine = [](const juce::String& line) { ce::diagnostics::EngineLog::Info("Import", line); };
+    importPanel_.onContentChanged = [this] { contentBrowserPanel_.Refresh(); };
+    // See engineLogVfsWriter_'s own header comment for why this is a
+    // one-time call, not something re-wired on every project open/close.
+    engineLogVfsWriter_.SetSession(&projectSession_);
 
     commandManager_.registerAllCommandsForTarget(this);
     commandManager_.getKeyMappings()->addKeyPress(
@@ -526,6 +500,7 @@ void MainComponent::initialiseDockingWorkspace()
     // "server"/"settings" not registered -- see kDockPanelMenuEntries'
     // comment above.
     dockManager_->registerPanel("runtime-status", "Runtime Status", std::make_unique<NonOwningPanelHost>(tickLabel_), CreationDock::DockTargetZone::Bottom);
+    dockManager_->registerPanel("log", "Log", std::make_unique<NonOwningPanelHost>(logPanel_), CreationDock::DockTargetZone::Bottom);
 }
 
 void MainComponent::EnsurePodPanelsOpen() {
@@ -799,10 +774,10 @@ void MainComponent::HandleAssetDropped(const juce::String& description, juce::Po
     // reopenable object identity, same as any hand-built Object Definition.
     juce::String definitionId;
     if (kind == creation::assets::AssetKind::render) {
-        definitionId = FindPureMeshWrapperDefinition(objectDefinitions_, id);
+        definitionId = ce::scene::FindWrapperDefinitionForRenderAsset(objectDefinitions_, id);
         if (definitionId.isEmpty()) {
             ce::scene::ObjectDefinition wrapper;
-            wrapper.id = GenerateWrapperDefinitionName(objectDefinitions_, displayName);
+            wrapper.id = ce::scene::GenerateWrapperDefinitionName(objectDefinitions_, displayName);
             wrapper.displayName = displayName;
             ce::scene::ObjectComponentEntry meshComponent;
             meshComponent.kind = ce::scene::ObjectComponentKind::Mesh;

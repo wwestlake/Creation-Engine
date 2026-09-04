@@ -43,6 +43,17 @@ private:
     void AddPod();
     void PickChildDefinition();
     void RemoveComponentAt(int index);
+    // Opens a juce::CallOutBox anchored on `anchor`, hosting a
+    // TransformFieldEditor seeded from components_[index]'s Mesh/Child
+    // local transform -- writes straight back into components_[index] on
+    // every change (Save() picks it up like any other field). Mesh-kind
+    // rows only: whether meshLocalTransform is actually applied at
+    // instantiation depends on how many Mesh components this definition
+    // has (see ObjectFactory::instantiate's own comment) -- editing it
+    // here is always meaningful for a Child-kind row, and becomes
+    // meaningful for a Mesh-kind row the moment a second Mesh component
+    // exists.
+    void EditComponentTransformAt(int index, juce::Component* anchor);
     void SaveContent();
     void RefreshComponentRows();
 

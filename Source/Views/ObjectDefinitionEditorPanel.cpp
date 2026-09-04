@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "Views/TransformFieldEditor.h"
+
 namespace ce::views
 {
 
@@ -9,13 +11,22 @@ namespace ce::views
 // prefixed, e.g. "Mesh: Barrel", "Pod: Rotator", "Child: TableLamp"), plus
 // Remove. One row shape serves all three kinds -- per docs/OBJECT_MODEL.md
 // they're the same kind of list entry, distinguished only by what they
-// reference, not by having different UI.
+// reference, not by having different UI. Mesh/Child rows additionally get
+// a "Transform..." button (Pod rows have no position of their own, per
+// docs/OBJECT_MODEL.md's "some components carry a position, some don't").
 class ObjectDefinitionEditorPanel::ComponentRow final : public juce::Component {
 public:
-    ComponentRow(ObjectDefinitionEditorPanel& owner, int index, juce::String displayText) : owner_(owner), index_(index) {
+    ComponentRow(ObjectDefinitionEditorPanel& owner, int index, juce::String displayText, bool hasTransform)
+        : owner_(owner), index_(index), hasTransform_(hasTransform) {
         label_.setText(displayText, juce::dontSendNotification);
         label_.setColour(juce::Label::textColourId, juce::Colours::white);
         addAndMakeVisible(label_);
+
+        transformButton_.setVisible(hasTransform_);
+        if (hasTransform_) {
+            transformButton_.onClick = [this] { owner_.EditComponentTransformAt(index_, &transformButton_); };
+        }
+        addAndMakeVisible(transformButton_);
 
         removeButton_.onClick = [this] { owner_.RemoveComponentAt(index_); };
         addAndMakeVisible(removeButton_);
@@ -24,13 +35,16 @@ public:
     void resized() override {
         auto bounds = getLocalBounds();
         removeButton_.setBounds(bounds.removeFromRight(24).reduced(1));
+        if (hasTransform_) transformButton_.setBounds(bounds.removeFromRight(88).reduced(2, 1));
         label_.setBounds(bounds);
     }
 
 private:
     ObjectDefinitionEditorPanel& owner_;
     int index_;
+    bool hasTransform_;
     juce::Label label_;
+    juce::TextButton transformButton_{ "Transform..." };
     juce::TextButton removeButton_{ "x" };
 };
 
@@ -202,10 +216,38 @@ void ObjectDefinitionEditorPanel::RefreshComponentRows() {
                 displayText = "Child: " + component.childDefinitionId;
                 break;
         }
-        auto* row = componentRows_.add(new ComponentRow(*this, static_cast<int>(i), displayText));
+        const bool hasTransform = component.kind == scene::ObjectComponentKind::Mesh ||
+                                  component.kind == scene::ObjectComponentKind::Child;
+        auto* row = componentRows_.add(new ComponentRow(*this, static_cast<int>(i), displayText, hasTransform));
         addAndMakeVisible(row);
     }
     resized();
+}
+
+void ObjectDefinitionEditorPanel::EditComponentTransformAt(int index, juce::Component* anchor) {
+    if (index < 0 || static_cast<std::size_t>(index) >= components_.size() || anchor == nullptr) return;
+
+    const auto& component = components_[static_cast<std::size_t>(index)];
+    const bool isMesh = component.kind == scene::ObjectComponentKind::Mesh;
+    if (!isMesh && component.kind != scene::ObjectComponentKind::Child) return;
+
+    auto editor = std::make_unique<TransformFieldEditor>();
+    editor->SetValue(isMesh ? component.meshLocalTransform : component.childLocalTransform);
+    // Re-indexes into components_ on every change rather than capturing a
+    // pointer into it -- Add/Remove Component can reallocate that vector
+    // while this popup is still open, which would leave a captured
+    // pointer dangling. Bounds/kind-checked every time too, in case the
+    // row was removed (or OpenDefinition switched to a different
+    // definition entirely) while the popup was still up.
+    auto* editorPtr = editor.get();
+    editor->onChange = [this, editorPtr, index, isMesh] {
+        if (index < 0 || static_cast<std::size_t>(index) >= components_.size()) return;
+        auto& target = components_[static_cast<std::size_t>(index)];
+        if (isMesh && target.kind == scene::ObjectComponentKind::Mesh) target.meshLocalTransform = editorPtr->GetValue();
+        else if (!isMesh && target.kind == scene::ObjectComponentKind::Child) target.childLocalTransform = editorPtr->GetValue();
+    };
+
+    juce::CallOutBox::launchAsynchronously(std::move(editor), anchor->getScreenBounds(), nullptr);
 }
 
 void ObjectDefinitionEditorPanel::SaveContent() {
