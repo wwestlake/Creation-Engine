@@ -104,6 +104,25 @@ struct Parent {
 // only used to group other entities in the hierarchy panel.
 struct Folder {};
 
+// Marks the one entity that IS the currently-loaded Scene itself -- a real
+// Thing with its own metric (Transform), not a privileged engine concept
+// (see docs/OBJECT_MODEL.md's "Entity, Thing, Object" section). Every
+// entity with no Parent of its own is positioned relative to this one's
+// Transform, exactly the same "houses" composition any other parent
+// entity provides -- a Scene is not a special case of the hierarchy, it's
+// just the one entity everything else in it, directly or indirectly,
+// traces its Parent chain back to.
+//
+// Synthesized fresh by EngineGameDocumentStore::loadScene on every load,
+// never persisted (EngineSceneSerializer::serializeScene skips entities
+// carrying this) -- there is exactly one per loaded World, always
+// reconstructible from the SceneDocumentInfo already being loaded, so
+// there's nothing here worth the round-trip complexity of persisting and
+// re-detecting it.
+struct SceneRoot {
+    juce::String sceneId;
+};
+
 // Per-entity editor flags, attached to every entity/folder at creation
 // time (so nothing has to special-case "missing SceneFlags = default").
 // Flat, not cascading — locking or hiding a folder doesn't currently

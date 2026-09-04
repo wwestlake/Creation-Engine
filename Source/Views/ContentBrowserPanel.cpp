@@ -319,6 +319,12 @@ ContentBrowserPanel::ContentBrowserPanel(ViewportComponent& viewport, ImportPane
     // before a project is open or before any asset of that kind exists.
     FindOrCreateSection(creation::assets::AssetKind::pod);
     FindOrCreateSection(creation::assets::AssetKind::objectDefinition);
+    // Game/Scene get no right-click "New" here (see HasCreationMenu) --
+    // creation stays where it already lives, the File menu / ExplorerPanel's
+    // New Game/New Scene buttons -- but still always-present sections, same
+    // reasoning as Pod/Object Definition above.
+    FindOrCreateSection(creation::assets::AssetKind::game);
+    FindOrCreateSection(creation::assets::AssetKind::scene);
 }
 
 ContentBrowserPanel::~ContentBrowserPanel() = default;
@@ -359,6 +365,8 @@ void ContentBrowserPanel::Refresh() {
     std::unordered_map<creation::assets::AssetKind, std::vector<creation::assets::AssetDescriptor>> byKind;
     byKind[creation::assets::AssetKind::pod]; // always present, even filtered/empty.
     byKind[creation::assets::AssetKind::objectDefinition]; // same.
+    byKind[creation::assets::AssetKind::game]; // same.
+    byKind[creation::assets::AssetKind::scene]; // same.
     for (const auto& [id, descriptor] : latestById) {
         if (filterText.isNotEmpty() && !descriptor.displayName.containsIgnoreCase(filterText)) continue;
         byKind[descriptor.kind].push_back(descriptor);
@@ -376,7 +384,9 @@ void ContentBrowserPanel::Refresh() {
     for (int i = sections_.size() - 1; i >= 0; --i) {
         auto* section = sections_.getUnchecked(i);
         const bool alwaysStays = section->Kind() == creation::assets::AssetKind::pod ||
-                                  section->Kind() == creation::assets::AssetKind::objectDefinition;
+                                  section->Kind() == creation::assets::AssetKind::objectDefinition ||
+                                  section->Kind() == creation::assets::AssetKind::game ||
+                                  section->Kind() == creation::assets::AssetKind::scene;
         if (!alwaysStays && section->IsEmpty()) sections_.remove(i);
     }
 
@@ -470,6 +480,19 @@ void ContentBrowserPanel::DeleteAsset(const creation::assets::AssetDescriptor& l
 
 void ContentBrowserPanel::PerformDelete(const creation::assets::AssetDescriptor& latest) {
     if (projectSession_ == nullptr) return;
+
+    // Game/Scene need the games.xml cascade (reassigning entrySceneId,
+    // rejecting a Game/project's last remaining Scene/Game, removing every
+    // scene under a deleted game) -- not the generic per-version removal
+    // below, which knows nothing about that structure.
+    if (latest.kind == creation::assets::AssetKind::game) {
+        if (onGameDeleteRequested) onGameDeleteRequested(latest.id);
+        return;
+    }
+    if (latest.kind == creation::assets::AssetKind::scene) {
+        if (onSceneDeleteRequested) onSceneDeleteRequested(latest.id);
+        return;
+    }
 
     // Every version, not just the latest -- "delete" per this project's
     // stated intent (no recycle bin) means gone, not "gone except for the

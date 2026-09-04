@@ -34,6 +34,14 @@ public:
     std::function<void()> onCreateSceneRequested;
     std::function<void()> onSaveRequested;
 
+    // Right-click "Rename..." on a Game/Scene row -- ExplorerPanel only
+    // detects the request and identifies the target; MainComponent shows
+    // the actual name-prompt and calls EngineGameDocumentStore::
+    // renameGame/renameScene, same division of labor as onCreateGameRequested
+    // above (this panel requests, MainComponent performs).
+    std::function<void(const juce::String& gameId)> onGameRenameRequested;
+    std::function<void(const juce::String& gameId, const juce::String& sceneId)> onSceneRenameRequested;
+
 private:
     class RootItem;
     class GameItem;

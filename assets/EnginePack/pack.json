@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
   "id": "com.lagdaemon.creation-engine",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "title": "Creation Engine Pack",
   "defaultScene": "scenes/DefaultScene.xml",
   "assets": [
@@ -9,6 +9,12 @@
     { "id": "Sphere", "kind": "procedural-mesh", "generator": "uv-sphere", "title": "Sphere" },
     { "id": "BoxTextured", "kind": "model", "title": "Textured Box", "payload": "models/BoxTextured/BoxTextured.gltf" },
     { "id": "SimpleSkin", "kind": "model", "title": "Simple Skin", "payload": "models/SimpleSkin/SimpleSkin.gltf" },
-    { "id": "DefaultScene", "kind": "scene", "title": "Default Scene" }
+    { "id": "DefaultScene", "kind": "scene", "title": "Default Scene" },
+    { "id": "01_Welcome_Yard", "kind": "model", "title": "Welcome Yard", "payload": "models/StarterScenes/01_Welcome_Yard/01_Welcome_Yard.gltf" },
+    { "id": "02_Material_Lab", "kind": "model", "title": "Material Lab", "payload": "models/StarterScenes/02_Material_Lab/02_Material_Lab.gltf" },
+    { "id": "03_Traversal_Yard", "kind": "model", "title": "Traversal Yard", "payload": "models/StarterScenes/03_Traversal_Yard/03_Traversal_Yard.gltf" },
+    { "id": "04_Village_Block", "kind": "model", "title": "Village Block", "payload": "models/StarterScenes/04_Village_Block/04_Village_Block.gltf" },
+    { "id": "05_Editor_Garage", "kind": "model", "title": "Editor Garage", "payload": "models/StarterScenes/05_Editor_Garage/05_Editor_Garage.gltf" },
+    { "id": "06_Animation_Corral", "kind": "model", "title": "Animation Corral", "payload": "models/StarterScenes/06_Animation_Corral/06_Animation_Corral.gltf" }
   ]
 }

@@ -14,6 +14,10 @@ juce::ValueTree EngineSceneSerializer::serializeScene(ce::engine::World& world)
 
     for (auto entity : reg.storage<entt::entity>())
     {
+        // The Scene's own root entity is synthesized fresh on every load,
+        // never persisted -- see SceneRoot's own header comment.
+        if (reg.all_of<SceneRoot>(entity)) continue;
+
         juce::ValueTree entityNode("Entity");
         entityNode.setProperty("id", static_cast<int64_t>(entity), nullptr);
 
@@ -22,7 +26,12 @@ juce::ValueTree EngineSceneSerializer::serializeScene(ce::engine::World& world)
 
         if (auto* parent = reg.try_get<Parent>(entity))
         {
-            if (parent->value != entt::null)
+            // A Parent pointing at the synthetic SceneRoot isn't real
+            // information to persist -- that entity doesn't survive this
+            // save, and being unparented is exactly what re-attaches an
+            // entity to the (freshly synthesized) root on next load
+            // anyway. Only a genuine, persisted parent is worth writing.
+            if (parent->value != entt::null && !reg.all_of<SceneRoot>(parent->value))
                 entityNode.setProperty("parentId", static_cast<int64_t>(parent->value), nullptr);
         }
 

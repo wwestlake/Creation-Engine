@@ -71,6 +71,64 @@ a "real" object. Any component can carry pod-behavior. Nothing about
 having a position or housing children is a prerequisite for having
 behavior, and nothing about having behavior implies a position.
 
+## Entity, Thing, Object -- and where Project/Game/Scene sit
+
+This refines "the one primitive: Component" above, it doesn't replace it.
+Component is the mechanism. Entity, Thing, and Object are what a human
+calls a component depending on how much of that mechanism it has actually
+taken on -- three rungs on one ladder, not three competing ideas.
+
+**Entity**: the top-level abstraction. A name, and nothing else
+guaranteed. Pure identity.
+
+**Thing**: an Entity that has gained real spatio-temporal extent. This is
+literal, not metaphor -- a real memory footprint, a real duration, real
+causal power within whatever process holds it. A Thing genuinely exists,
+the same way a running piece of code genuinely occupies memory for a real
+span of time and does real work in that time.
+
+**Object**: a Thing that has taken on a specific characteristic set. Not a
+privileged tier -- "Object" is a badly overloaded word elsewhere (a class,
+an instance, an elementary particle of some type system, depending who's
+using it), so it's deliberately narrowed here to mean exactly this: a Thing
+plus whichever bundle of characteristics got applied. A mesh reference is a
+Thing with mesh-characteristics. A material is a Thing with
+material-characteristics. A stop sign is a Thing composed from several
+other Things (a model, a material, maybe a behavior). None of these is a
+lesser category than another -- same non-negotiable point "There is no
+privileged tier" above already makes about GameObject/Scene/World, applied
+one level down to "Object" itself.
+
+A container variant exists: some Things exist specifically to hold an
+arbitrary number of other Things, with FRust as the glue that wires the
+contents together. This is not a third kind of edge -- it's the "houses"
+edge from "Hierarchy is a view, not the substrate" above, at a coarser
+grain, plus real FRust-level connections (the wired-connection edge, same
+section) between whatever's inside. Composition itself reuses the exact
+mechanism already built for `ObjectDefinition`'s uniform component list --
+`ObjectComponentKind::{Mesh, Pod, Child}`, one list, tagged by kind. No new
+composition mechanism is introduced by any of this.
+
+Where this sits, one level up from the engine itself: **Project** is the
+real top-level Thing, spanning every application in the Creation Suite --
+Creation Engine among several others. Each **application** is a tool
+operating on Things within its own area of the Project, not the Project
+itself. The editor window is a *view into* the Project, not identical to
+whatever it's currently showing -- the same relationship "hierarchy is a
+view, not the substrate" already establishes, recurring one level up at a
+different scale. Creation Engine specifically manages **Game**-Things:
+exactly one open at a time in the live editor, but every Game-Thing that
+exists in the Project is listable and reopenable. **Scene**-Things get the
+same treatment one level inside a Game.
+
+The operational test for Thing-hood: can you create it, list it, open it,
+save it, delete it, rename it -- the exact verb surface `PodCatalog` and
+`ObjectDefinitionCatalog` already give Pods and Object Definitions. As of
+this writing, Game and Scene do not clear that bar -- they can only be
+created, then nothing else. Fixing that is the subject of a companion
+implementation plan, not a documentation exercise; this section records
+the settled reasoning for why it matters, not the mechanics of the fix.
+
 ## Where the current implementation matches this (fixed)
 
 `ObjectDefinition` (`Source/Scene/ObjectDefinitions.h`) used to hard-code
