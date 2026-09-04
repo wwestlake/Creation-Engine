@@ -236,6 +236,17 @@ void EditorInteraction::updateTranslation(const engine::Vec3& controllerWorldPos
         if (!translationConstraint_.y) delta.y = 0.0f;
         if (!translationConstraint_.z) delta.z = 0.0f;
     }
+    // `delta` is a world-space displacement; `before.position`/`transform.position`
+    // are local (relative to Parent, per docs/OBJECT_MODEL.md). Adding a
+    // world delta straight to a local position is only exactly correct
+    // when nothing in this entity's Parent chain rotates or scales it --
+    // true for the common case (a plain dropped object, or a mesh part
+    // under an unrotated definition root), not yet correct in general (a
+    // rotated parent would skew the delta's axes relative to local space).
+    // Accepted limitation for now, not silently assumed away: a fully
+    // general fix would convert `delta` into the parent's current local
+    // frame (same inverse-rotation approach HierarchyPanel::Reparent
+    // already uses for preserving world position across a reparent).
     auto& transform = registry.get<scene::Transform>(activeGrab_->entity);
     transform.position = snapped({
         activeGrab_->before.position.x + delta.x,

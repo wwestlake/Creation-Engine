@@ -141,14 +141,29 @@ Pod, and a nested child object are now the same kind of list entry.
 
 ## Multi-part import decomposes into components, not one blob
 
-A source file with multiple mesh parts (each with its own transform
-relative to a parent, e.g. a vehicle model with 26 separate pieces) is
-not one mesh -- it's a component housing multiple mesh-components, each
-carrying its own position. Import reflects this directly: a multi-node
-model produces one Object Definition with one Mesh-kind component per
-mesh-bearing node, each with its own relative transform, rather than
-flattening everything into a single mesh (the old, wrong behavior -- it
-silently discarded every part past the first).
+A source file's mesh-bearing nodes are components housing components,
+each carrying its own position -- and that's true whether there's one
+node or twenty-six. Import reflects this directly: a model produces one
+Object Definition with one Mesh-kind component per mesh-bearing node,
+each with its own relative transform. There is deliberately no special
+case for exactly one node: an earlier version of this treated ">1 nodes"
+as the threshold for decomposition, silently skipping it for a single-
+node file -- which meant that node's own authored offset (relative to
+the file's root) was dropped, not applied, for every single-mesh import.
+That was the same "no privileged tier" violation this whole document
+argues against, just at the import layer: "exactly one" is not an
+architecturally different case from "several."
+
+Every Mesh-kind component instantiates as its OWN child entity,
+uniformly -- including when a definition has exactly one. A component's
+own Transform always holds a value relative to its Parent (per "hierarchy
+is a view, not the substrate" above); the entity housing a definition's
+components never bakes any child's position into its own Transform, and
+never has a child's world-equivalent position baked into that child's
+Transform either. `WorldModelMatrix` (`Source/Scene/TransformHierarchy.h`)
+composes the Parent chain into a world matrix at the moment it's needed --
+render, pick, gizmo drag -- which is what makes moving a parent correctly
+move everything under it, live, without re-baking anything.
 
 Two accepted limitations of this, named here so they stay tracked rather
 than rediscovered later:

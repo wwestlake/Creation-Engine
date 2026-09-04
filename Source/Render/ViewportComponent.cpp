@@ -410,12 +410,25 @@ entt::entity ViewportComponent::desktopPick(const juce::Vector3D<float>& origin,
         if (const auto* flags = world_.Registry().try_get<const scene::SceneFlags>(entity);
             flags != nullptr && (!flags->visible || (flags->editorOnly && isPlaying_)))
             continue;
+        // transform.position/scale are LOCAL, relative to this entity's
+        // Parent (see docs/OBJECT_MODEL.md) -- an entity with a real
+        // parent (any Mesh-kind component of an Object Definition, always,
+        // per instantiateDefinition) renders wherever WorldModelMatrix
+        // composes it to, not at its own raw Transform. Hit-testing
+        // against the raw local Transform picked the wrong point in space
+        // for any such entity; the world-composed matrix's translation is
+        // what actually matches what's on screen. (Scale composition
+        // across a rotated/scaled parent chain isn't accounted for here --
+        // halfExtents still uses this entity's own local scale only, an
+        // accepted simplification for axis-aligned box picking.)
+        const auto worldMatrix = scene::WorldModelMatrix(world_.Registry(), entity);
+        const auto worldPosition = scene::MatrixTranslation(worldMatrix);
         const auto halfExtents = juce::Vector3D<float>{ std::abs(transform.scale.x) * 0.5f,
                                                           std::abs(transform.scale.y) * 0.5f,
                                                           std::abs(transform.scale.z) * 0.5f };
         float hitDistance = 0.0f;
         juce::Vector3D<float> normal;
-        if (RayAxisAlignedBoxHit(origin, direction, scene::ToJuceVector3D(transform.position), halfExtents,
+        if (RayAxisAlignedBoxHit(origin, direction, worldPosition, halfExtents,
                                  hitDistance, normal) && hitDistance < distance) {
             distance = hitDistance;
             closest = entity;
@@ -507,7 +520,11 @@ void ViewportComponent::updateDesktopTransformGizmo()
     if (!registry.valid(selected) || !registry.all_of<scene::Transform>(selected)) return;
     const auto& transform = registry.get<scene::Transform>(selected);
     vrTransformGizmo_.entity = selected;
-    vrTransformGizmo_.center = scene::ToJuceVector3D(transform.position);
+    // transform.position is LOCAL (relative to Parent) -- the gizmo widget
+    // has to be drawn at the WORLD position that matches where the
+    // selected entity actually renders, same reasoning as desktopPick's
+    // fix above.
+    vrTransformGizmo_.center = scene::ToJuceVector3D(scene::MatrixTranslation(scene::WorldModelMatrix(registry, selected)));
     vrTransformGizmo_.scale = 0.8f;
     if (interactions_.gizmoMode() == interaction::GizmoMode::position &&
         interactions_.transformSpace() == interaction::TransformSpace::local) {
@@ -670,7 +687,9 @@ void ViewportComponent::updateVRInteraction()
         auto& registry = world_.Registry();
         if (registry.valid(selected) && registry.all_of<scene::Transform>(selected)) {
             vrTransformGizmo_.entity = selected;
-            vrTransformGizmo_.center = scene::ToJuceVector3D(registry.get<scene::Transform>(selected).position);
+            // See updateDesktopTransformGizmo's identical fix -- Transform
+            // is local, the gizmo needs the world-composed position.
+            vrTransformGizmo_.center = scene::ToJuceVector3D(scene::MatrixTranslation(scene::WorldModelMatrix(registry, selected)));
             vrTransformGizmo_.scale = 0.8f;
         }
     }
