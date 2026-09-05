@@ -96,6 +96,7 @@ MainComponent::MainComponent()
     // a transient status-bar line.
     importPanel_.onLogLine = [](const juce::String& line) { ce::diagnostics::EngineLog::Info("Import", line); };
     importPanel_.onContentChanged = [this] { contentBrowserPanel_.Refresh(); };
+    inputBindingsPanel_.onCombosChanged = [this] { RefreshComboEventNodes(); };
     // See engineLogVfsWriter_'s own header comment for why this is a
     // one-time call, not something re-wired on every project open/close.
     engineLogVfsWriter_.SetSession(&projectSession_);
@@ -485,8 +486,15 @@ void MainComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             return;
         }
         const auto index = menuItemID - kViewPanelItemIdBase;
-        if (index >= 0 && index < static_cast<int>(std::size(kDockPanelMenuEntries)) && dockManager_ != nullptr)
-            dockManager_->activatePanel(kDockPanelMenuEntries[static_cast<std::size_t>(index)].id);
+        if (index >= 0 && index < static_cast<int>(std::size(kDockPanelMenuEntries)) && dockManager_ != nullptr) {
+            const juce::String id = kDockPanelMenuEntries[static_cast<std::size_t>(index)].id;
+            // "input-bindings" isn't part of the default eager-docked
+            // layout (nothing should be, per the user's own stated intent
+            // -- just not yet applied to every panel) -- register it lazily
+            // on first open, same shape as EnsurePodPanelsOpen().
+            if (id == "input-bindings") EnsureInputBindingsPanelOpen();
+            else dockManager_->activatePanel(id);
+        }
         return;
     }
 
@@ -546,11 +554,14 @@ void MainComponent::initialiseDockingWorkspace()
     dockManager_->registerPanel("transform", "Transform", std::make_unique<NonOwningPanelHost>(transformPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("materials-pbr", "Material Inspector", std::make_unique<NonOwningPanelHost>(pbrMaterialPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("behaviors", "Behaviors", std::make_unique<NonOwningPanelHost>(behaviorAttachmentPanel_), CreationDock::DockTargetZone::Right);
-    dockManager_->registerPanel("input-bindings", "Input Bindings", std::make_unique<NonOwningPanelHost>(inputBindingsPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("lighting", "Lighting", std::make_unique<NonOwningPanelHost>(lightPanel_), CreationDock::DockTargetZone::Right);
     // "pods"/"pod-info" deliberately NOT registered here -- they exist only
     // while a Pod is open, via EnsurePodPanelsOpen(). Pod/Asset Workflow
-    // plan Phase 5.
+    // plan Phase 5. "input-bindings" is the same shape (EnsureInputBindingsPanelOpen(),
+    // called from the View menu instead of Content Browser) -- unlike Pods
+    // it IS listed in kDockPanelMenuEntries/the View menu (there's exactly
+    // one of it, not one per opened asset), it just isn't part of the
+    // default eager-docked layout the panels above are.
     dockManager_->registerPanel("materials", "Materials", std::make_unique<NonOwningPanelHost>(materialsPanel_), CreationDock::DockTargetZone::CenterTab);
     // "assets" (the old standalone Import screen) is gone -- import/export/
     // browse/place all live in Content Browser now. importPanel_ itself
@@ -580,6 +591,18 @@ void MainComponent::EnsurePodPanelsOpen() {
         panel->onCloseRequested = [this](CreationDock::DockPanel*) { ClosePodPanels(); };
     }
     dockManager_->activatePanel("pods");
+}
+
+void MainComponent::EnsureInputBindingsPanelOpen() {
+    if (dockManager_ == nullptr) return;
+
+    if (!dockManager_->isRegistered("input-bindings")) {
+        auto* panel = dockManager_->registerPanel("input-bindings", "Input Bindings",
+                                                   std::make_unique<NonOwningPanelHost>(inputBindingsPanel_),
+                                                   CreationDock::DockTargetZone::Right);
+        panel->onCloseRequested = [this](CreationDock::DockPanel*) { dockManager_->unregisterPanel("input-bindings"); };
+    }
+    dockManager_->activatePanel("input-bindings");
 }
 
 void MainComponent::ClosePodPanels() {
@@ -792,6 +815,7 @@ bool MainComponent::openActiveGame(juce::String& errorMessage)
     if (activeScene_.id.isEmpty() && !activeGame_.scenes.isEmpty()) activeScene_ = activeGame_.scenes.getFirst();
     juce::String inputBindingsError;
     inputActionSystem_.LoadForGame(projectSession_, activeGame_, inputBindingsError);
+    RefreshComboEventNodes();
     inputBindingsPanel_.SetActiveGame(activeGame_);
     importPanel_.SetProjectContent(&projectSession_, activeGame_.assetRoot());
     contentBrowserPanel_.SetProjectContent(&projectSession_);
@@ -812,6 +836,15 @@ void MainComponent::refreshExplorerPanel()
 {
     explorerPanel_.setDocuments(games_, activeGame_.id, activeScene_.id);
     explorerPanel_.setStatus(activeGame_.id.isEmpty() ? "No active game" : activeGame_.name + " / " + activeScene_.name);
+}
+
+void MainComponent::RefreshComboEventNodes()
+{
+    std::vector<std::string> comboNames;
+    for (const auto& combo : inputActionSystem_.Bindings().combos) comboNames.push_back(combo.name.toStdString());
+    std::string error;
+    if (!frustHost_.RefreshComboEventNodes(comboNames, error))
+        headerBar_.setStatusText("Could not register input combo events: " + juce::String(error));
 }
 
 void MainComponent::HandleAssetDropped(const juce::String& description, juce::Point<int> localPosition)
@@ -928,6 +961,7 @@ void MainComponent::selectGame(const juce::String& gameId)
         if (activeScene_.id.isEmpty() && !activeGame_.scenes.isEmpty()) activeScene_ = activeGame_.scenes.getFirst();
         juce::String inputBindingsError;
         inputActionSystem_.LoadForGame(projectSession_, activeGame_, inputBindingsError);
+        RefreshComboEventNodes();
         inputBindingsPanel_.SetActiveGame(activeGame_);
         importPanel_.SetProjectContent(&projectSession_, activeGame_.assetRoot());
         contentBrowserPanel_.SetProjectContent(&projectSession_);

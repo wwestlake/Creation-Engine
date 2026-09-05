@@ -69,6 +69,14 @@ public:
     // whole session on MainComponent, same direct-access shape
     // nodeLibraries() below already uses, no indirection to hide.
     void setInputActionSystem(input::InputActionSystem* system) noexcept { inputActionSystem_ = system; }
+    // Input Combo Events plan -- re-derives the "input-combos" node
+    // library (one Domain::Event marker per name) via
+    // NodeLibraryRegistry::ReplaceLibrary, so a newly added/renamed/
+    // removed combo is a placeable Schematic node the next time a Pod
+    // editor is opened. Called whenever the active Game's combo list
+    // changes (MainComponent's game-load call sites, InputBindingsPanel
+    // after a save).
+    bool RefreshComboEventNodes(const std::vector<std::string>& comboNames, std::string& error);
     [[nodiscard]] bool isLoaded() const noexcept;
     [[nodiscard]] bool isObjectBehaviorLoaded(const std::string& podId) const noexcept;
     [[nodiscard]] const node_system::NodeLibraryRegistry& nodeLibraries() const noexcept { return nodeLibraries_; }

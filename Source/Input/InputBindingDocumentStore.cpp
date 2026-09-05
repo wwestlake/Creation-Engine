@@ -71,6 +71,39 @@ InputAction ReadAction(const juce::ValueTree& node)
         if (child.hasType("Binding")) action.bindings.add(ReadBinding(child));
     return action;
 }
+
+juce::ValueTree WriteComboKeyPress(const ComboKeyPress& key)
+{
+    juce::ValueTree node("Key");
+    node.setProperty("code", key.keyCode, nullptr);
+    node.setProperty("offsetMillis", key.offsetMillis, nullptr);
+    return node;
+}
+
+ComboKeyPress ReadComboKeyPress(const juce::ValueTree& node)
+{
+    ComboKeyPress key;
+    key.keyCode = node.getProperty("code", 0);
+    key.offsetMillis = node.getProperty("offsetMillis", 0);
+    return key;
+}
+
+juce::ValueTree WriteCombo(const InputCombo& combo)
+{
+    juce::ValueTree node("Combo");
+    node.setProperty("name", combo.name, nullptr);
+    for (const auto& key : combo.keys) node.addChild(WriteComboKeyPress(key), -1, nullptr);
+    return node;
+}
+
+InputCombo ReadCombo(const juce::ValueTree& node)
+{
+    InputCombo combo;
+    combo.name = node.getProperty("name").toString();
+    for (const auto child : node)
+        if (child.hasType("Key")) combo.keys.add(ReadComboKeyPress(child));
+    return combo;
+}
 } // namespace
 
 juce::String InputBindingDocumentStore::path(const project::GameDocumentInfo& game)
@@ -84,6 +117,7 @@ bool InputBindingDocumentStore::load(creation::assets::ProjectSession& session,
                                       juce::String& errorMessage)
 {
     result.actions.clear();
+    result.combos.clear();
     const auto documentPath = path(game);
     if (!session.containsEntry(documentPath)) return true; // no bindings authored yet -- not a failure.
 
@@ -93,8 +127,10 @@ bool InputBindingDocumentStore::load(creation::assets::ProjectSession& session,
         errorMessage = "Input bindings document has the wrong document type.";
         return false;
     }
-    for (const auto child : document)
+    for (const auto child : document) {
         if (child.hasType("Action")) result.actions.add(ReadAction(child));
+        else if (child.hasType("Combo")) result.combos.add(ReadCombo(child));
+    }
     return true;
 }
 
@@ -106,6 +142,7 @@ bool InputBindingDocumentStore::save(creation::assets::ProjectSession& session,
     juce::ValueTree document("CreationEngineInputBindings");
     document.setProperty("formatVersion", 1, nullptr);
     for (const auto& action : bindings.actions) document.addChild(WriteAction(action), -1, nullptr);
+    for (const auto& combo : bindings.combos) document.addChild(WriteCombo(combo), -1, nullptr);
     if (!session.writeEntry(path(game), ToMemory(document))) {
         errorMessage = "Could not save input bindings for game \"" + game.name + "\".";
         return false;

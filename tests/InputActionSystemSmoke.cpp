@@ -99,6 +99,79 @@ int main()
         }
     }
 
-    std::cout << "Input action system + Domain::Input nodes passed.\n";
+    // -- MatchesCombo (Input Combo Events plan): exercised directly against
+    // literal recorded buffer state, not real OS key polling, per the
+    // plan's own testability note.
+    {
+        InputCombo sequenceCombo;
+        sequenceCombo.name = "Sequence";
+        sequenceCombo.keys.add({ 'A', 0 });
+        sequenceCombo.keys.add({ 'B', 300 });
+
+        const std::vector<RawKeyEvent> wellTimed = { { 'A', 1000.0 }, { 'B', 1300.0 } };
+        if (!MatchesCombo(wellTimed, sequenceCombo)) {
+            std::cerr << "A correctly-timed sequence should match.\n";
+            return 1;
+        }
+
+        const std::vector<RawKeyEvent> mistimed = { { 'A', 1000.0 }, { 'B', 2000.0 } };
+        if (MatchesCombo(mistimed, sequenceCombo)) {
+            std::cerr << "A mistimed sequence should not match.\n";
+            return 1;
+        }
+
+        const std::vector<RawKeyEvent> wrongOrder = { { 'B', 1000.0 }, { 'A', 1300.0 } };
+        if (MatchesCombo(wrongOrder, sequenceCombo)) {
+            std::cerr << "A sequence in the wrong key order should not match.\n";
+            return 1;
+        }
+
+        InputCombo chordCombo;
+        chordCombo.name = "Chord";
+        chordCombo.keys.add({ 'X', 0 });
+        chordCombo.keys.add({ 'Y', 10 });
+        const std::vector<RawKeyEvent> nearSimultaneous = { { 'X', 500.0 }, { 'Y', 530.0 } };
+        if (!MatchesCombo(nearSimultaneous, chordCombo)) {
+            std::cerr << "A near-simultaneous chord should match within the 150ms floor tolerance.\n";
+            return 1;
+        }
+    }
+
+    // -- NodeLibraryRegistry::ReplaceLibrary + BuildInputComboEventLibrary/
+    // EventNodeFrustFunctionName (Input Combo Events plan) --
+    {
+        ce::node_system::NodeLibraryRegistry libraries;
+        std::string libError;
+        if (!libraries.ReplaceLibrary(ce::node_system::BuildInputComboEventLibrary({ "Jump", "OpenMenu" }), &libError)) {
+            std::cerr << "Initial ReplaceLibrary registration failed: " << libError << '\n';
+            return 1;
+        }
+        const auto* jumpType = libraries.FindNodeType("core.input.combo.Jump");
+        if (jumpType == nullptr || jumpType->domain != ce::node_system::Domain::Event || jumpType->outputs.size() != 1 ||
+            jumpType->outputs.front().name != "then") {
+            std::cerr << "core.input.combo.Jump was not registered as a Domain::Event marker node.\n";
+            return 1;
+        }
+        if (ce::node_system::EventNodeFrustFunctionName("core.input.combo.Jump") != "on_action_Jump") {
+            std::cerr << "EventNodeFrustFunctionName did not derive on_action_Jump for the combo node.\n";
+            return 1;
+        }
+
+        // Replace with a renamed set -- the old typeName must be gone, the new one must resolve.
+        if (!libraries.ReplaceLibrary(ce::node_system::BuildInputComboEventLibrary({ "OpenMenu" }), &libError)) {
+            std::cerr << "ReplaceLibrary (renamed set) failed: " << libError << '\n';
+            return 1;
+        }
+        if (libraries.FindNodeType("core.input.combo.Jump") != nullptr) {
+            std::cerr << "core.input.combo.Jump should be gone after ReplaceLibrary dropped it.\n";
+            return 1;
+        }
+        if (libraries.FindNodeType("core.input.combo.OpenMenu") == nullptr) {
+            std::cerr << "core.input.combo.OpenMenu should still resolve after ReplaceLibrary.\n";
+            return 1;
+        }
+    }
+
+    std::cout << "Input action system + Domain::Input nodes + Input Combo Events passed.\n";
     return 0;
 }
