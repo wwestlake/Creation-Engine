@@ -1402,7 +1402,7 @@ void ViewportComponent::renderOpenGL() {
 
                 if (activeClip != nullptr) {
                     if (animator->playing) {
-                        animator->time += deltaSeconds;
+                        animator->time += deltaSeconds * animator->playbackSpeed;
                         if (activeClip->duration > 0.0f) {
                             if (animator->loop) {
                                 animator->time = std::fmod(animator->time, activeClip->duration);
@@ -1415,7 +1415,38 @@ void ViewportComponent::renderOpenGL() {
                             }
                         }
                     }
-                    localTransforms = scene::SampleLocalTransforms(*activeClip, animator->time, *skeleton);
+
+                    // AI7 crossfade: while blendFromClip names a valid clip,
+                    // blend it (frozen at blendFromTime, the pose it was in
+                    // the instant the crossfade started) against activeClip
+                    // (the target, still advancing normally above) by
+                    // blendTime/blendDuration. This advances independently of
+                    // playbackSpeed/playing -- a crossfade is a fixed real-
+                    // time transition, not clip content -- and self-clears
+                    // once the weight reaches 1, collapsing back to plain
+                    // single-clip sampling on the next frame.
+                    const AnimationClip* blendFromClipData = nullptr;
+                    if (animator->blendFromClip >= 0 && animator->clips != nullptr &&
+                        static_cast<std::size_t>(animator->blendFromClip) < animator->clips->size()) {
+                        blendFromClipData = &(*animator->clips)[static_cast<std::size_t>(animator->blendFromClip)];
+                    }
+
+                    if (blendFromClipData != nullptr) {
+                        animator->blendTime += deltaSeconds;
+                        const float weight = animator->blendDuration > 0.0f
+                                                  ? juce::jlimit(0.0f, 1.0f, animator->blendTime / animator->blendDuration)
+                                                  : 1.0f;
+                        localTransforms = scene::SampleBlendedLocalTransforms(
+                            *blendFromClipData, animator->blendFromTime, *activeClip, animator->time, weight, *skeleton);
+                        if (weight >= 1.0f) {
+                            animator->blendFromClip = -1;
+                            animator->blendFromTime = 0.0f;
+                            animator->blendTime = 0.0f;
+                            animator->blendDuration = 0.0f;
+                        }
+                    } else {
+                        localTransforms = scene::SampleLocalTransforms(*activeClip, animator->time, *skeleton);
+                    }
                 } else {
                     localTransforms.reserve(skeleton->joints.size());
                     for (const auto& joint : skeleton->joints) {

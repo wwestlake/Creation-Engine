@@ -198,7 +198,10 @@ than rediscovered later:
   execution contract.
 
 The Engine's named behavior lifecycle is documented in
-[`FRUST_BEHAVIOR_LIFECYCLE.md`](FRUST_BEHAVIOR_LIFECYCLE.md).
+[`FRUST_BEHAVIOR_LIFECYCLE.md`](FRUST_BEHAVIOR_LIFECYCLE.md). Animation
+control -- built the same way, as Pods/FRust nodes, deliberately not as a
+separate Animation Blueprint-style system -- is documented in
+[`ANIMATION_MODEL.md`](ANIMATION_MODEL.md).
 
 ## Applying this
 

@@ -32,6 +32,13 @@ node_system::NodeTypeRegistry CopyRegistry(const node_system::NodeLibraryRegistr
     // core_control_flow.h's note on why enforcement doesn't apply to
     // this first-party registration path).
     node_system::RegisterCoreCapabilityNodes(result);
+    // Domain::Animation nodes (Animation Control plan Phase 2) -- same
+    // reasoning as every registration above: structural/C++-native, not
+    // FRust-reflected, so it has to be added to both this palette copy
+    // and EngineFrustHost's own nodeLibraries_ explicitly, or the two
+    // registries drift (confirmed real prior gap, see EngineFrustHost.cpp's
+    // constructor comment).
+    node_system::RegisterCoreAnimationNodes(result);
     for (const auto& [name, descriptor] : libraries.TypeRegistry().Types())
         result.Register(descriptor);
     return result;

@@ -4,6 +4,7 @@
 
 #include <iostream>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -25,14 +26,34 @@ int main() {
     movementLibrary.id = "engine.movement";
     movementLibrary.displayName = "Movement";
     movementLibrary.description = "Input and movement behavior nodes.";
-    movementLibrary.nodeTypes.push_back({
-        "engine.input_axis", "Input Axis", "Input", "Emits a mapped input stream.", "input_axis_value",
-        { "engine_input_axis" }, Domain::Event, {}, { { "value", streamFloat(), {} } }
-    });
-    movementLibrary.nodeTypes.push_back({
-        "engine.move", "Move", "Movement", "Consumes a movement input stream.", "move_from_input",
-        { "engine_move" }, Domain::Core, { { "value", streamFloat(), {} } }, {}
-    });
+    // Named-field construction, not positional brace-init: NodeTypeDescriptor's
+    // member order (type_registry.h) has been reordered by later phases
+    // (controlFlow/monadOperation/isHostExtern insertions) since this test
+    // was first written -- positional init here was silently binding
+    // fields to the wrong slots (a stale-test bug found and fixed while
+    // touching this area for the Animation Control plan, unrelated to that
+    // plan's own changes).
+    NodeTypeDescriptor inputAxis;
+    inputAxis.typeName = "engine.input_axis";
+    inputAxis.domain = Domain::Event;
+    inputAxis.outputs = { { "value", streamFloat(), {} } };
+    inputAxis.displayName = "Input Axis";
+    inputAxis.category = "Input";
+    inputAxis.description = "Emits a mapped input stream.";
+    inputAxis.frustEntryPoint = "input_axis_value";
+    inputAxis.requiredCapabilities = { "engine_input_axis" };
+    movementLibrary.nodeTypes.push_back(std::move(inputAxis));
+
+    NodeTypeDescriptor move;
+    move.typeName = "engine.move";
+    move.domain = Domain::Core;
+    move.inputs = { { "value", streamFloat(), {} } };
+    move.displayName = "Move";
+    move.category = "Movement";
+    move.description = "Consumes a movement input stream.";
+    move.frustEntryPoint = "move_from_input";
+    move.requiredCapabilities = { "engine_move" };
+    movementLibrary.nodeTypes.push_back(std::move(move));
     std::string libraryError;
     if (!libraries.Register(std::move(movementLibrary), &libraryError)) {
         std::cerr << "Could not register node library: " << libraryError << '\n';
@@ -58,7 +79,7 @@ int main() {
         return 1;
     }
 
-    const auto streamOrder = TopologicalStreamOrder(graph);
+    const auto streamOrder = TopologicalDataOrder(graph);
     if (!streamOrder || streamOrder->size() != 2 || streamOrder->front() != source->Id()) {
         std::cerr << "Stream graph did not produce deterministic order.\n";
         return 1;
@@ -114,8 +135,16 @@ int main() {
     cyclic.Connect(left.Id(), leftOut, right.Id(), rightIn);
     cyclic.Connect(right.Id(), rightOut, left.Id(), leftIn);
 
+    // ValidateGraph reports this as "data dependency cycle detected"
+    // regardless of whether the cycle runs through Data or Stream pins --
+    // per IsConnectionCompatible's own reasoning (pin.h), a Stream isn't a
+    // different type system, so it isn't given a differently-worded error
+    // either (graph_analysis.cpp's BuildAdjacency now includes Stream-kind
+    // connections in this check at all -- previously it silently didn't,
+    // a real bug found and fixed here: this exact cyclic-stream graph used
+    // to pass validation).
     const ValidationResult validation = ValidateGraph(cyclic);
-    if (validation.ok || validation.errors.empty() || validation.errors.front() != "stream dependency cycle detected") {
+    if (validation.ok || validation.errors.empty() || validation.errors.front() != "data dependency cycle detected") {
         std::cerr << "Stream cycle was not rejected.\n";
         return 1;
     }

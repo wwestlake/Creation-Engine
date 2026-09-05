@@ -93,8 +93,13 @@ TransformPanel::TransformPanel(engine::World& world, interaction::EditorInteract
     playPauseButton_.onClick = [this] { TogglePlayback(); };
     addAndMakeVisible(playPauseButton_);
 
+    behaviorPausedToggle_.setColour(juce::ToggleButton::textColourId, juce::Colours::lightgrey);
+    behaviorPausedToggle_.onClick = [this] { ToggleBehaviorPaused(); };
+    addAndMakeVisible(behaviorPausedToggle_);
+
     SetEditorsVisible(false);
     SetAnimationControlsVisible(false);
+    SetBehaviorPauseControlsVisible(false);
 }
 
 void TransformPanel::SetSelectedEntity(entt::entity entity) {
@@ -116,6 +121,7 @@ void TransformPanel::Refresh() {
     if (selectedEntity_ == entt::null) {
         SetEditorsVisible(false);
         SetAnimationControlsVisible(false);
+        SetBehaviorPauseControlsVisible(false);
         return;
     }
 
@@ -145,6 +151,7 @@ void TransformPanel::Refresh() {
         selectedEntity_ = entt::null;
         SetEditorsVisible(false);
         SetAnimationControlsVisible(false);
+        SetBehaviorPauseControlsVisible(false);
         return;
     }
 
@@ -172,6 +179,8 @@ void TransformPanel::Refresh() {
     bool playing = false;
     int activeClip = -1;
     juce::StringArray clipNames;
+    bool hasBehaviors = false;
+    bool behaviorPaused = false;
     {
         std::lock_guard<std::mutex> lock(world_.RegistryMutex());
         auto& registry = world_.Registry();
@@ -185,9 +194,18 @@ void TransformPanel::Refresh() {
                 }
             }
         }
+        if (const auto* attachments = registry.try_get<scene::BehaviorAttachments>(selectedEntity_)) {
+            hasBehaviors = !attachments->podIds.empty();
+        }
+        behaviorPaused = registry.all_of<scene::BehaviorPaused>(selectedEntity_);
     }
 
     SetAnimationControlsVisible(hasAnimator);
+    SetBehaviorPauseControlsVisible(hasBehaviors);
+    if (hasBehaviors) {
+        behaviorPausedToggle_.setToggleState(behaviorPaused, juce::dontSendNotification);
+        behaviorPausedToggle_.setEnabled(!locked_);
+    }
     if (hasAnimator) {
         if (clipNames != lastShownClipNames_) {
             clipSelector_.clear(juce::dontSendNotification);
@@ -315,6 +333,28 @@ void TransformPanel::SetAnimationControlsVisible(bool visible) {
     playPauseButton_.setVisible(visible);
 }
 
+void TransformPanel::ToggleBehaviorPaused() {
+    if (selectedEntity_ == entt::null || locked_) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+    auto& registry = world_.Registry();
+    if (!registry.valid(selectedEntity_)) {
+        return;
+    }
+
+    if (behaviorPausedToggle_.getToggleState()) {
+        registry.emplace_or_replace<scene::BehaviorPaused>(selectedEntity_);
+    } else {
+        registry.remove<scene::BehaviorPaused>(selectedEntity_);
+    }
+}
+
+void TransformPanel::SetBehaviorPauseControlsVisible(bool visible) {
+    behaviorPausedToggle_.setVisible(visible);
+}
+
 void TransformPanel::SetEditorsVisible(bool visible) {
     noSelectionLabel_.setVisible(!visible);
     for (juce::Component* component : std::initializer_list<juce::Component*>{
@@ -379,6 +419,9 @@ void TransformPanel::resized() {
     auto animationRow = bounds.removeFromTop(kSliderHeight + 4);
     clipSelector_.setBounds(animationRow.removeFromLeft(animationRow.getWidth() * 2 / 3));
     playPauseButton_.setBounds(animationRow);
+    bounds.removeFromTop(kRowGap);
+
+    behaviorPausedToggle_.setBounds(bounds.removeFromTop(kSliderHeight));
 }
 
 } // namespace ce

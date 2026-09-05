@@ -39,6 +39,21 @@ std::vector<float> SampleChannelValues(const AnimationChannel& channel, float ti
 std::vector<juce::Matrix3D<float>> SampleLocalTransforms(const AnimationClip& clip, float time,
                                                           const Skeleton& skeleton);
 
+// Crossfade support: samples `clipA` at `timeA` and `clipB` at `timeB`
+// independently (same rules as SampleLocalTransforms above, including the
+// bind-pose fallback per joint/path), then blends the two poses per joint
+// at `weight` (0 = clipA exactly, 1 = clipB exactly) -- BEFORE composing
+// to a matrix, not after. Translation/scale blend with a plain lerp,
+// rotation with the same NLERP used for in-clip keyframe interpolation;
+// blending the already-composed 4x4 matrices instead would not produce a
+// valid rotation in general, so this samples both clips down to raw TRS
+// first. Used by ViewportComponent while an Animator's blendFromClip is
+// set (AI7 animation-control crossfade); once a blend completes the
+// caller collapses back to plain SampleLocalTransforms.
+std::vector<juce::Matrix3D<float>> SampleBlendedLocalTransforms(const AnimationClip& clipA, float timeA,
+                                                                 const AnimationClip& clipB, float timeB,
+                                                                 float weight, const Skeleton& skeleton);
+
 // Walks skeleton.joints' parent-index hierarchy (any array order, not
 // just parent-before-child -- glTF doesn't guarantee that) composing the
 // given LOCAL transforms (from SampleLocalTransforms above, or the bind

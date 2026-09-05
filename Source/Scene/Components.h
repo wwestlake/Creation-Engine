@@ -86,6 +86,19 @@ struct BehaviorAttachments {
     std::vector<juce::String> podIds;
 };
 
+// Animation Control plan Phase 3: freezes this entity's own attached
+// Pods -- EngineFrustHost::tick skips on_tick for an entity carrying this
+// (lifecycle hooks on_spawn/on_begin_play/on_end_play still fire once as
+// normal, so pausing/resuming never re-runs or skips one-time setup) --
+// while the rest of the world keeps simulating normally. Answers "hard to
+// work on an NPC that's trying to kill things": freeze just its decision-
+// making, not its rendering or its already-commanded animation (which
+// keeps sampling in ViewportComponent regardless, per Animator's own
+// playbackSpeed/blend fields further below). Same bool-equivalent marker shape as
+// SceneFlags::editorOnly below -- not a data-carrying struct because
+// there's nothing to carry, just presence/absence.
+struct BehaviorPaused {};
+
 struct ObjectState {
     juce::NamedValueSet values;
 };
@@ -185,6 +198,20 @@ struct Animator {
     float time = 0.0f;   // seconds into the active clip.
     bool playing = false;
     bool loop = true;
+    float playbackSpeed = 1.0f; // multiplies deltaSeconds before advancing `time`.
+
+    // AI7 animation-control crossfade: when blendFromClip >= 0, the render
+    // path samples BOTH blendFromClip (at its own frozen `time` the moment
+    // the crossfade started) and activeClip (the blend target), blending
+    // toward activeClip as blendTime advances toward blendDuration. Once
+    // blendTime >= blendDuration the blend is done and blendFromClip resets
+    // to -1 -- ordinary single-clip sampling resumes. Set by a Pod's
+    // animCrossfadeTo host node (Source/Frust/EngineFrustHost), not by
+    // anything in the render path itself.
+    int blendFromClip = -1;
+    float blendFromTime = 0.0f; // frozen `time` blendFromClip was at when the crossfade started.
+    float blendTime = 0.0f;
+    float blendDuration = 0.0f;
 };
 
 } // namespace ce::scene
