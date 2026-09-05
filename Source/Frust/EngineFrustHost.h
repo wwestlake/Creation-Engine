@@ -96,7 +96,20 @@ private:
     static const char* podGetVariableString(std::int64_t entityId, const char* podId, const char* name);
     static std::int64_t podSetVariableString(std::int64_t entityId, const char* podId, const char* name, const char* value);
     static bool assetExists(const char* assetDisplayName);
+    // Animation Control plan Phase 2 -- host-extern nodes backing
+    // Domain::Animation (RegisterCoreAnimationNodes), reading/writing the
+    // named entity's scene::Animator. Same i64/string/bool-only FFI
+    // convention as every function above (no float parameter anywhere in
+    // this class) -- durations/speeds cross as milliseconds/per-mille
+    // integers, decoded to float only on this side of the boundary.
+    static std::int64_t animSetActiveClip(std::int64_t entityId, const char* clipName);
+    static std::int64_t animCrossfadeTo(std::int64_t entityId, const char* clipName, std::int64_t blendMillis);
+    static std::int64_t animSetPlaybackSpeedPerMille(std::int64_t entityId, std::int64_t speedPerMille);
+    static const char* animGetActiveClipName(std::int64_t entityId);
+    static std::int64_t animGetClipDurationMillis(std::int64_t entityId, const char* clipName);
+    static bool animIsBlending(std::int64_t entityId);
     [[nodiscard]] static std::string behaviorKey(const std::string& podId);
+    [[nodiscard]] bool isBehaviorPaused(std::int64_t entityId) const;
     [[nodiscard]] std::vector<std::pair<std::int64_t, std::string>> attachedObjectBehaviors() const;
     void ensureObjectLifecycle(std::int64_t entityId, const std::string& podId, std::int64_t tick);
     void invokeObjectHook(std::int64_t entityId, const std::string& podId, const char* hookName,

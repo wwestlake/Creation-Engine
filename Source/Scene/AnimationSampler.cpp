@@ -108,6 +108,38 @@ void FindKeyframe(const std::vector<float>& times, float time, int& outIndex, fl
     outT = span > 1e-8f ? (time - times[static_cast<std::size_t>(prev)]) / span : 0.0f;
 }
 
+// Shared by SampleLocalTransforms and SampleBlendedLocalTransforms: fills
+// one TRS triple per joint, starting from the skeleton's own bind pose and
+// overwriting whatever channels `clip` actually animates at `time`. Kept
+// as raw TRS (not yet composed to a matrix) so the blended path can lerp/
+// NLERP two of these against each other before composing once.
+void SampleLocalTRS(const AnimationClip& clip, float time, const Skeleton& skeleton, std::vector<Vec3f>& translations,
+                     std::vector<Quatf>& rotations, std::vector<Vec3f>& scales) {
+    const std::size_t jointCount = skeleton.joints.size();
+    translations.resize(jointCount);
+    rotations.resize(jointCount);
+    scales.resize(jointCount);
+
+    for (std::size_t i = 0; i < jointCount; ++i) {
+        const auto& joint = skeleton.joints[i];
+        translations[i] = { joint.bindTranslation.x, joint.bindTranslation.y, joint.bindTranslation.z };
+        rotations[i] = { joint.bindRotation[0], joint.bindRotation[1], joint.bindRotation[2], joint.bindRotation[3] };
+        scales[i] = { joint.bindScale.x, joint.bindScale.y, joint.bindScale.z };
+    }
+
+    for (const auto& channel : clip.channels) {
+        if (channel.jointIndex < 0 || static_cast<std::size_t>(channel.jointIndex) >= jointCount) {
+            continue;
+        }
+        const auto values = SampleChannelValues(channel, time);
+        if (values.empty()) {
+            continue;
+        }
+        const auto jointIndex = static_cast<std::size_t>(channel.jointIndex);
+        ApplySample(channel.path, values.data(), translations[jointIndex], rotations[jointIndex], scales[jointIndex]);
+    }
+}
+
 } // namespace
 
 std::vector<float> SampleChannelValues(const AnimationChannel& channel, float time) {
@@ -150,34 +182,45 @@ std::vector<float> SampleChannelValues(const AnimationChannel& channel, float ti
 
 std::vector<juce::Matrix3D<float>> SampleLocalTransforms(const AnimationClip& clip, float time,
                                                           const Skeleton& skeleton) {
+    std::vector<Vec3f> translations;
+    std::vector<Quatf> rotations;
+    std::vector<Vec3f> scales;
+    SampleLocalTRS(clip, time, skeleton, translations, rotations, scales);
+
     const std::size_t jointCount = skeleton.joints.size();
-    std::vector<Vec3f> translations(jointCount);
-    std::vector<Quatf> rotations(jointCount);
-    std::vector<Vec3f> scales(jointCount);
-
-    for (std::size_t i = 0; i < jointCount; ++i) {
-        const auto& joint = skeleton.joints[i];
-        translations[i] = { joint.bindTranslation.x, joint.bindTranslation.y, joint.bindTranslation.z };
-        rotations[i] = { joint.bindRotation[0], joint.bindRotation[1], joint.bindRotation[2], joint.bindRotation[3] };
-        scales[i] = { joint.bindScale.x, joint.bindScale.y, joint.bindScale.z };
-    }
-
-    for (const auto& channel : clip.channels) {
-        if (channel.jointIndex < 0 || static_cast<std::size_t>(channel.jointIndex) >= jointCount) {
-            continue;
-        }
-        const auto values = SampleChannelValues(channel, time);
-        if (values.empty()) {
-            continue;
-        }
-        const auto jointIndex = static_cast<std::size_t>(channel.jointIndex);
-        ApplySample(channel.path, values.data(), translations[jointIndex], rotations[jointIndex], scales[jointIndex]);
-    }
-
     std::vector<juce::Matrix3D<float>> result;
     result.reserve(jointCount);
     for (std::size_t i = 0; i < jointCount; ++i) {
         result.push_back(ComposeTRS(translations[i], rotations[i], scales[i]));
+    }
+    return result;
+}
+
+std::vector<juce::Matrix3D<float>> SampleBlendedLocalTransforms(const AnimationClip& clipA, float timeA,
+                                                                 const AnimationClip& clipB, float timeB,
+                                                                 float weight, const Skeleton& skeleton) {
+    std::vector<Vec3f> translationsA, translationsB;
+    std::vector<Quatf> rotationsA, rotationsB;
+    std::vector<Vec3f> scalesA, scalesB;
+    SampleLocalTRS(clipA, timeA, skeleton, translationsA, rotationsA, scalesA);
+    SampleLocalTRS(clipB, timeB, skeleton, translationsB, rotationsB, scalesB);
+
+    const std::size_t jointCount = skeleton.joints.size();
+    const float w = std::clamp(weight, 0.0f, 1.0f);
+    std::vector<juce::Matrix3D<float>> result;
+    result.reserve(jointCount);
+    for (std::size_t i = 0; i < jointCount; ++i) {
+        const float aT[3] = { translationsA[i].x, translationsA[i].y, translationsA[i].z };
+        const float bT[3] = { translationsB[i].x, translationsB[i].y, translationsB[i].z };
+        const float aR[4] = { rotationsA[i].x, rotationsA[i].y, rotationsA[i].z, rotationsA[i].w };
+        const float bR[4] = { rotationsB[i].x, rotationsB[i].y, rotationsB[i].z, rotationsB[i].w };
+        const float aS[3] = { scalesA[i].x, scalesA[i].y, scalesA[i].z };
+        const float bS[3] = { scalesB[i].x, scalesB[i].y, scalesB[i].z };
+
+        const Vec3f t = LerpVec3(aT, bT, w);
+        const Quatf r = NlerpQuat(aR, bR, w);
+        const Vec3f s = LerpVec3(aS, bS, w);
+        result.push_back(ComposeTRS(t, r, s));
     }
     return result;
 }

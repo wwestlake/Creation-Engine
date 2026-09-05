@@ -35,7 +35,7 @@ public:
     void resized() override;
     void paint(juce::Graphics& g) override;
 
-    static constexpr int kPreferredHeight = 360;
+    static constexpr int kPreferredHeight = 392;
 
 private:
     void PushToRegistry();
@@ -51,6 +51,14 @@ private:
     void TogglePlayback();
     void OnClipSelected();
     void SetAnimationControlsVisible(bool visible);
+
+    // Animation Control plan Phase 3: shown whenever the selected entity
+    // has at least one attached Pod (scene::BehaviorAttachments), separate
+    // visibility again from both SetEditorsVisible and
+    // SetAnimationControlsVisible -- an entity can have Pods with no
+    // Animator (a door's behavior, say) or an Animator with no Pods.
+    void ToggleBehaviorPaused();
+    void SetBehaviorPauseControlsVisible(bool visible);
 
     engine::World& world_;
     interaction::EditorInteraction& interactions_;
@@ -97,6 +105,12 @@ private:
     juce::ComboBox clipSelector_;
     juce::TextButton playPauseButton_{ "Play" };
     juce::StringArray lastShownClipNames_; // avoids rebuilding clipSelector_'s items every 30Hz Refresh() tick.
+
+    // Animation Control plan Phase 3: freezes this entity's own attached
+    // Pods (scene::BehaviorPaused) without affecting the rest of the
+    // world or this entity's own animation playback -- see
+    // Components.h's BehaviorPaused comment for the full reasoning.
+    juce::ToggleButton behaviorPausedToggle_{ "Pause Behavior (Pods)" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TransformPanel)
 };

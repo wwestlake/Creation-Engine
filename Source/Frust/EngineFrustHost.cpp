@@ -40,6 +40,12 @@ EngineFrustHost::EngineFrustHost(engine::World& worldToHost)
     runtime.registerHostFunction("pod_get_variable_string", reinterpret_cast<void*>(&EngineFrustHost::podGetVariableString));
     runtime.registerHostFunction("pod_set_variable_string", reinterpret_cast<void*>(&EngineFrustHost::podSetVariableString));
     runtime.registerHostFunction("engine_asset_exists", reinterpret_cast<void*>(&EngineFrustHost::assetExists));
+    runtime.registerHostFunction("engine_anim_set_active_clip", reinterpret_cast<void*>(&EngineFrustHost::animSetActiveClip));
+    runtime.registerHostFunction("engine_anim_crossfade_to", reinterpret_cast<void*>(&EngineFrustHost::animCrossfadeTo));
+    runtime.registerHostFunction("engine_anim_set_playback_speed_permille", reinterpret_cast<void*>(&EngineFrustHost::animSetPlaybackSpeedPerMille));
+    runtime.registerHostFunction("engine_anim_get_active_clip_name", reinterpret_cast<void*>(&EngineFrustHost::animGetActiveClipName));
+    runtime.registerHostFunction("engine_anim_get_clip_duration_millis", reinterpret_cast<void*>(&EngineFrustHost::animGetClipDurationMillis));
+    runtime.registerHostFunction("engine_anim_is_blending", reinterpret_cast<void*>(&EngineFrustHost::animIsBlending));
 
     // Real, pre-existing gap fixed here: control-flow/Event/Variable node
     // types were only ever registered into PodEditorPanel's own palette
@@ -58,6 +64,7 @@ EngineFrustHost::EngineFrustHost(engine::World& worldToHost)
         node_system::RegisterCoreEventNodes(structuralTypes);
         node_system::RegisterCoreVariableNodes(structuralTypes);
         node_system::RegisterCoreCapabilityNodes(structuralTypes);
+        node_system::RegisterCoreAnimationNodes(structuralTypes);
 
         node_system::NodeLibraryDescriptor library;
         library.id = "core-structural";
@@ -160,9 +167,19 @@ void EngineFrustHost::tick(std::int64_t tick)
     for (const auto& [entityId, podId] : attachedObjectBehaviors())
     {
         ensureObjectLifecycle(entityId, podId, tick);
-        if (objectLifecycles[entityId].playingPods.contains(podId)) {
-            invokeObjectHook(entityId, podId, "on_tick", EngineFrustEvent::simulationTick, tick);
+        if (!objectLifecycles[entityId].playingPods.contains(podId)) {
+            continue;
         }
+        // Animation Control plan Phase 3: BehaviorPaused freezes just this
+        // entity's on_tick -- lifecycle hooks above (on_spawn/on_begin_play)
+        // still ran normally, so a later un-pause doesn't need to re-fire
+        // one-time setup. The rest of the world (and this entity's own
+        // already-commanded animation, sampled independently in
+        // ViewportComponent) keeps running.
+        if (isBehaviorPaused(entityId)) {
+            continue;
+        }
+        invokeObjectHook(entityId, podId, "on_tick", EngineFrustEvent::simulationTick, tick);
     }
 }
 
@@ -337,6 +354,119 @@ bool EngineFrustHost::assetExists(const char* assetDisplayName)
     return activeHost->assetExistsProvider(assetDisplayName);
 }
 
+std::int64_t EngineFrustHost::animSetActiveClip(std::int64_t entityId, const char* clipName)
+{
+    if (activeHost == nullptr || entityId < 0 || clipName == nullptr || *clipName == '\0') return 0;
+    const auto entity = static_cast<entt::entity>(entityId);
+    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
+    auto& registry = activeHost->world.Registry();
+    auto* animator = registry.valid(entity) ? registry.try_get<scene::Animator>(entity) : nullptr;
+    if (animator == nullptr || animator->clips == nullptr) return 0;
+
+    const auto& clips = *animator->clips;
+    for (std::size_t i = 0; i < clips.size(); ++i) {
+        if (clips[i].name == clipName) {
+            animator->activeClip = static_cast<int>(i);
+            animator->time = 0.0f;
+            animator->blendFromClip = -1;
+            animator->blendFromTime = 0.0f;
+            animator->blendTime = 0.0f;
+            animator->blendDuration = 0.0f;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+std::int64_t EngineFrustHost::animCrossfadeTo(std::int64_t entityId, const char* clipName, std::int64_t blendMillis)
+{
+    if (activeHost == nullptr || entityId < 0 || clipName == nullptr || *clipName == '\0') return 0;
+    const auto entity = static_cast<entt::entity>(entityId);
+    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
+    auto& registry = activeHost->world.Registry();
+    auto* animator = registry.valid(entity) ? registry.try_get<scene::Animator>(entity) : nullptr;
+    if (animator == nullptr || animator->clips == nullptr) return 0;
+
+    const auto& clips = *animator->clips;
+    for (std::size_t i = 0; i < clips.size(); ++i) {
+        if (clips[i].name != clipName) {
+            continue;
+        }
+        if (animator->activeClip == static_cast<int>(i) && animator->blendFromClip < 0) {
+            return 1; // already the active clip and not mid-blend -- a no-op, not an error.
+        }
+        // If a previous crossfade is still in progress, its still-blending-
+        // FROM clip is deliberately dropped here in favor of the current
+        // (still-blending-TO) clip -- restarting a blend mid-blend loses
+        // that earlier clip's contribution rather than composing three
+        // clips together. Accepted simplification, not a bug: re-
+        // triggering a crossfade before the previous one finishes is an
+        // edge case a locomotion Pod can avoid via core.anim.isBlending.
+        animator->blendFromClip = animator->activeClip;
+        animator->blendFromTime = animator->time;
+        animator->activeClip = static_cast<int>(i);
+        animator->time = 0.0f;
+        animator->blendTime = 0.0f;
+        animator->blendDuration = juce::jmax<float>(0.0f, static_cast<float>(blendMillis) / 1000.0f);
+        return 1;
+    }
+    return 0;
+}
+
+std::int64_t EngineFrustHost::animSetPlaybackSpeedPerMille(std::int64_t entityId, std::int64_t speedPerMille)
+{
+    if (activeHost == nullptr || entityId < 0) return 0;
+    const auto entity = static_cast<entt::entity>(entityId);
+    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
+    auto& registry = activeHost->world.Registry();
+    auto* animator = registry.valid(entity) ? registry.try_get<scene::Animator>(entity) : nullptr;
+    if (animator == nullptr) return 0;
+    animator->playbackSpeed = static_cast<float>(speedPerMille) / 1000.0f;
+    return 1;
+}
+
+const char* EngineFrustHost::animGetActiveClipName(std::int64_t entityId)
+{
+    static thread_local std::string value;
+    value.clear();
+    if (activeHost == nullptr || entityId < 0) return value.c_str();
+    const auto entity = static_cast<entt::entity>(entityId);
+    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
+    auto& registry = activeHost->world.Registry();
+    const auto* animator = registry.valid(entity) ? registry.try_get<const scene::Animator>(entity) : nullptr;
+    if (animator != nullptr && animator->clips != nullptr && animator->activeClip >= 0 &&
+        static_cast<std::size_t>(animator->activeClip) < animator->clips->size()) {
+        value = (*animator->clips)[static_cast<std::size_t>(animator->activeClip)].name.toStdString();
+    }
+    return value.c_str();
+}
+
+std::int64_t EngineFrustHost::animGetClipDurationMillis(std::int64_t entityId, const char* clipName)
+{
+    if (activeHost == nullptr || entityId < 0 || clipName == nullptr) return 0;
+    const auto entity = static_cast<entt::entity>(entityId);
+    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
+    auto& registry = activeHost->world.Registry();
+    const auto* animator = registry.valid(entity) ? registry.try_get<const scene::Animator>(entity) : nullptr;
+    if (animator == nullptr || animator->clips == nullptr) return 0;
+    for (const auto& clip : *animator->clips) {
+        if (clip.name == clipName) {
+            return static_cast<std::int64_t>(clip.duration * 1000.0f);
+        }
+    }
+    return 0;
+}
+
+bool EngineFrustHost::animIsBlending(std::int64_t entityId)
+{
+    if (activeHost == nullptr || entityId < 0) return false;
+    const auto entity = static_cast<entt::entity>(entityId);
+    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
+    auto& registry = activeHost->world.Registry();
+    const auto* animator = registry.valid(entity) ? registry.try_get<const scene::Animator>(entity) : nullptr;
+    return animator != nullptr && animator->blendFromClip >= 0;
+}
+
 std::int64_t EngineFrustHost::podSetVariableString(std::int64_t entityId, const char* podId, const char* name, const char* value)
 {
     if (activeHost == nullptr || entityId < 0) return 0;
@@ -422,6 +552,17 @@ const char* EngineFrustHost::activeSceneId()
 std::string EngineFrustHost::behaviorKey(const std::string& podId)
 {
     return "object-behavior:" + podId;
+}
+
+bool EngineFrustHost::isBehaviorPaused(std::int64_t entityId) const
+{
+    if (entityId < 0) {
+        return false;
+    }
+    const auto entity = static_cast<entt::entity>(entityId);
+    std::lock_guard<std::mutex> lock(world.RegistryMutex());
+    const auto& registry = world.Registry();
+    return registry.valid(entity) && registry.all_of<scene::BehaviorPaused>(entity);
 }
 
 std::vector<std::pair<std::int64_t, std::string>> EngineFrustHost::attachedObjectBehaviors() const
