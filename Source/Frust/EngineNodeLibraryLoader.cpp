@@ -30,6 +30,14 @@ std::optional<GraphTarget> target(const juce::String& value) {
 }
 
 std::optional<DataType> dataType(const juce::String& value) {
+    // "any" is FRust's honest fallback for a pin type it has no precise
+    // mapping for yet (a generic node parameter, a struct, Vector<T>, ...)
+    // -- see Codegen.h's nodeDataType, which used to silently mislabel all
+    // of these as "int" instead. DataType::Any already exists and already
+    // wildcard-matches in IsConnectionCompatible; this was simply never
+    // reachable from a parsed plugin manifest before, since nothing ever
+    // emitted the string.
+    if (value == "any") return node_system::DataType::Any;
     if (value == "float") return node_system::DataType::Float;
     if (value == "vec2") return node_system::DataType::Vec2;
     if (value == "vec3") return node_system::DataType::Vec3;
