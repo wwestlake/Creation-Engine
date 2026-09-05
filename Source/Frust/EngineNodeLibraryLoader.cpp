@@ -19,6 +19,7 @@ std::optional<Domain> domain(const juce::String& value) {
     // enforcement, fixed alongside it since it's the same few lines.
     if (value == "audio") return node_system::Domain::Audio;
     if (value == "video") return node_system::Domain::Video;
+    if (value == "input") return node_system::Domain::Input;
     return std::nullopt;
 }
 std::optional<GraphTarget> target(const juce::String& value) {

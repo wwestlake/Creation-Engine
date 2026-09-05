@@ -1,0 +1,73 @@
+#pragma once
+
+#include <JuceHeader.h>
+#include <creation/assets/ProjectSession.h>
+
+#include "Input/InputActionSystem.h"
+#include "Input/InputBindingDocumentStore.h"
+#include "Project/EngineGameDocument.h"
+
+namespace ce::views
+{
+// Authors the one InputBindings document belonging to whichever Game is
+// currently active -- not a browse/catalog panel (there is exactly one
+// document, not many "Things" to list; see docs/OBJECT_MODEL.md's
+// Entity/Thing/Object section on why this doesn't get the
+// create/list/open/save/delete/rename treatment PodCatalog/
+// ObjectDefinitionCatalog give real Things, same reasoning games.xml
+// itself isn't one). Always docked, same tier as BehaviorAttachmentPanel/
+// TransformPanel -- never opened/closed on demand like PodEditorPanel's
+// per-Pod tab.
+class InputBindingsPanel final : public juce::Component
+{
+public:
+    InputBindingsPanel(input::InputActionSystem& inputActionSystem, creation::assets::ProjectSession& projectSession);
+
+    // Declared here, defined out-of-line in the .cpp after ActionRow/
+    // BindingRow's full definitions are visible -- same reason
+    // BehaviorAttachmentPanel::~BehaviorAttachmentPanel() is out-of-line
+    // (rows_ is a juce::OwnedArray<ActionRow> where ActionRow is only
+    // forward-declared here).
+    ~InputBindingsPanel() override;
+
+    // Called from the same two MainComponent call sites that already call
+    // InputActionSystem::LoadForGame (openActiveGame/selectGame) -- keeps
+    // this panel's displayed rows in lockstep with whichever Game is
+    // active.
+    void SetActiveGame(const project::GameDocumentInfo& game);
+    void Refresh();
+
+    void resized() override;
+    void paint(juce::Graphics& g) override;
+
+private:
+    class ActionRow;
+    class BindingRow;
+    class CaptureOverlay;
+
+    void AddAction();
+    void RemoveAction(const juce::String& name);
+    void SetActionKind(const juce::String& name, input::ActionKind kind);
+    void AddBinding(const juce::String& actionName);
+    void RemoveBinding(const juce::String& actionName, int bindingIndex);
+    void BeginCapture(BindingRow& target);
+    void FinishCapture(const input::InputBinding& captured);
+    void CancelCapture();
+    void SaveContent();
+
+    input::InputActionSystem& inputActionSystem_;
+    creation::assets::ProjectSession& projectSession_;
+    project::GameDocumentInfo activeGame_;
+
+    juce::Label titleLabel_ { {}, "Input Bindings" };
+    juce::TextButton addActionButton_ { "Add Action" };
+    juce::TextButton saveButton_ { "Save" };
+    juce::Label statusLabel_;
+    juce::OwnedArray<ActionRow> rows_;
+    std::unique_ptr<CaptureOverlay> captureOverlay_; // non-null only while actively capturing a rebind.
+    juce::String capturingActionName_;
+    int capturingBindingIndex_ = -1;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(InputBindingsPanel)
+};
+} // namespace ce::views

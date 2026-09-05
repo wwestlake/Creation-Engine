@@ -16,6 +16,11 @@ namespace ce::engine
 class World;
 }
 
+namespace ce::input
+{
+class InputActionSystem;
+}
+
 namespace ce::frust
 {
 enum class EngineFrustEvent : std::int64_t
@@ -58,6 +63,12 @@ public:
     // AssetCatalog directly (MainComponent does), same provider-callback
     // pattern as the two providers just above, not a new convention.
     void setAssetExistsProvider(std::function<bool(const std::string&)> provider);
+    // Input Binding System plan -- backs the Domain::Input query nodes
+    // (core.input.isActionActive et al.). Raw pointer, not a std::function
+    // provider like the callbacks above: InputActionSystem lives for the
+    // whole session on MainComponent, same direct-access shape
+    // nodeLibraries() below already uses, no indirection to hide.
+    void setInputActionSystem(input::InputActionSystem* system) noexcept { inputActionSystem_ = system; }
     [[nodiscard]] bool isLoaded() const noexcept;
     [[nodiscard]] bool isObjectBehaviorLoaded(const std::string& podId) const noexcept;
     [[nodiscard]] const node_system::NodeLibraryRegistry& nodeLibraries() const noexcept { return nodeLibraries_; }
@@ -108,6 +119,13 @@ private:
     static const char* animGetActiveClipName(std::int64_t entityId);
     static std::int64_t animGetClipDurationMillis(std::int64_t entityId, const char* clipName);
     static bool animIsBlending(std::int64_t entityId);
+    // Input Binding System plan -- host-extern nodes backing
+    // Domain::Input, delegating to InputActionSystem (process-global, no
+    // entity dimension, matching engine::GameplayInput's own shape).
+    static bool inputIsActionActive(const char* actionName);
+    static bool inputWasActionPressed(const char* actionName);
+    static bool inputWasActionReleased(const char* actionName);
+    static std::int64_t inputGetActionValuePerMille(const char* actionName);
     [[nodiscard]] static std::string behaviorKey(const std::string& podId);
     [[nodiscard]] bool isBehaviorPaused(std::int64_t entityId) const;
     [[nodiscard]] std::vector<std::pair<std::int64_t, std::string>> attachedObjectBehaviors() const;
@@ -133,6 +151,7 @@ private:
     std::function<std::string()> activeGameIdProvider;
     std::function<std::string()> activeSceneIdProvider;
     std::function<bool(const std::string&)> assetExistsProvider;
+    input::InputActionSystem* inputActionSystem_ = nullptr;
     std::unordered_map<std::int64_t, ObjectLifecycle> objectLifecycles;
 };
 } // namespace ce::frust

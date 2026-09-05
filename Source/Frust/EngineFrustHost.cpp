@@ -9,6 +9,7 @@
 
 #include "engine/core_components.h"
 #include "engine/world.h"
+#include "Input/InputActionSystem.h"
 #include "Scene/Components.h"
 
 namespace ce::frust
@@ -46,6 +47,10 @@ EngineFrustHost::EngineFrustHost(engine::World& worldToHost)
     runtime.registerHostFunction("engine_anim_get_active_clip_name", reinterpret_cast<void*>(&EngineFrustHost::animGetActiveClipName));
     runtime.registerHostFunction("engine_anim_get_clip_duration_millis", reinterpret_cast<void*>(&EngineFrustHost::animGetClipDurationMillis));
     runtime.registerHostFunction("engine_anim_is_blending", reinterpret_cast<void*>(&EngineFrustHost::animIsBlending));
+    runtime.registerHostFunction("engine_input_is_action_active", reinterpret_cast<void*>(&EngineFrustHost::inputIsActionActive));
+    runtime.registerHostFunction("engine_input_was_action_pressed", reinterpret_cast<void*>(&EngineFrustHost::inputWasActionPressed));
+    runtime.registerHostFunction("engine_input_was_action_released", reinterpret_cast<void*>(&EngineFrustHost::inputWasActionReleased));
+    runtime.registerHostFunction("engine_input_get_action_value_permille", reinterpret_cast<void*>(&EngineFrustHost::inputGetActionValuePerMille));
 
     // Real, pre-existing gap fixed here: control-flow/Event/Variable node
     // types were only ever registered into PodEditorPanel's own palette
@@ -65,6 +70,7 @@ EngineFrustHost::EngineFrustHost(engine::World& worldToHost)
         node_system::RegisterCoreVariableNodes(structuralTypes);
         node_system::RegisterCoreCapabilityNodes(structuralTypes);
         node_system::RegisterCoreAnimationNodes(structuralTypes);
+        node_system::RegisterCoreInputNodes(structuralTypes);
 
         node_system::NodeLibraryDescriptor library;
         library.id = "core-structural";
@@ -465,6 +471,30 @@ bool EngineFrustHost::animIsBlending(std::int64_t entityId)
     auto& registry = activeHost->world.Registry();
     const auto* animator = registry.valid(entity) ? registry.try_get<const scene::Animator>(entity) : nullptr;
     return animator != nullptr && animator->blendFromClip >= 0;
+}
+
+bool EngineFrustHost::inputIsActionActive(const char* actionName)
+{
+    if (activeHost == nullptr || activeHost->inputActionSystem_ == nullptr || actionName == nullptr) return false;
+    return activeHost->inputActionSystem_->IsActionActive(actionName);
+}
+
+bool EngineFrustHost::inputWasActionPressed(const char* actionName)
+{
+    if (activeHost == nullptr || activeHost->inputActionSystem_ == nullptr || actionName == nullptr) return false;
+    return activeHost->inputActionSystem_->WasActionPressed(actionName);
+}
+
+bool EngineFrustHost::inputWasActionReleased(const char* actionName)
+{
+    if (activeHost == nullptr || activeHost->inputActionSystem_ == nullptr || actionName == nullptr) return false;
+    return activeHost->inputActionSystem_->WasActionReleased(actionName);
+}
+
+std::int64_t EngineFrustHost::inputGetActionValuePerMille(const char* actionName)
+{
+    if (activeHost == nullptr || activeHost->inputActionSystem_ == nullptr || actionName == nullptr) return 0;
+    return activeHost->inputActionSystem_->GetActionValuePerMille(actionName);
 }
 
 std::int64_t EngineFrustHost::podSetVariableString(std::int64_t entityId, const char* podId, const char* name, const char* value)
