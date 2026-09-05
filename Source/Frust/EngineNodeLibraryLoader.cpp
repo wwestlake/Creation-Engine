@@ -124,6 +124,13 @@ bool parsePin(const juce::var& value, PinSignature& pin, std::string& error) {
         error = "default " + error;
         return false;
     }
+    // Real monomorphized generics for Schematic nodes plan, Phase 1/2:
+    // present only when this pin's type is one of its node's own
+    // genericParams (Codegen.h's compileNodeReflection). Optional --
+    // absent for an ordinary pin, same as "default" above.
+    if (object->hasProperty("genericParam")) {
+        pin.genericParam = object->getProperty("genericParam").toString().toStdString();
+    }
     return true;
 }
 
@@ -235,6 +242,24 @@ bool parseLibrary(const creation::frust::PluginRuntime::NodeLibraryManifest& man
             !parsePins(nodeObject->getProperty("outputs"), node.outputs, "output", pinsError)) {
             error = "Node library '" + manifest.id + "' node " + std::to_string(index) + " " + pinsError + ".";
             return false;
+        }
+        // Real monomorphized generics for Schematic nodes plan, Phase 1/2:
+        // straight from FRust reflection's own "genericParams" array
+        // (Codegen.h's compileNodeReflection). Optional, same as
+        // requiredCapabilities above -- empty/absent for an ordinary node.
+        const auto genericParams = nodeObject->getProperty("genericParams");
+        if (!genericParams.isVoid() && !genericParams.isUndefined()) {
+            if (!genericParams.isArray()) {
+                error = "Node library '" + manifest.id + "' node " + std::to_string(index) + " has a non-array genericParams field.";
+                return false;
+            }
+            for (const auto& param : *genericParams.getArray()) {
+                if (!param.isString()) {
+                    error = "Node library '" + manifest.id + "' node " + std::to_string(index) + " has a non-string generic parameter.";
+                    return false;
+                }
+                node.genericParams.push_back(param.toString().toStdString());
+            }
         }
         library.nodeTypes.push_back(std::move(node));
     }
