@@ -467,6 +467,16 @@ target_compile_definitions(CreationEngineFrustGenericNodeReflectionSmoke PRIVATE
 )
 add_test(NAME creation_engine_frust_generic_node_reflection_smoke COMMAND CreationEngineFrustGenericNodeReflectionSmoke)
 
+add_executable(CreationEngineGenericNodeCodegenSmoke
+    tests/GenericNodeCodegenSmoke.cpp
+)
+target_link_libraries(CreationEngineGenericNodeCodegenSmoke PRIVATE node_system)
+target_link_libraries(CreationEngineGenericNodeCodegenSmoke PRIVATE creation_suite_frust_plugin_runtime)
+target_compile_definitions(CreationEngineGenericNodeCodegenSmoke PRIVATE
+    CE_CORE_NODE_LIBRARY="${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodesLibrary.frust"
+)
+add_test(NAME creation_engine_generic_node_codegen_smoke COMMAND CreationEngineGenericNodeCodegenSmoke)
+
 # --- Dedicated server executable ------------------------------------------
 # Headless build: no rendering or client-only assets. Only juce_core and
 # juce_events provide cross-platform utilities for the server shell.
