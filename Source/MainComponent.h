@@ -9,12 +9,15 @@
 #include "engine/world.h"
 #include "Frust/EngineFrustHost.h"
 #include "Frust/PodCatalog.h"
+#include "Input/InputActionSystem.h"
+#include "Input/InputBindingDocumentStore.h"
 #include "Interaction/EditorInteraction.h"
 #include "Render/ViewportComponent.h"
 #include "Scene/ObjectDefinitions.h"
 #include "Views/BehaviorAttachmentPanel.h"
 #include "Diagnostics/EngineLogVfsWriter.h"
 #include "Views/ContentBrowserPanel.h"
+#include "Views/InputBindingsPanel.h"
 #include "Views/LogPanel.h"
 #include "Views/HierarchyPanel.h"
 #include "Views/ImportPanel.h"
@@ -167,6 +170,7 @@ private:
     ce::engine::World world_;
     ce::interaction::EditorInteraction interactions_ { world_ };
     ce::frust::EngineFrustHost frustHost_ { world_ };
+    ce::input::InputActionSystem inputActionSystem_;
     // Named registry of Pods (docs/BEHAVIOR_COMPONENT_MODEL.md, and the
     // Pod Management System plan generalizing it) -- owned here since
     // both PodEditorPanel (editing) and behaviorAttachmentPanel_
@@ -229,6 +233,13 @@ private:
     // pbrMaterialPanel_ for the same reason: both are per-selected-entity
     // property editors.
     ce::BehaviorAttachmentPanel behaviorAttachmentPanel_ { world_, frustHost_, podCatalog_ };
+
+    // Input Binding System plan -- authors the active Game's one
+    // InputBindings document. Sits alongside behaviorAttachmentPanel_ for
+    // a similar reason: both are always-docked, session-lifetime editors,
+    // not per-selected-entity though (this one edits inputActionSystem_'s
+    // whole loaded set, unrelated to hierarchy selection).
+    ce::views::InputBindingsPanel inputBindingsPanel_ { inputActionSystem_, projectSession_ };
 
     ce::LightPanel lightPanel_;
 

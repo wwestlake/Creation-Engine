@@ -168,6 +168,11 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Frust/EngineFrustHost.cpp
     Source/Frust/EngineNodeLibraryLoader.h
     Source/Frust/EngineNodeLibraryLoader.cpp
+    Source/Input/InputBindingTypes.h
+    Source/Input/InputBindingDocumentStore.h
+    Source/Input/InputBindingDocumentStore.cpp
+    Source/Input/InputActionSystem.h
+    Source/Input/InputActionSystem.cpp
     Source/Interaction/EditorInteraction.h
     Source/Interaction/EditorInteraction.cpp
     Source/Branding.h
@@ -227,6 +232,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Diagnostics/EngineLogVfsWriter.cpp
     Source/Views/BehaviorAttachmentPanel.h
     Source/Views/BehaviorAttachmentPanel.cpp
+    Source/Views/InputBindingsPanel.h
+    Source/Views/InputBindingsPanel.cpp
     Source/Runtime/GameClientWindow.h
     Source/Runtime/GameClientWindow.cpp
     Source/Character/CharacterDefinition.h
@@ -331,6 +338,8 @@ add_executable(CreationEngineFrustPluginSmoke
     tests/EngineFrustPluginSmoke.cpp
     Source/Frust/EngineFrustHost.cpp
     Source/Frust/EngineNodeLibraryLoader.cpp
+    Source/Input/InputActionSystem.cpp
+    Source/Input/InputBindingDocumentStore.cpp
 )
 
 if(MSVC)
@@ -344,8 +353,10 @@ target_include_directories(CreationEngineFrustPluginSmoke PRIVATE Source)
 target_link_libraries(CreationEngineFrustPluginSmoke PRIVATE
     engine_core
     node_system
+    creation_suite_asset_system
     creation_suite_frust_plugin_runtime
     juce::juce_core
+    juce::juce_gui_basics
 )
 target_compile_definitions(CreationEngineFrustPluginSmoke PRIVATE
     CE_ENGINE_LIFECYCLE_PLUGIN="${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/EngineLifecycle.frust"
@@ -368,20 +379,39 @@ add_executable(CreationEngineObjectBehaviorSmoke
     tests/EngineObjectBehaviorSmoke.cpp
     Source/Frust/EngineFrustHost.cpp
     Source/Frust/EngineNodeLibraryLoader.cpp
+    Source/Input/InputActionSystem.cpp
+    Source/Input/InputBindingDocumentStore.cpp
 )
 target_include_directories(CreationEngineObjectBehaviorSmoke PRIVATE Source)
 target_link_libraries(CreationEngineObjectBehaviorSmoke PRIVATE
     engine_core
     node_system
+    creation_suite_asset_system
     creation_suite_frust_plugin_runtime
     juce::juce_core
     juce::juce_graphics
+    juce::juce_gui_basics
     juce::juce_opengl
 )
 target_compile_definitions(CreationEngineObjectBehaviorSmoke PRIVATE
     CE_ENGINE_OBJECT_BEHAVIOR_PLUGIN="${CMAKE_CURRENT_SOURCE_DIR}/tests/plugins/SetCurrentObjectX.frust"
 )
 add_test(NAME creation_engine_object_behavior_smoke COMMAND CreationEngineObjectBehaviorSmoke)
+
+add_executable(CreationEngineInputActionSystemSmoke
+    tests/InputActionSystemSmoke.cpp
+    Source/Input/InputActionSystem.cpp
+    Source/Input/InputBindingDocumentStore.cpp
+)
+target_include_directories(CreationEngineInputActionSystemSmoke PRIVATE Source)
+target_link_libraries(CreationEngineInputActionSystemSmoke PRIVATE
+    engine_core
+    node_system
+    creation_suite_asset_system
+    juce::juce_core
+    juce::juce_gui_basics
+)
+add_test(NAME creation_engine_input_action_system_smoke COMMAND CreationEngineInputActionSystemSmoke)
 
 add_executable(CreationEngineObjectDefinitionSmoke
     tests/ObjectDefinitionSmoke.cpp

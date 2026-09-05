@@ -44,6 +44,7 @@ constexpr DockPanelMenuEntry kDockPanelMenuEntries[] = {
     { "transform", "Transform" },
     { "materials-pbr", "Material Inspector" },
     { "behaviors", "Behaviors" },
+    { "input-bindings", "Input Bindings" },
     { "lighting", "Lighting" },
     { "materials", "Materials" },
     { "content-browser", "Content Browser" },
@@ -235,6 +236,7 @@ MainComponent::MainComponent()
             if (asset.displayName == target) return true;
         return false;
     });
+    frustHost_.setInputActionSystem(&inputActionSystem_);
 
     headerBar_.setAppTitle("Creation Engine");
     headerBar_.setLogoImage(creation::ui::getSuiteLogoImage(creation::ui::SuiteLogoId::engine));
@@ -544,6 +546,7 @@ void MainComponent::initialiseDockingWorkspace()
     dockManager_->registerPanel("transform", "Transform", std::make_unique<NonOwningPanelHost>(transformPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("materials-pbr", "Material Inspector", std::make_unique<NonOwningPanelHost>(pbrMaterialPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("behaviors", "Behaviors", std::make_unique<NonOwningPanelHost>(behaviorAttachmentPanel_), CreationDock::DockTargetZone::Right);
+    dockManager_->registerPanel("input-bindings", "Input Bindings", std::make_unique<NonOwningPanelHost>(inputBindingsPanel_), CreationDock::DockTargetZone::Right);
     dockManager_->registerPanel("lighting", "Lighting", std::make_unique<NonOwningPanelHost>(lightPanel_), CreationDock::DockTargetZone::Right);
     // "pods"/"pod-info" deliberately NOT registered here -- they exist only
     // while a Pod is open, via EnsurePodPanelsOpen(). Pod/Asset Workflow
@@ -646,6 +649,11 @@ void MainComponent::timerCallback() {
         if (resumeAfterTransition) SetPlaying(true);
     }
     if (isPlaying_) {
+        // Input Binding System plan: poll raw keyboard/mouse/controller
+        // state once, before anything below reads it -- a Pod's on_tick
+        // this same tick sees this tick's poll (core.input.isActionActive
+        // et al.), not a stale one from last tick.
+        inputActionSystem_.PollOncePerFrame();
         // GS6: runs every attached ScriptComponent's on_tick (and
         // on_start, on an entity's first playing tick) before advancing
         // World's tick counter -- the same Simulation::Step
@@ -782,6 +790,9 @@ bool MainComponent::openActiveGame(juce::String& errorMessage)
         for (const auto& scene : activeGame_.scenes)
             if (scene.id == activeGame_.entrySceneId) { activeScene_ = scene; break; }
     if (activeScene_.id.isEmpty() && !activeGame_.scenes.isEmpty()) activeScene_ = activeGame_.scenes.getFirst();
+    juce::String inputBindingsError;
+    inputActionSystem_.LoadForGame(projectSession_, activeGame_, inputBindingsError);
+    inputBindingsPanel_.SetActiveGame(activeGame_);
     importPanel_.SetProjectContent(&projectSession_, activeGame_.assetRoot());
     contentBrowserPanel_.SetProjectContent(&projectSession_);
     if (!ce::project::EngineGameDocumentStore::loadScene(projectSession_, activeGame_, activeScene_, world_, errorMessage)) return false;
@@ -915,6 +926,9 @@ void MainComponent::selectGame(const juce::String& gameId)
         for (const auto& scene : activeGame_.scenes)
             if (scene.id == activeGame_.entrySceneId) { activeScene_ = scene; break; }
         if (activeScene_.id.isEmpty() && !activeGame_.scenes.isEmpty()) activeScene_ = activeGame_.scenes.getFirst();
+        juce::String inputBindingsError;
+        inputActionSystem_.LoadForGame(projectSession_, activeGame_, inputBindingsError);
+        inputBindingsPanel_.SetActiveGame(activeGame_);
         importPanel_.SetProjectContent(&projectSession_, activeGame_.assetRoot());
         contentBrowserPanel_.SetProjectContent(&projectSession_);
         juce::String error;
