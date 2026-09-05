@@ -101,6 +101,7 @@ private:
     // wired to both panels' tab-close (X) button via onCloseRequested.
     void EnsurePodPanelsOpen();
     void ClosePodPanels();
+    void EnsureInputBindingsPanelOpen();
 
     // Same lazy-registration shape as the Pod editor pair above, for the
     // (much smaller) Object Definition editor -- opened from
@@ -146,6 +147,12 @@ private:
     // function, which every other emplace<>-heavy function in this
     // codebase already is).
     void HandleAssetDropped(const juce::String& description, juce::Point<int> localPosition);
+    // Input Combo Events plan -- re-derives frustHost_'s "input-combos"
+    // node library from inputActionSystem_.Bindings().combos. Called
+    // whenever the active Game's combo list changes: both game-load call
+    // sites (right after inputActionSystem_.LoadForGame) and from
+    // InputBindingsPanel after a combo is added/renamed/removed and saved.
+    void RefreshComboEventNodes();
 
     creation::suite::SuiteSettings suiteSettings_;
     creation::suite::SuiteSettingsStore suiteSettingsStore_;

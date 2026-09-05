@@ -170,6 +170,13 @@ void EngineFrustHost::tick(std::int64_t tick)
     }
 
     dispatch(EngineFrustEvent::simulationTick, tick);
+    // Input Combo Events plan: fetched once per tick() call, not once per
+    // (entity, pod) pair below -- InputActionSystem::PollOncePerFrame()
+    // already ran this same tick (MainComponent::timerCallback, before
+    // Simulation::Step/FoundationGameplay::Step/this call), so this is
+    // exactly "collected and held until start of the frame, available to
+    // everything that runs before OpenGL."
+    const auto firedCombos = inputActionSystem_ != nullptr ? inputActionSystem_->FiredCombos() : juce::StringArray{};
     for (const auto& [entityId, podId] : attachedObjectBehaviors())
     {
         ensureObjectLifecycle(entityId, podId, tick);
@@ -186,6 +193,17 @@ void EngineFrustHost::tick(std::int64_t tick)
             continue;
         }
         invokeObjectHook(entityId, podId, "on_tick", EngineFrustEvent::simulationTick, tick);
+        for (const auto& comboName : firedCombos) {
+            // Same derivation PodEditorPanel.cpp's compile pass uses (via
+            // this identical function) -- a hand-rolled "on_action_" +
+            // name here would silently diverge from the compiled hook
+            // name the moment a combo's display name needs sanitizing
+            // (spaces, punctuation) for FRust identifier rules.
+            const auto hookName = node_system::EventNodeFrustFunctionName("core.input.combo." + comboName.toStdString());
+            if (!hookName.empty()) {
+                invokeObjectHook(entityId, podId, hookName.c_str(), EngineFrustEvent::simulationTick, tick);
+            }
+        }
     }
 }
 
@@ -241,6 +259,11 @@ void EngineFrustHost::setActiveSceneIdProvider(std::function<std::string()> prov
 void EngineFrustHost::setAssetExistsProvider(std::function<bool(const std::string&)> provider)
 {
     assetExistsProvider = std::move(provider);
+}
+
+bool EngineFrustHost::RefreshComboEventNodes(const std::vector<std::string>& comboNames, std::string& error)
+{
+    return nodeLibraries_.ReplaceLibrary(node_system::BuildInputComboEventLibrary(comboNames), &error);
 }
 
 bool EngineFrustHost::isLoaded() const noexcept

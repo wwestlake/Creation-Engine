@@ -1,6 +1,8 @@
 #include "Input/InputActionSystem.h"
 
+#include <cmath>
 #include <cstdlib>
+#include <utility>
 
 #include "Input/InputBindingDocumentStore.h"
 
@@ -49,6 +51,40 @@ int EvaluateAnalogContribution(const InputBinding& binding, const InputControlle
 }
 } // namespace
 
+bool MatchesCombo(const std::vector<RawKeyEvent>& recentKeyDownEvents, const InputCombo& combo)
+{
+    const int n = combo.keys.size();
+    if (n <= 0 || static_cast<int>(recentKeyDownEvents.size()) < n) {
+        return false;
+    }
+
+    // Only the LAST n buffer entries can possibly be this combo -- a
+    // combo is always matched against the most recently completed
+    // sequence of key-down edges, never a stale one buried earlier.
+    const auto start = static_cast<std::size_t>(static_cast<int>(recentKeyDownEvents.size()) - n);
+    for (int i = 0; i < n; ++i) {
+        if (recentKeyDownEvents[start + static_cast<std::size_t>(i)].first != combo.keys[i].keyCode) {
+            return false;
+        }
+    }
+
+    const double firstTime = recentKeyDownEvents[start].second;
+    for (int i = 1; i < n; ++i) {
+        const double actualOffset = recentKeyDownEvents[start + static_cast<std::size_t>(i)].second - firstTime;
+        const double recordedOffset = static_cast<double>(combo.keys[i].offsetMillis);
+        // Generous tolerance: human timing varies a lot more than machine
+        // timing -- 150ms floor for near-simultaneous chords, 60% of the
+        // recorded gap for longer sequences (a 300ms-recorded pause can
+        // reasonably land anywhere from ~120ms to ~480ms and still read
+        // as "the same combo" to the person who recorded it).
+        const double tolerance = juce::jmax(150.0, recordedOffset * 0.6);
+        if (std::abs(actualOffset - recordedOffset) > tolerance) {
+            return false;
+        }
+    }
+    return true;
+}
+
 InputActionSystem::InputActionSystem(std::unique_ptr<InputControllerBackend> controllerBackend)
     : controllerBackend_(std::move(controllerBackend))
 {
@@ -89,6 +125,53 @@ void InputActionSystem::PollOncePerFrame()
             state.active = state.valuePerMille > 0;
         }
         current_[action.name] = state;
+    }
+
+    // Combo detection -- independent of the Action loop above. Only scans
+    // the (typically small) set of keys any defined combo actually cares
+    // about, so this stays cheap even with dozens of unrelated Actions
+    // bound elsewhere.
+    firedCombos_.clear();
+    std::unordered_map<int, bool> currentRawKeysDown;
+    for (const auto& combo : bindings_.combos) {
+        for (const auto& key : combo.keys) {
+            if (currentRawKeysDown.contains(key.keyCode)) continue;
+            currentRawKeysDown[key.keyCode] = foreground && juce::KeyPress::isKeyCurrentlyDown(key.keyCode);
+        }
+    }
+
+    const double nowMs = juce::Time::getMillisecondCounterHiRes();
+    for (const auto& [code, isDown] : currentRawKeysDown) {
+        const auto previousIt = previousRawKeysDown_.find(code);
+        const bool wasDown = previousIt != previousRawKeysDown_.end() && previousIt->second;
+        if (isDown && !wasDown) {
+            recentKeyDownEvents_.emplace_back(code, nowMs);
+        }
+    }
+    previousRawKeysDown_ = std::move(currentRawKeysDown);
+
+    while (!recentKeyDownEvents_.empty() && nowMs - recentKeyDownEvents_.front().second > kMaxComboWindowMs) {
+        recentKeyDownEvents_.erase(recentKeyDownEvents_.begin());
+    }
+
+    // Longest combo first: a buffer tail of [Escape, G] should satisfy a
+    // defined "Escape, G" combo in preference to a shorter "G"-alone
+    // combo also matching the same trailing entry. A completed combo
+    // resets the whole buffer (accepted simplification -- see
+    // InputCombo's own header comment) so at most one combo fires per
+    // tick.
+    for (int keyCount = 3; keyCount >= 1; --keyCount) {
+        bool matched = false;
+        for (const auto& combo : bindings_.combos) {
+            if (combo.name.isEmpty() || combo.keys.size() != keyCount) continue;
+            if (MatchesCombo(recentKeyDownEvents_, combo)) {
+                firedCombos_.add(combo.name);
+                recentKeyDownEvents_.clear();
+                matched = true;
+                break;
+            }
+        }
+        if (matched) break;
     }
 }
 

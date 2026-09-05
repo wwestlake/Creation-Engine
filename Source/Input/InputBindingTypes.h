@@ -54,6 +54,28 @@ struct InputAction
     juce::Array<InputBinding> bindings; // Digital: OR'd. Analog: MAX magnitude wins.
 };
 
+// One physical key captured during a combo recording, in press order.
+struct ComboKeyPress
+{
+    int keyCode = 0;
+    int offsetMillis = 0; // elapsed ms from the FIRST key in the combo; 0 for the first.
+};
+
+// A recorded 1-3 key combo -- pressed together (a chord, near-zero
+// offsets) or in short sequence (a leader-key/meta-prefix pattern, e.g.
+// Escape then a letter), indistinguishable at the data level: both are
+// just recorded (keyCode, offsetMillis) pairs, matched with the same
+// tolerance-based matcher (see InputActionSystem::PollOncePerFrame).
+// Naming a combo registers "core.input.combo.<name>" as a placeable
+// Domain::Event node a Pod graph can wire up directly, fired once when
+// the sequence completes -- unlike InputAction above, which is a
+// continuous, always-queryable state a Pod polls itself.
+struct InputCombo
+{
+    juce::String name; // unique within an InputBindingSet; becomes the placeable node's identity.
+    juce::Array<ComboKeyPress> keys;
+};
+
 // One InputBindings document == one Game (see InputBindingDocumentStore) --
 // not a separately browsable/versioned Thing, same reasoning games.xml
 // itself is not one (docs/OBJECT_MODEL.md's create/list/open/save/delete/
@@ -61,5 +83,6 @@ struct InputAction
 struct InputBindingSet
 {
     juce::Array<InputAction> actions;
+    juce::Array<InputCombo> combos;
 };
 } // namespace ce::input

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include <JuceHeader.h>
 #include <creation/assets/ProjectSession.h>
 
@@ -37,6 +39,14 @@ public:
     void SetActiveGame(const project::GameDocumentInfo& game);
     void Refresh();
 
+    // Set by MainComponent right after construction -- called whenever a
+    // Combo is added/renamed/removed and saved, so the corresponding
+    // Schematic event node (Input Combo Events plan) stays in sync. A
+    // plain callback rather than a direct EngineFrustHost& reference,
+    // matching this codebase's existing cross-panel wiring convention
+    // (e.g. ImportPanel::onContentChanged).
+    std::function<void()> onCombosChanged;
+
     void resized() override;
     void paint(juce::Graphics& g) override;
 
@@ -44,6 +54,8 @@ private:
     class ActionRow;
     class BindingRow;
     class CaptureOverlay;
+    class ComboRow;
+    class ComboCaptureOverlay;
 
     void AddAction();
     void RemoveAction(const juce::String& name);
@@ -53,6 +65,14 @@ private:
     void BeginCapture(BindingRow& target);
     void FinishCapture(const input::InputBinding& captured);
     void CancelCapture();
+
+    void AddCombo();
+    void RecordCombo(const juce::String& existingName);
+    void RenameCombo(const juce::String& name);
+    void RemoveCombo(const juce::String& name);
+    void FinishComboCapture(const juce::Array<input::ComboKeyPress>& recorded);
+    void CancelComboCapture();
+
     void SaveContent();
 
     input::InputActionSystem& inputActionSystem_;
@@ -61,12 +81,17 @@ private:
 
     juce::Label titleLabel_ { {}, "Input Bindings" };
     juce::TextButton addActionButton_ { "Add Action" };
+    juce::TextButton addComboButton_ { "Add Combo" };
     juce::TextButton saveButton_ { "Save" };
     juce::Label statusLabel_;
     juce::OwnedArray<ActionRow> rows_;
+    juce::Label comboSectionLabel_ { {}, "Combos" };
+    juce::OwnedArray<ComboRow> comboRows_;
     std::unique_ptr<CaptureOverlay> captureOverlay_; // non-null only while actively capturing a rebind.
     juce::String capturingActionName_;
     int capturingBindingIndex_ = -1;
+    std::unique_ptr<ComboCaptureOverlay> comboCaptureOverlay_; // non-null only while recording a combo.
+    juce::String comboBeingRecorded_; // empty = recording a brand-new combo (prompts for a name after); non-empty = re-recording that existing combo's keys.
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(InputBindingsPanel)
 };
