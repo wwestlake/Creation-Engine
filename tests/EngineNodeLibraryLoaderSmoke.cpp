@@ -1,12 +1,15 @@
 #include "Frust/EngineNodeLibraryLoader.h"
 
 #include <iostream>
+#include <set>
 #include <string>
 
 int main()
 {
     using creation::frust::PluginRuntime;
     using namespace ce::node_system;
+
+    const std::set<std::string, std::less<>> noCapabilities;
 
     const PluginRuntime::NodeLibraryManifest manifest {
         "core.flow",
@@ -31,7 +34,7 @@ int main()
 
     NodeLibraryRegistry registry;
     std::string error;
-    if (!ce::frust::RegisterPluginNodeLibraries({ manifest }, registry, error)) {
+    if (!ce::frust::RegisterPluginNodeLibraries({ manifest }, registry, noCapabilities, error)) {
         std::cerr << "Could not load plugin node library: " << error << '\n';
         return 1;
     }
@@ -52,9 +55,38 @@ int main()
     }
 
     const PluginRuntime::NodeLibraryManifest malformed { "engine.bad", R"json({"id":"engine.bad","target":"behavior","nodes":[{}]})json" };
-    if (ce::frust::RegisterPluginNodeLibraries({ malformed }, registry, error) ||
+    if (ce::frust::RegisterPluginNodeLibraries({ malformed }, registry, noCapabilities, error) ||
         error.find("needs typeName") == std::string::npos) {
         std::cerr << "Malformed node-library metadata was accepted.\n";
+        return 1;
+    }
+
+    // "any" dataType (Codegen.h's nodeDataType fix): a generic/unrecognized
+    // FRust type now reflects honestly as DataType::Any instead of the old
+    // silent, false "int" default -- confirm the host actually accepts and
+    // preserves it, not just that it no longer errors.
+    const PluginRuntime::NodeLibraryManifest genericManifest {
+        "core.generic",
+        R"json({
+            "id": "core.generic",
+            "target": "dataflow",
+            "nodes": [{
+                "typeName": "core.identity",
+                "frustEntryPoint": "core_identity",
+                "domain": "core",
+                "inputs": [{ "name": "value", "kind": "data", "dataType": "any" }],
+                "outputs": [{ "name": "result", "kind": "data", "dataType": "any" }]
+            }]
+        })json"
+    };
+    if (!ce::frust::RegisterPluginNodeLibraries({ genericManifest }, registry, noCapabilities, error)) {
+        std::cerr << "Could not load node library with \"any\"-typed pins: " << error << '\n';
+        return 1;
+    }
+    const auto* genericNode = registry.FindNodeType("core.identity");
+    if (genericNode == nullptr || genericNode->inputs.front().type.dataType != DataType::Any ||
+        genericNode->outputs.front().type.dataType != DataType::Any) {
+        std::cerr << "\"any\" dataType did not round-trip as DataType::Any.\n";
         return 1;
     }
 
