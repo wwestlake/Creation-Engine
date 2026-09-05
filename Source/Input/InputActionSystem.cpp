@@ -34,6 +34,16 @@ bool EvaluateDigitalSource(const InputBinding& binding, const InputControllerBac
             return controllerBackend.Button(binding.code);
         case InputSourceKind::ControllerAxis:
             return std::abs(controllerBackend.AxisPerMille(binding.code)) > 0;
+        case InputSourceKind::ModifierKey: {
+            // See InputBindingTypes.h's own comment on why this doesn't
+            // go through KeyPress::isKeyCurrentlyDown -- JUCE has no
+            // public keycode for a bare Shift/Ctrl/Alt press at all.
+            if (!foreground) return false;
+            const auto mods = juce::ModifierKeys::getCurrentModifiersRealtime();
+            if (binding.code == 0) return mods.isShiftDown();
+            if (binding.code == 1) return mods.isCtrlDown();
+            return mods.isAltDown();
+        }
     }
     return false;
 }

@@ -24,6 +24,8 @@ juce::String Describe(const InputBinding& binding)
             return "Controller Button " + juce::String(binding.code);
         case InputSourceKind::ControllerAxis:
             return "Controller Axis " + juce::String(binding.code);
+        case InputSourceKind::ModifierKey:
+            return binding.code == 0 ? "Shift" : binding.code == 1 ? "Ctrl" : "Alt";
     }
     return "Unbound";
 }
@@ -67,7 +69,7 @@ public:
     {
         setWantsKeyboardFocus(true);
         setInterceptsMouseClicks(true, false);
-        label_.setText("Press a key or click a mouse button to bind (Esc to cancel)...",
+        label_.setText("Press a key, hold Shift/Ctrl/Alt, or click a mouse button to bind (Esc to cancel)...",
                         juce::dontSendNotification);
         label_.setJustificationType(juce::Justification::centred);
         label_.setColour(juce::Label::textColourId, juce::Colours::white);
@@ -96,6 +98,20 @@ public:
     {
         const int code = event.mods.isLeftButtonDown() ? 0 : event.mods.isRightButtonDown() ? 1 : 2;
         owner_.FinishCapture({ InputSourceKind::MouseButton, code, 1000 });
+    }
+
+    // Shift/Ctrl/Alt pressed alone never reach keyPressed (JUCE's KeyPress
+    // model represents a character/named key optionally combined WITH
+    // modifiers, not a bare modifier as a "key" of its own) -- this is the
+    // real, routed, event-driven callback for that (confirmed via
+    // juce_Component.h's own doc comment: "Whenever the shift, control,
+    // alt or command keys are pressed or released, this method will be
+    // called"), no polling needed.
+    void modifierKeysChanged(const juce::ModifierKeys& modifiers) override
+    {
+        if (modifiers.isShiftDown()) owner_.FinishCapture({ InputSourceKind::ModifierKey, 0, 1000 });
+        else if (modifiers.isCtrlDown()) owner_.FinishCapture({ InputSourceKind::ModifierKey, 1, 1000 });
+        else if (modifiers.isAltDown()) owner_.FinishCapture({ InputSourceKind::ModifierKey, 2, 1000 });
     }
 
 private:
@@ -349,6 +365,20 @@ InputBindingsPanel::InputBindingsPanel(input::InputActionSystem& inputActionSyst
     addActionButton_.onClick = [this] { AddAction(); };
     addAndMakeVisible(addActionButton_);
 
+    loadPresetButton_.onClick = [this] {
+        juce::PopupMenu menu;
+        const auto presets = input::GetStarterInputMappingPresets();
+        for (int i = 0; i < static_cast<int>(presets.size()); ++i) {
+            menu.addItem(i + 1, presets[static_cast<std::size_t>(i)].name);
+        }
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&loadPresetButton_),
+                            [this, presets](int result) {
+                                if (result <= 0 || result > static_cast<int>(presets.size())) return;
+                                LoadPreset(presets[static_cast<std::size_t>(result - 1)]);
+                            });
+    };
+    addAndMakeVisible(loadPresetButton_);
+
     addComboButton_.onClick = [this] { AddCombo(); };
     addAndMakeVisible(addComboButton_);
 
@@ -410,6 +440,36 @@ void InputBindingsPanel::AddAction()
         bindings.actions.add(std::move(action));
         safeThis->Refresh();
     }), true);
+}
+
+void InputBindingsPanel::LoadPreset(const input::InputMappingPreset& preset)
+{
+    // Replaces `actions` wholesale, leaves `combos` untouched -- matches
+    // how starter-content selection elsewhere in this app (New Game
+    // templates) replaces rather than merges. Not auto-saved, same as
+    // every other edit -- the existing Save button is what turns this
+    // into that Game's own persisted mapping, freely re-editable exactly
+    // like a hand-built one.
+    const auto applyPreset = [this, preset] {
+        inputActionSystem_.Bindings().actions = preset.bindings.actions;
+        statusLabel_.setText("Loaded \"" + preset.name + "\" (not yet saved).", juce::dontSendNotification);
+        Refresh();
+    };
+
+    if (inputActionSystem_.Bindings().actions.isEmpty()) {
+        applyPreset();
+        return;
+    }
+
+    auto safeThis = juce::Component::SafePointer<InputBindingsPanel>(this);
+    juce::AlertWindow::showOkCancelBox(
+        juce::MessageBoxIconType::QuestionIcon, "Load Preset",
+        "Replace the current movement Actions with the \"" + preset.name + "\" preset?\n\nExisting Combos are not affected.",
+        "Replace", "Cancel", nullptr,
+        juce::ModalCallbackFunction::create([safeThis, applyPreset](int result) {
+            if (result != 1 || safeThis == nullptr) return;
+            applyPreset();
+        }));
 }
 
 void InputBindingsPanel::RemoveAction(const juce::String& name)
@@ -596,10 +656,16 @@ void InputBindingsPanel::resized()
     auto area = getLocalBounds().reduced(8);
     auto headerRow = area.removeFromTop(24);
     saveButton_.setBounds(headerRow.removeFromRight(70).reduced(2));
-    addComboButton_.setBounds(headerRow.removeFromRight(90).reduced(2));
-    addActionButton_.setBounds(headerRow.removeFromRight(90).reduced(2));
     titleLabel_.setBounds(headerRow);
     area.removeFromTop(4);
+
+    auto toolbarRow = area.removeFromTop(24);
+    const int thirdWidth = toolbarRow.getWidth() / 3;
+    addActionButton_.setBounds(toolbarRow.removeFromLeft(thirdWidth).reduced(2));
+    loadPresetButton_.setBounds(toolbarRow.removeFromLeft(thirdWidth).reduced(2));
+    addComboButton_.setBounds(toolbarRow.reduced(2));
+    area.removeFromTop(4);
+
     statusLabel_.setBounds(area.removeFromTop(18));
     area.removeFromTop(4);
 

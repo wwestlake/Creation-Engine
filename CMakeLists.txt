@@ -169,6 +169,7 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Frust/EngineNodeLibraryLoader.h
     Source/Frust/EngineNodeLibraryLoader.cpp
     Source/Input/InputBindingTypes.h
+    Source/Input/StarterInputMappingPresets.h
     Source/Input/InputBindingDocumentStore.h
     Source/Input/InputBindingDocumentStore.cpp
     Source/Input/InputActionSystem.h

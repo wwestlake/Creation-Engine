@@ -7,6 +7,7 @@
 
 #include "Input/InputActionSystem.h"
 #include "Input/InputBindingDocumentStore.h"
+#include "Input/StarterInputMappingPresets.h"
 #include "Project/EngineGameDocument.h"
 
 namespace ce::views
@@ -17,9 +18,12 @@ namespace ce::views
 // Entity/Thing/Object section on why this doesn't get the
 // create/list/open/save/delete/rename treatment PodCatalog/
 // ObjectDefinitionCatalog give real Things, same reasoning games.xml
-// itself isn't one). Always docked, same tier as BehaviorAttachmentPanel/
-// TransformPanel -- never opened/closed on demand like PodEditorPanel's
-// per-Pod tab.
+// itself isn't one). Opened/closed on demand from the View menu
+// (MainComponent::EnsureInputBindingsPanelOpen), same lazy register/
+// unregister-with-close-button shape PodEditorPanel already uses -- unlike
+// Pods it IS listed in the View menu (there's exactly one of it, not one
+// per opened asset), it just isn't part of the app's default always-docked
+// layout.
 class InputBindingsPanel final : public juce::Component
 {
 public:
@@ -58,6 +62,7 @@ private:
     class ComboCaptureOverlay;
 
     void AddAction();
+    void LoadPreset(const input::InputMappingPreset& preset);
     void RemoveAction(const juce::String& name);
     void SetActionKind(const juce::String& name, input::ActionKind kind);
     void AddBinding(const juce::String& actionName);
@@ -81,6 +86,7 @@ private:
 
     juce::Label titleLabel_ { {}, "Input Bindings" };
     juce::TextButton addActionButton_ { "Add Action" };
+    juce::TextButton loadPresetButton_ { "Load Preset" };
     juce::TextButton addComboButton_ { "Add Combo" };
     juce::TextButton saveButton_ { "Save" };
     juce::Label statusLabel_;
