@@ -10,12 +10,24 @@ namespace ce::input
 // InputActionSystem is constructed with (see InputActionSystem.h) --
 // deliberately decoupled so this data model, the editor panel, and the
 // FRust nodes never have to change regardless of that decision.
+//
+// ModifierKey is deliberately separate from KeyboardKey: verified directly
+// against JUCE's own source (juce_KeyPress.h/juce_Windowing_windows.cpp)
+// that juce::KeyPress::isKeyCurrentlyDown has no way to represent bare
+// Shift/Ctrl/Alt at all -- no public named constant exists for them
+// (only spaceKey/escapeKey/arrow keys/F-keys, each using a Windows-file-
+// local extendedKeyModifier bit that isn't public API), and they have no
+// printable-character form either. ModifierKey is evaluated through
+// juce::ModifierKeys::getCurrentModifiersRealtime() instead (the same
+// mechanism MouseButton bindings already use) -- see
+// InputActionSystem.cpp's EvaluateDigitalSource.
 enum class InputSourceKind
 {
     KeyboardKey,
     MouseButton,
     ControllerButton,
-    ControllerAxis
+    ControllerAxis,
+    ModifierKey
 };
 
 // Two independent Action kinds. Composite/signed axis mapping (e.g. one
@@ -36,6 +48,10 @@ enum class ActionKind
 //    captured as data instead of hardcoded. MouseButton -> 0=Left,
 //    1=Right, 2=Middle. ControllerButton/ControllerAxis -> an abstract
 //    0-based index into whatever InputControllerBackend is constructed.
+//    ModifierKey -> 0=Shift, 1=Ctrl, 2=Alt; doesn't distinguish left/right
+//    physical key (juce::ModifierKeys doesn't either, which is the more
+//    useful behavior for gameplay -- works regardless of which physical
+//    key the player reaches for).
 //  - analogMagnitude: the per-mille value (1000 = full) this source
 //    contributes to an Analog action while active. Meaningless for a
 //    Digital action (which only needs on/off) and for ControllerAxis
