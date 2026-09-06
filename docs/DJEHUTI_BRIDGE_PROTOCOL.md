@@ -74,8 +74,10 @@ reasonable timeout (a few seconds). This mirrors
 
 ## 3. List projects
 
-`GET /project/list?appDomain=engine` returns every existing Djehuti
-Engine project:
+`GET /project/list` returns every project in the suite (there is no
+per-app project ownership -- see
+`docs/architecture/Suite-Shared-Project-Model.md`; any project may
+already contain content from other suite apps):
 ```json
 [
   { "projectId": "...", "manifest": { "projectName": "...", ... }, "totalSizeBytes": 12345 }

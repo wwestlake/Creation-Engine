@@ -1,0 +1,12 @@
+manifest "{\"name\":\"f64_ffi_check\",\"version\":\"0.1.0\",\"description\":\"f64-across-FFI verification smoke test\",\"entryPoints\":[],\"intendedApplications\":[\"creation-engine\"],\"requiredHostFunctions\":[{\"name\":\"host_receives_f64\",\"description\":\"Returns 1 if the f64 argument arrived with the exact expected bit pattern.\"},{\"name\":\"host_returns_f64\",\"description\":\"Returns a fixed f64 constant, whose raw bits the C++ caller checks directly.\"}]}";
+
+extern fn host_receives_f64(value: f64) -> i64;
+extern fn host_returns_f64() -> f64;
+
+pub fn check_argument_direction() -> i64 = {
+    host_receives_f64(3.14159265358979)
+}
+
+pub fn check_return_direction() -> f64 = {
+    host_returns_f64()
+}

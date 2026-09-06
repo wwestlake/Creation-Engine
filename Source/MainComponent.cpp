@@ -1243,7 +1243,7 @@ bool MainComponent::ensureProjectSessionActive(juce::String& errorMessage)
     }
 
     auto availableProjects = creation::assets::ProjectContainerService::listProjects(
-        suiteSettings_, creation::assets::SuiteAppDomain::engine, errorMessage);
+        suiteSettings_, errorMessage);
 
     if (! availableProjects.isEmpty())
     {
