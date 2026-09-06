@@ -127,6 +127,15 @@ struct LoadedModel {
     // populated (single- and multi-mesh files alike); the caller decides
     // what to do with one node the same way it decides for many.
     std::vector<LoadedNode> nodes;
+
+    // Djehuti Bridge engine-side handoff: the stable engine asset id
+    // (e.g. "asset:<uuid>") an external export tool round-trips back into
+    // this file's top-level asset.extras on a re-export, so a reimport
+    // updates the same asset instead of creating a duplicate. Empty if
+    // absent (first-time export, or a file with no such extras key) --
+    // this is the ONLY extras field read anywhere in this loader today;
+    // collision/socket/LOD extras are explicitly future work.
+    juce::String djehutiAssetId;
 };
 
 // Parses gltfFile (.gltf with a sibling .bin, or .glb) via cgltf and

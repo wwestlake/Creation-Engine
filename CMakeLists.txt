@@ -44,6 +44,74 @@ endif()
 set(CREATION_ENGINE_HAS_OPENXR 1)
 message(STATUS "Creation Engine: OpenXR runtime support enabled (${CREATION_OPENXR_INCLUDE_DIR})")
 
+# LLVM / vcpkg Build Rule (see AGENTS.md): LLVM must NEVER be managed by
+# this app's own vcpkg.json manifest. A real incident happened here --
+# `vcpkg install` (run to add an unrelated small dependency) reconciled the
+# WHOLE manifest, which included llvm at the time, and both removed the
+# already-built LLVM AND started rebuilding it from source before it was
+# caught and killed. `llvm` has been deliberately removed from vcpkg.json
+# entirely as the actual fix (not just a warning) -- with it gone from the
+# manifest, `vcpkg install` on this project can structurally never touch
+# LLVM again, no matter why someone runs it.
+#
+# This means LLVM discovery can no longer rely on vcpkg's own manifest
+# machinery at all; the path below used to be found only because an old
+# cached LLVM_DIR value happened to still point at it from before llvm was
+# removed here -- that was invisible and undocumented. This makes the same
+# path explicit, and fails loudly and immediately (not with vcpkg's own
+# confusing "could not find LLVMConfig.cmake" error two subdirectories
+# deep in third_party/FrustLang) if LLVM isn't actually there, with a
+# message that says exactly what NOT to do about it.
+set(CREATION_ENGINE_LLVM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg_installed/x64-windows/share/llvm"
+    CACHE PATH "LLVM CMake package directory -- manually provisioned, NEVER vcpkg-managed for this app.")
+if (NOT EXISTS "${CREATION_ENGINE_LLVM_DIR}/LLVMConfig.cmake")
+    message(FATAL_ERROR
+        "LLVM is missing at ${CREATION_ENGINE_LLVM_DIR} (LLVMConfig.cmake not "
+        "found). This project deliberately does NOT vcpkg-manage LLVM -- see "
+        "the LLVM / vcpkg Build Rule above and in AGENTS.md. "
+        "DO NOT run 'vcpkg install' to fix this -- it no longer knows about "
+        "llvm at all and cannot help. LLVM needs to be restored/rebuilt "
+        "through some other deliberate, explicitly-approved process, then "
+        "placed back at this exact path (or point -DCREATION_ENGINE_LLVM_DIR= "
+        "at wherever it actually lives).")
+endif()
+set(LLVM_DIR "${CREATION_ENGINE_LLVM_DIR}" CACHE PATH "" FORCE)
+
+# Djehuti Bridge engine-side handoff (DjehutiImportWatcher): a WebSocket
+# CLIENT connection to services/VfsService's existing entryChanged
+# broadcast. Deliberately NOT added to this app's own vcpkg.json --
+# `vcpkg install` reconciles the WHOLE manifest (including `llvm` above),
+# which triggered a real, wasteful full LLVM rebuild the one time this was
+# tried (see AGENTS.md's "LLVM / vcpkg Build Rule": never run vcpkg
+# install here without an explicit yes). Instead, this reuses
+# services/VfsService's OWN already-built ixwebsocket (and its zlib
+# dependency, needed for permessage-deflate) directly -- same manual
+# find_path/find_library pattern already used for openxr-loader above,
+# just pointed at a sibling project's vcpkg_installed tree instead of an
+# external SDK location. Build services/VfsService at least once first so
+# these exist.
+set(CREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../services/VfsService/build/vcpkg_installed/x64-windows")
+find_path(CREATION_ENGINE_IXWEBSOCKET_INCLUDE_DIR NAMES ixwebsocket/IXWebSocket.h
+    HINTS "${CREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT}/include")
+find_library(CREATION_ENGINE_IXWEBSOCKET_LIBRARY_RELEASE NAMES ixwebsocket
+    HINTS "${CREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT}/lib")
+find_library(CREATION_ENGINE_IXWEBSOCKET_LIBRARY_DEBUG NAMES ixwebsocket
+    HINTS "${CREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT}/debug/lib")
+find_library(CREATION_ENGINE_ZLIB_LIBRARY_RELEASE NAMES z
+    HINTS "${CREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT}/lib")
+find_library(CREATION_ENGINE_ZLIB_LIBRARY_DEBUG NAMES zd
+    HINTS "${CREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT}/debug/lib")
+
+if (NOT CREATION_ENGINE_IXWEBSOCKET_INCLUDE_DIR OR NOT CREATION_ENGINE_IXWEBSOCKET_LIBRARY_RELEASE OR NOT CREATION_ENGINE_IXWEBSOCKET_LIBRARY_DEBUG)
+    message(FATAL_ERROR
+        "Creation Engine requires ixwebsocket (reused from services/VfsService's "
+        "own vcpkg_installed tree, not vendored separately here) for the "
+        "Djehuti Bridge import watcher, and did not find it at "
+        "${CREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT}. Build services/VfsService "
+        "at least once first (its own CMake configure installs this).")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -208,6 +276,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Render/Import/FbxLoader.cpp
     Source/Render/Import/ObjLoader.h
     Source/Render/Import/ObjLoader.cpp
+    Source/Import/DjehutiImportWatcher.h
+    Source/Import/DjehutiImportWatcher.cpp
     Source/Render/Scene/Light.h
     Source/Views/LightPanel.h
     Source/Views/LightPanel.cpp
@@ -295,6 +365,7 @@ target_include_directories(CreationEngineEditor PRIVATE
     Source
     third_party
     "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/JuceDocking"
+    ${CREATION_ENGINE_IXWEBSOCKET_INCLUDE_DIR}
 )
 
 if (CREATION_ENGINE_HAS_OPENXR)
@@ -306,6 +377,11 @@ target_compile_definitions(CreationEngineEditor PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_OPENGL3=1
+    # ixwebsocket's own zlib (permessage-deflate) would otherwise collide
+    # with JUCE's bundled zlib symbols at link time -- same real conflict
+    # services/VfsService's own CMakeLists.txt already documents and works
+    # around identically.
+    JUCE_INCLUDE_ZLIB_CODE=0
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:CreationEngineEditor,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:CreationEngineEditor,JUCE_VERSION>"
     CE_SHADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Source/Render/Shaders"
@@ -325,6 +401,10 @@ target_link_libraries(CreationEngineEditor PRIVATE
     creation_engine_ufbx
     CreationDock
     creation_suite_node_editor_ui
+    $<$<CONFIG:Debug>:${CREATION_ENGINE_IXWEBSOCKET_LIBRARY_DEBUG}>
+    $<$<NOT:$<CONFIG:Debug>>:${CREATION_ENGINE_IXWEBSOCKET_LIBRARY_RELEASE}>
+    $<$<CONFIG:Debug>:${CREATION_ENGINE_ZLIB_LIBRARY_DEBUG}>
+    $<$<NOT:$<CONFIG:Debug>>:${CREATION_ENGINE_ZLIB_LIBRARY_RELEASE}>
     juce::juce_gui_extra
     juce::juce_opengl
     juce::juce_audio_basics
