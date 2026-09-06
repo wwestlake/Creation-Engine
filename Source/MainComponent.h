@@ -7,6 +7,7 @@
 
 #include "engine/simulation.h"
 #include "engine/world.h"
+#include "Character/PossessedCharacter.h"
 #include "Physics/PhysicsWorld.h"
 #include "Frust/EngineFrustHost.h"
 #include "Frust/PodCatalog.h"
@@ -94,6 +95,13 @@ private:
     void SetPlaying(bool playing);
     void initialiseDockingWorkspace();
     void openGameClient();
+    // Possessable Designer Character plan, Phase 4: spawns (or reuses, if
+    // one is already alive) a capsule character at the free-fly camera's
+    // current position, hands it to PhysicsWorld's CharacterVirtual wrapper,
+    // switches viewport_'s camera into possessed mode, and calls SetPlaying(true)
+    // -- possessing IS entering Play in place, not a separate mode (Decision 7).
+    // Stop (headerBar_.onStop) is the one way out, matching every other Play state.
+    void possessDesignerCharacter();
 
     // The Pod editor + its Pod-info panel are a lazily-registered, matched
     // pair -- neither exists as a dock tab at all until a Pod is actually
@@ -182,6 +190,12 @@ private:
     // plan). AttachToWorld() is called once, in the constructor body.
     ce::physics::PhysicsWorld physicsWorld_;
     double lastPhysicsAdvanceSeconds_ = 0.0;
+    // Possessable Designer Character plan, Phase 3-4: the live orchestration
+    // object plus which entity (if any) is currently possessed (-1 = none).
+    // std::int64_t, not entt::entity, matching PhysicsWorld/PossessedCharacter's
+    // own entity-id convention throughout.
+    ce::character::PossessedCharacter possessedCharacter_;
+    std::int64_t possessedEntityId_ = -1;
     ce::interaction::EditorInteraction interactions_ { world_ };
     ce::frust::EngineFrustHost frustHost_ { world_ };
     ce::input::InputActionSystem inputActionSystem_;
@@ -233,6 +247,7 @@ private:
     juce::Label inspectorTitle_ { {}, "Inspector" };
     juce::Label tickLabel_;
     juce::TextButton runGameButton_ { "Run Game Client" };
+    juce::TextButton possessCharacterButton_ { "Possess Character" };
 
     ce::TransformPanel transformPanel_;
 

@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 
 #include <algorithm>
+#include <cmath>
 #include <mutex>
 
 #include <creation/services/SuiteVfsJsonStore.h>
@@ -27,6 +28,7 @@ constexpr juce::CommandID kSaveCommand = 0x1006;
 constexpr juce::CommandID kImportCommand = 0x1007;
 constexpr juce::CommandID kNewProjectCommand = 0x1008;
 constexpr juce::CommandID kOpenProjectBrowserCommand = 0x1009;
+constexpr juce::CommandID kPossessDesignerCharacterCommand = 0x100A;
 
 // menuItemSelected's ids for the View menu's "jump to panel" entries and the
 // Help menu's About box -- plain PopupMenu ids, not routed through the
@@ -276,6 +278,20 @@ MainComponent::MainComponent()
     headerBar_.onStop = [this] {
         SetPlaying(false);
         world_.ResetTick();
+        if (possessedEntityId_ != -1) {
+            // Possession has its own runtime state (a live Jolt
+            // CharacterVirtual + the spawned entity) that doesn't belong to
+            // isPlaying_/world_.ResetTick() above -- Stop is still the one
+            // way out (Decision 7), it just also has this to clean up now.
+            physicsWorld_.DestroyCharacter(possessedEntityId_);
+            {
+                std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+                const auto entityHandle = static_cast<entt::entity>(possessedEntityId_);
+                if (world_.Registry().valid(entityHandle)) world_.Registry().destroy(entityHandle);
+            }
+            possessedEntityId_ = -1;
+            viewport_.ExitPossessedMode();
+        }
         headerBar_.setStatusText("Stopped");
     };
     headerBar_.setStatusText("Editing");
@@ -293,6 +309,9 @@ MainComponent::MainComponent()
     runGameButton_.onClick = [this] { openGameClient(); };
     runGameButton_.setTooltip("Open an isolated game client window. Click again for another local multiplayer client.");
     addAndMakeVisible(runGameButton_);
+    possessCharacterButton_.onClick = [this] { possessDesignerCharacter(); };
+    possessCharacterButton_.setTooltip("Possess a walking character at the free-fly camera's current position and enter Play in place.");
+    addAndMakeVisible(possessCharacterButton_);
 
     hierarchyPanel_.onSelectionChanged = [this](entt::entity entity) {
         interactions_.select(entity);
@@ -345,6 +364,7 @@ void MainComponent::resized() {
     headerBar_.setBounds(bounds.removeFromTop(96));
     if (menuBar_ != nullptr) menuBar_->setBounds(bounds.removeFromTop(28));
     runGameButton_.setBounds(getWidth() - 170, 105, 158, 34);
+    possessCharacterButton_.setBounds(getWidth() - 170 - 8 - 158, 105, 158, 34);
 
     if (dockManager_ != nullptr) dockManager_->setBounds(bounds);
 
@@ -368,6 +388,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& commands)
     commands.add(kImportCommand);
     commands.add(kNewProjectCommand);
     commands.add(kOpenProjectBrowserCommand);
+    commands.add(kPossessDesignerCharacterCommand);
 }
 
 void MainComponent::getCommandInfo(juce::CommandID commandID, juce::ApplicationCommandInfo& result)
@@ -405,6 +426,11 @@ void MainComponent::getCommandInfo(juce::CommandID commandID, juce::ApplicationC
         result.setInfo("New Project...", "Create a new Suite project for Creation Engine", "Project", {});
     if (commandID == kOpenProjectBrowserCommand)
         result.setInfo("Open Project Browser...", "Browse and switch Suite projects", "Project", {});
+    if (commandID == kPossessDesignerCharacterCommand)
+    {
+        result.setInfo("Possess Designer Character", "Walk around as a character at the free-fly camera's position, in Play, in place", "Game", {});
+        result.addDefaultKeypress('P', juce::ModifierKeys::ctrlModifier | juce::ModifierKeys::shiftModifier);
+    }
 }
 
 bool MainComponent::perform(const juce::ApplicationCommandTarget::InvocationInfo& info)
@@ -427,6 +453,7 @@ bool MainComponent::perform(const juce::ApplicationCommandTarget::InvocationInfo
     }
     if (info.commandID == kNewProjectCommand) { createNewProject(); return true; }
     if (info.commandID == kOpenProjectBrowserCommand) { suiteShellController_.showProjectBrowser(); return true; }
+    if (info.commandID == kPossessDesignerCharacterCommand) { possessDesignerCharacter(); return true; }
     return false;
 }
 
@@ -519,6 +546,47 @@ void MainComponent::openGameClient()
     gameClients_.push_back(std::make_unique<ce::runtime::GameClientWindow>(
         clientNumber, sceneState, activeGame_.name, activeScene_.name));
     headerBar_.setStatusText("Running " + juce::String(gameClients_.size()) + " game client" + (gameClients_.size() == 1 ? "" : "s"));
+}
+
+void MainComponent::possessDesignerCharacter()
+{
+    if (possessedEntityId_ != -1) {
+        // Already possessing -- Stop is the one way out (Decision 7); a
+        // second click here is a no-op rather than a re-teleport.
+        headerBar_.setStatusText("Already possessing the designer character.");
+        return;
+    }
+
+    // SpawnPosition(0.0f) is exactly the free-fly camera's own current
+    // position (a point 0 units in front of it) -- reuses the same
+    // thread-safe stateLock_-guarded snapshot HandleAssetDropped already
+    // relies on, rather than reading FreeCamera's position_ directly from
+    // this (message) thread.
+    const auto spawnPos = viewport_.SpawnPosition(0.0f);
+
+    entt::entity entity;
+    {
+        std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+        auto& registry = world_.Registry();
+        entity = registry.create();
+        auto& transform = registry.emplace<ce::engine::Transform>(entity);
+        transform.position = { spawnPos.x, spawnPos.y, spawnPos.z };
+    }
+    const auto entityId = static_cast<std::int64_t>(entt::to_integral(entity));
+
+    // Capsule dimensions match CharacterControllerSmoke's own values -- no
+    // authored-per-character sizing yet (Phase 3's own scope note).
+    if (!physicsWorld_.CreateCharacter(world_, entityId, 0.3f, 0.9f)) {
+        std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+        world_.Registry().destroy(entity);
+        headerBar_.setStatusText("Failed to possess designer character.");
+        return;
+    }
+
+    possessedEntityId_ = entityId;
+    viewport_.EnterPossessedMode();
+    viewport_.SetPossessedFeetPosition(spawnPos);
+    SetPlaying(true);
 }
 
 void MainComponent::componentMovedOrResized(juce::Component& component, bool, bool)
@@ -705,6 +773,28 @@ void MainComponent::timerCallback() {
             // returns.
             std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
             physicsWorld_.InterpolateTransforms(world_, physicsAlpha);
+        }
+        if (possessedEntityId_ != -1) {
+            // JPH::CharacterVirtual is its own separate, manually-driven
+            // system (not tracked by physicsWorld_.Advance() above -- see
+            // PhysicsWorld.h's own comment on CreateCharacter), so it needs
+            // its own per-tick update here, before frustHost_.tick() below
+            // drains this tick's collision events.
+            const auto cameraForward = viewport_.CameraForward();
+            const float forwardYawRadians = std::atan2(cameraForward.x, -cameraForward.z);
+            possessedCharacter_.Update(world_, physicsWorld_, inputActionSystem_,
+                                      possessedEntityId_, forwardYawRadians, physicsElapsedSeconds);
+
+            juce::Vector3D<float> feetPosition;
+            {
+                std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
+                const auto entityHandle = static_cast<entt::entity>(possessedEntityId_);
+                if (world_.Registry().valid(entityHandle)) {
+                    const auto& transform = world_.Registry().get<ce::engine::Transform>(entityHandle);
+                    feetPosition = { transform.position.x, transform.position.y, transform.position.z };
+                }
+            }
+            viewport_.SetPossessedFeetPosition(feetPosition);
         }
         frustHost_.tick(static_cast<std::int64_t>(world_.CurrentTick()));
     }

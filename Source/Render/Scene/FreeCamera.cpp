@@ -63,6 +63,19 @@ void FreeCamera::Update(float deltaSeconds) {
     }
     wasLookingLastFrame_ = isLooking;
 
+    if (possessedMode_.load(std::memory_order_relaxed)) {
+        // Look-around above still applies (holding right-click still turns
+        // the head); position_ itself comes entirely from whatever was last
+        // handed in via SetPossessedFeetPosition -- no WASD/gravity here.
+        juce::Vector3D<float> feet;
+        {
+            std::lock_guard<std::mutex> lock(possessedPositionMutex_);
+            feet = possessedFeetPosition_;
+        }
+        position_ = feet + juce::Vector3D<float>{ 0.0f, kPossessedEyeHeight, 0.0f };
+        return;
+    }
+
     const bool firstPerson = firstPersonMode_.load(std::memory_order_relaxed);
     if (!firstPerson && !isLooking) {
         return;
@@ -122,6 +135,11 @@ void FreeCamera::Update(float deltaSeconds) {
         if (position_.y < -5.0f)
             position_ = { 0.0f, 1.6f, 5.0f };
     }
+}
+
+void FreeCamera::SetPossessedFeetPosition(juce::Vector3D<float> feetPosition) {
+    std::lock_guard<std::mutex> lock(possessedPositionMutex_);
+    possessedFeetPosition_ = feetPosition;
 }
 
 void FreeCamera::AdjustSpeed(float wheelDeltaY) {
