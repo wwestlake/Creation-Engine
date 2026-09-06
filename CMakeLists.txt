@@ -557,6 +557,15 @@ target_compile_definitions(CreationEngineGenericNodeCodegenSmoke PRIVATE
 )
 add_test(NAME creation_engine_generic_node_codegen_smoke COMMAND CreationEngineGenericNodeCodegenSmoke)
 
+add_executable(CreationEngineF64FfiCheckSmoke
+    tests/F64FfiCheckSmoke.cpp
+)
+target_link_libraries(CreationEngineF64FfiCheckSmoke PRIVATE creation_suite_frust_plugin_runtime)
+target_compile_definitions(CreationEngineF64FfiCheckSmoke PRIVATE
+    CE_F64_FFI_CHECK_PLUGIN="${CMAKE_CURRENT_SOURCE_DIR}/tests/plugins/F64FfiCheck.frust"
+)
+add_test(NAME creation_engine_f64_ffi_check_smoke COMMAND CreationEngineF64FfiCheckSmoke)
+
 # --- Dedicated server executable ------------------------------------------
 # Headless build: no rendering or client-only assets. Only juce_core and
 # juce_events provide cross-platform utilities for the server shell.
