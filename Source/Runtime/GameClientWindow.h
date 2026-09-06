@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 
 #include "Interaction/EditorInteraction.h"
+#include "Physics/PhysicsWorld.h"
 #include "Render/ViewportComponent.h"
 #include "engine/simulation.h"
 #include "engine/world.h"
@@ -22,6 +23,10 @@ private:
 
     int clientNumber_;
     engine::World world_;
+    // See MainComponent.h's own physicsWorld_ comment -- same lifetime
+    // rule (lives alongside world_, never owned by a dockable panel).
+    ce::physics::PhysicsWorld physicsWorld_;
+    double lastPhysicsAdvanceSeconds_ = 0.0;
     interaction::EditorInteraction interactions_{ world_ };
     ViewportComponent viewport_;
     juce::Label hud_;

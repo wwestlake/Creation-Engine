@@ -86,6 +86,7 @@ MainComponent::MainComponent()
       lightPanel_(viewport_),
       materialsPanel_(viewport_),
       contentBrowserPanel_(viewport_, importPanel_, podCatalog_, objectDefinitions_) {
+    physicsWorld_.AttachToWorld(world_);
     // See suiteProcessRegistration_'s header comment: this is what keeps
     // CreationSuiteVfsService alive while this app is actually running.
     suiteProcessRegistration_.RegisterSelf("CreationEngine");
@@ -686,6 +687,25 @@ void MainComponent::timerCallback() {
         // this timer's own 30 Hz rate (startTimerHz(30) below).
         ce::engine::Simulation::Step(world_, 1.0f / 30.0f);
         ce::engine::FoundationGameplay::Step(world_, {}, 1.0f / 30.0f);
+        // Jolt runs on its own fixed 60 Hz accumulator, decoupled from this
+        // 30 Hz UI timer (Core Architectural Invariant 2, Jolt vendoring
+        // plan) -- real measured elapsed time, not this timer's own
+        // assumed 1/30s literal (which the two calls above still use, a
+        // separate, pre-existing gap this doesn't fix).
+        const double nowSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+        const float physicsElapsedSeconds = lastPhysicsAdvanceSeconds_ > 0.0
+            ? static_cast<float>(nowSeconds - lastPhysicsAdvanceSeconds_) : 0.0f;
+        lastPhysicsAdvanceSeconds_ = nowSeconds;
+        const float physicsAlpha = physicsWorld_.Advance(world_, physicsElapsedSeconds);
+        {
+            // InterpolateTransforms() itself doesn't lock (its usual caller,
+            // the render pass, already holds this same lock for its whole
+            // draw pass -- see ViewportComponent.cpp) -- this call site
+            // needs its own, since nothing above holds it once Advance()
+            // returns.
+            std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
+            physicsWorld_.InterpolateTransforms(world_, physicsAlpha);
+        }
         frustHost_.tick(static_cast<std::int64_t>(world_.CurrentTick()));
     }
     tickLabel_.setText("tick " + juce::String(world_.CurrentTick()), juce::dontSendNotification);

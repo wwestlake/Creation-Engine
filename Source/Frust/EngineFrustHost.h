@@ -21,6 +21,11 @@ namespace ce::input
 class InputActionSystem;
 }
 
+namespace ce::physics
+{
+class PhysicsWorld;
+}
+
 namespace ce::frust
 {
 enum class EngineFrustEvent : std::int64_t
@@ -69,6 +74,11 @@ public:
     // whole session on MainComponent, same direct-access shape
     // nodeLibraries() below already uses, no indirection to hide.
     void setInputActionSystem(input::InputActionSystem* system) noexcept { inputActionSystem_ = system; }
+    // Jolt vendoring plan (Decision 5) -- backs the Domain::Core physics
+    // config/action/query nodes below. Raw pointer, same lifetime shape as
+    // inputActionSystem_ above: PhysicsWorld lives for the whole session on
+    // MainComponent, not owned by this host.
+    void setPhysicsWorld(physics::PhysicsWorld* world) noexcept { physicsWorld_ = world; }
     // Input Combo Events plan -- re-derives the "input-combos" node
     // library (one Domain::Event marker per name) via
     // NodeLibraryRegistry::ReplaceLibrary, so a newly added/renamed/
@@ -134,6 +144,39 @@ private:
     static bool inputWasActionPressed(const char* actionName);
     static bool inputWasActionReleased(const char* actionName);
     static std::int64_t inputGetActionValuePerMille(const char* actionName);
+    // Jolt vendoring plan (Decision 5) -- RigidBody/ColliderShape are pure
+    // config-node setters (emplace/update the two PhysicsComponents.h
+    // structs; PhysicsWorld's own reconciliation pass in Advance() creates
+    // the real Jolt body once both are present, not these functions). The
+    // rest call straight into PhysicsWorld, which already does its own
+    // RegistryMutex() locking -- these must NOT also lock (non-recursive
+    // mutex; PhysicsWorld's lock would deadlock against a lock already
+    // held here).
+    static std::int64_t physicsSetRigidBody(std::int64_t entityId, std::int64_t motionType, double mass,
+                                            double friction, double restitution,
+                                            double linearDamping, double angularDamping);
+    static std::int64_t physicsSetColliderShape(std::int64_t entityId, std::int64_t shapeKind,
+                                                double halfExtentX, double halfExtentY, double halfExtentZ,
+                                                double radius, double halfHeight, std::int64_t collisionLayer,
+                                                bool isSensor);
+    static std::int64_t physicsApplyForce(std::int64_t entityId, double x, double y, double z);
+    static std::int64_t physicsApplyImpulse(std::int64_t entityId, double x, double y, double z);
+    static std::int64_t physicsSetLinearVelocity(std::int64_t entityId, double x, double y, double z);
+    static double physicsGetLinearVelocityX(std::int64_t entityId);
+    static double physicsGetLinearVelocityY(std::int64_t entityId);
+    static double physicsGetLinearVelocityZ(std::int64_t entityId);
+    // Raycast is a single cached query (Decision 5's note: one FFI call can
+    // only return one scalar) -- physicsRaycast() performs the query and
+    // caches lastRaycastHit_; the getters below just read that cache, so a
+    // Schematic node with several output pins reads them via separate
+    // stateless calls that all reflect the one query.
+    static bool physicsRaycast(double originX, double originY, double originZ,
+                              double dirX, double dirY, double dirZ, double maxDistance);
+    static std::int64_t physicsRaycastHitEntity();
+    static double physicsRaycastHitDistance();
+    static double physicsRaycastNormalX();
+    static double physicsRaycastNormalY();
+    static double physicsRaycastNormalZ();
     [[nodiscard]] static std::string behaviorKey(const std::string& podId);
     [[nodiscard]] bool isBehaviorPaused(std::int64_t entityId) const;
     [[nodiscard]] std::vector<std::pair<std::int64_t, std::string>> attachedObjectBehaviors() const;
@@ -160,6 +203,16 @@ private:
     std::function<std::string()> activeSceneIdProvider;
     std::function<bool(const std::string&)> assetExistsProvider;
     input::InputActionSystem* inputActionSystem_ = nullptr;
+    physics::PhysicsWorld* physicsWorld_ = nullptr;
+    // See physicsRaycast()/physicsRaycastHit*() above -- the cached result
+    // of the last raycast query this Pod-visible boundary performed.
+    struct
+    {
+        bool hit = false;
+        std::int64_t hitEntity = -1;
+        double distance = 0.0;
+        double normalX = 0.0, normalY = 0.0, normalZ = 0.0;
+    } lastRaycastHit_;
     std::unordered_map<std::int64_t, ObjectLifecycle> objectLifecycles;
 };
 } // namespace ce::frust

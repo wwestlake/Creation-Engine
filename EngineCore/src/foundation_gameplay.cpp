@@ -50,29 +50,12 @@ void FoundationGameplay::Step(World& world, const GameplayInput& input, float dt
             motor.grounded = true;
         }
     }
-
-    auto bodies = world.Registry().view<Transform, RigidBody>();
-    for (const auto entity : bodies)
-    {
-        auto& transform = bodies.get<Transform>(entity);
-        auto& body = bodies.get<RigidBody>(entity);
-        if (!body.dynamic)
-            continue;
-
-        body.velocity.y += body.gravity * clampedDt;
-        transform.position.x += body.velocity.x * clampedDt;
-        transform.position.y += body.velocity.y * clampedDt;
-        transform.position.z += body.velocity.z * clampedDt;
-
-        const float floorHeight = body.radius;
-        if (transform.position.y < floorHeight)
-        {
-            transform.position.y = floorHeight;
-            body.velocity.y = -body.velocity.y * body.restitution;
-            if (body.velocity.y < 0.15f)
-                body.velocity.y = 0.0f;
-        }
-    }
+    // Real rigid-body physics is ce::physics::PhysicsWorld now (Source/
+    // Physics/) -- see MainComponent::timerCallback's own
+    // physicsWorld_.Advance() call, run alongside this Step(). The naive
+    // gravity/floor-bounce integration that used to live here (over a
+    // RigidBody component nothing ever actually attached to an entity) is
+    // gone, not left running alongside the real thing.
 }
 
 } // namespace ce::engine
