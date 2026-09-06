@@ -115,6 +115,22 @@ public:
 
     void EnableFirstPersonMode() { freeCamera_.EnableFirstPersonMode(); }
 
+    // Possessable Designer Character plan, Phase 4 -- thin pass-throughs to
+    // freeCamera_'s new possessed mode (see FreeCamera.h). SetPossessedFeetPosition
+    // is safe to call from any thread (freeCamera_ locks it internally); the
+    // enter/exit calls are a plain atomic flip, same as EnableFirstPersonMode above.
+    void EnterPossessedMode() { freeCamera_.EnterPossessedMode(); }
+    void ExitPossessedMode() { freeCamera_.ExitPossessedMode(); }
+    void SetPossessedFeetPosition(juce::Vector3D<float> feetPosition) { freeCamera_.SetPossessedFeetPosition(feetPosition); }
+
+    // The free camera's current look direction (Target() - Position(), unit
+    // length), snapshotted under stateLock_ the same way SpawnPosition()
+    // reads lastCameraPosition_ -- safe to call from any thread. Used to
+    // derive the possessing camera's yaw for PossessedCharacter::Update
+    // (forwardYawRadians = atan2(forward.x, -forward.z), independent of
+    // pitch since cos(pitch) cancels in that ratio).
+    juce::Vector3D<float> CameraForward() const { const juce::ScopedLock lock(stateLock_); return lastCameraForward_; }
+
     // Mirrors MainComponent::isPlaying_ -- editor-only entities
     // (SceneFlags::editorOnly, e.g. the VR edit-mode cart) are skipped by
     // both rendering and picking while true, hidden rather than

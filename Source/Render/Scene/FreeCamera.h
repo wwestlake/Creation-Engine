@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <mutex>
 
 #include <JuceHeader.h>
 
@@ -42,6 +43,23 @@ public:
     void AdjustSpeed(float wheelDeltaY);
     void EnableFirstPersonMode() { firstPersonMode_.store(true, std::memory_order_relaxed); }
 
+    // Possessable Designer Character plan, Phase 4: a third mode, alongside
+    // fly and firstPersonMode_ above -- position_ is no longer integrated
+    // from WASD/fake-gravity here at all while possessed. The real
+    // PhysicsWorld::CharacterVirtual (driven elsewhere, via
+    // PossessedCharacter::Update) owns movement; SetPossessedFeetPosition
+    // below is how its result reaches this camera every tick.
+    void EnterPossessedMode() { possessedMode_.store(true, std::memory_order_relaxed); }
+    void ExitPossessedMode() { possessedMode_.store(false, std::memory_order_relaxed); }
+    // Unlike isLooking_'s rare one-shot cross-thread flip, this is written
+    // every possessed tick from whatever thread drives PhysicsWorld
+    // (MainComponent's message-thread timer, not this class's own render
+    // thread -- see the class comment above on threading), so it needs a
+    // real lock, not just an atomic bool. feetPosition is the character
+    // capsule's base (Jolt's own convention, see PhysicsWorld::UpdateCharacter);
+    // kPossessedEyeHeight lifts it to eye height for the camera itself.
+    void SetPossessedFeetPosition(juce::Vector3D<float> feetPosition);
+
     juce::Vector3D<float> Position() const { return position_; }
     juce::Vector3D<float> Target() const { return position_ + Forward(); }
 
@@ -65,6 +83,11 @@ private:
     std::atomic<bool> isLooking_{ false };
     std::atomic<bool> firstPersonMode_{ false };
     std::atomic<float> speedMultiplier_{ 1.0f };
+
+    std::atomic<bool> possessedMode_{ false };
+    std::mutex possessedPositionMutex_;
+    juce::Vector3D<float> possessedFeetPosition_{};
+    static constexpr float kPossessedEyeHeight = 1.6f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FreeCamera)
 };

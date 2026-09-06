@@ -95,6 +95,13 @@ private:
     static std::int64_t currentTick();
     static std::int64_t firstTransformEntity();
     static std::int64_t currentObjectEntity();
+    // Cross-entity reference by placed-instance name (ce::scene::Name) --
+    // the one thing "core.entity.self" can't do: a Pod naming a *different*
+    // specific object (e.g. a button Pod acting on a separately-placed door).
+    // Not a full object-instance-node/drag-onto-graph capability (that's
+    // still future work) -- just enough to resolve a name to an entity id.
+    // -1 if no entity currently carries that Name.
+    static std::int64_t entityFindByName(const char* name);
     static std::int64_t setPositionX(std::int64_t entityId, std::int64_t positionX);
     // r/g/b are 0-255 -- the FFI boundary here only carries i64 (see every
     // other extern fn in EngineLifecycle.frust; this doesn't introduce a
