@@ -82,6 +82,7 @@ MainComponent::MainComponent()
       transformPanel_(world_, interactions_),
       pbrMaterialPanel_(world_),
       importPanel_(world_, viewport_, projectSession_),
+      djehutiImportWatcher_(world_, viewport_, objectDefinitions_),
       lightPanel_(viewport_),
       materialsPanel_(viewport_),
       contentBrowserPanel_(viewport_, importPanel_, podCatalog_, objectDefinitions_) {
@@ -818,6 +819,7 @@ bool MainComponent::openActiveGame(juce::String& errorMessage)
     RefreshComboEventNodes();
     inputBindingsPanel_.SetActiveGame(activeGame_);
     importPanel_.SetProjectContent(&projectSession_, activeGame_.assetRoot());
+    djehutiImportWatcher_.SetProjectContent(&projectSession_, projectSession_.getProjectId());
     contentBrowserPanel_.SetProjectContent(&projectSession_);
     if (!ce::project::EngineGameDocumentStore::loadScene(projectSession_, activeGame_, activeScene_, world_, errorMessage)) return false;
     viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
@@ -964,6 +966,7 @@ void MainComponent::selectGame(const juce::String& gameId)
         RefreshComboEventNodes();
         inputBindingsPanel_.SetActiveGame(activeGame_);
         importPanel_.SetProjectContent(&projectSession_, activeGame_.assetRoot());
+        djehutiImportWatcher_.SetProjectContent(&projectSession_, projectSession_.getProjectId());
         contentBrowserPanel_.SetProjectContent(&projectSession_);
         juce::String error;
         if (!ce::project::EngineGameDocumentStore::loadScene(projectSession_, activeGame_, activeScene_, world_, error))
@@ -1016,6 +1019,7 @@ void MainComponent::createGame()
         safeThis->activeGame_ = game;
         safeThis->activeScene_ = scene;
         safeThis->importPanel_.SetProjectContent(&safeThis->projectSession_, safeThis->activeGame_.assetRoot());
+        safeThis->djehutiImportWatcher_.SetProjectContent(&safeThis->projectSession_, safeThis->projectSession_.getProjectId());
         safeThis->contentBrowserPanel_.SetProjectContent(&safeThis->projectSession_);
 
         // createGame() only writes the new scene's document -- it doesn't

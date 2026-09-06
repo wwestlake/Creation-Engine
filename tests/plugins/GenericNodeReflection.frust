@@ -1,0 +1,5 @@
+manifest "{\"name\":\"generic_node_reflection\",\"version\":\"0.1.0\",\"description\":\"Generic node reflection smoke test\",\"entryPoints\":[],\"intendedApplications\":[\"creation-engine\"],\"requiredHostFunctions\":[]}";
+
+node pure pub fn identity<T>(x: T) -> T = {
+    x
+}

@@ -20,6 +20,7 @@
 #include "Views/InputBindingsPanel.h"
 #include "Views/LogPanel.h"
 #include "Views/HierarchyPanel.h"
+#include "Import/DjehutiImportWatcher.h"
 #include "Views/ImportPanel.h"
 #include "Views/ObjectDefinitionEditorPanel.h"
 #include "Views/PodEditorPanel.h"
@@ -254,6 +255,14 @@ private:
     // viewport_ (like hierarchyPanel_ above) since its constructor also
     // needs a fully-constructed ViewportComponent&.
     ce::ImportPanel importPanel_;
+
+    // Djehuti Bridge engine-side handoff -- watches the current project's
+    // VFS "Imports/" folder (via services/VfsService's existing
+    // entryChanged broadcast) and runs a dropped file through the same
+    // ImporterRegistry path importPanel_ uses. Declared after viewport_/
+    // objectDefinitions_ for the same reason importPanel_ is -- its
+    // constructor needs both already built.
+    ce::DjehutiImportWatcher djehutiImportWatcher_;
 
     // The real "Materials" dock panel -- a node graph editor over
     // ce::material's compiler (see MaterialGraphPanel.h). Declared after

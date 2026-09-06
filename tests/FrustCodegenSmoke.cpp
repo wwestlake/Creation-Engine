@@ -1,4 +1,5 @@
 #include "node_system/frust_codegen.h"
+#include "node_system/frgraph_serialization.h"
 #include "creation/frust/PluginRuntime.h"
 
 #include <filesystem>
@@ -65,7 +66,32 @@ int main() {
     entryType.displayName = "Entry";
     entryType.category = "Flow";
 
-    core.nodeTypes = { std::move(addType), std::move(multiplyType), std::move(triggerType), std::move(entryType) };
+    // Real monomorphized generics for Schematic nodes plan, Phase 2: a
+    // node type generic over one type parameter, matching what FRust
+    // reflection now emits for a real `node pure fn identity<T>(x: T) ->
+    // T` (see FrustGenericNodeReflectionSmoke) -- both pins are Any at the
+    // descriptor level, tagged with genericParam "T"; a per-instance
+    // binding is what makes them concrete (below).
+    NodeTypeDescriptor identityType;
+    identityType.typeName = "core.identity";
+    identityType.domain = Domain::Core;
+    identityType.frustEntryPoint = "identity";
+    identityType.genericParams = { "T" };
+    PinSignature identityInput;
+    identityInput.name = "x";
+    identityInput.type = { PinKind::Data, DataType::Any };
+    identityInput.genericParam = "T";
+    identityType.inputs = { identityInput };
+    PinSignature identityOutput;
+    identityOutput.name = "value";
+    identityOutput.type = { PinKind::Data, DataType::Any };
+    identityOutput.genericParam = "T";
+    identityType.outputs = { identityOutput };
+    identityType.displayName = "Identity<T>";
+    identityType.category = "Generics";
+
+    core.nodeTypes = { std::move(addType), std::move(multiplyType), std::move(triggerType), std::move(entryType),
+                       std::move(identityType) };
     std::string error;
     if (!libraries.Register(std::move(core), &error)) {
         std::cerr << error << '\n';
@@ -129,6 +155,106 @@ int main() {
         std::cerr << "generated FRust graph returned the wrong value" << '\n';
         return 1;
     }
+    // -- Real monomorphized generics for Schematic nodes (Phase 2) --
+
+    // A bound generic node instance emits the correct turbofish call and
+    // type annotation.
+    {
+        Graph genericGraph("generic");
+        Node* identity = libraries.AddNode(genericGraph, "core.identity", &error);
+        if (!identity) {
+            std::cerr << "could not construct generic node instance: " << error << '\n';
+            return 1;
+        }
+        identity->SetGenericBinding("T", DataType::Float);
+
+        FrustGraphCompileOptions genericOptions;
+        genericOptions.functionName = "generic_identity";
+        genericOptions.parameters = { { "x", DataType::Float } };
+        genericOptions.inputBindings = { { identity->Id(), identity->Inputs()[0].id, "x" } };
+        genericOptions.resultNode = identity->Id();
+        genericOptions.resultPin = identity->Outputs()[0].id;
+        const auto genericCompiled = CompileBehaviorGraphToFrust(genericGraph, libraries, genericOptions);
+        const std::string expectedCall = "let n" + std::to_string(identity->Id()) + ": f64 = identity::<f64>(x);";
+        if (!genericCompiled.ok || genericCompiled.source.find(expectedCall) == std::string::npos) {
+            std::cerr << "bound generic node did not emit the correct turbofish call: " << genericCompiled.error
+                       << '\n' << genericCompiled.source << '\n';
+            return 1;
+        }
+    }
+
+    // An unresolved type parameter fails with a clear, specific error.
+    {
+        Graph unresolvedGraph("generic_unresolved");
+        Node* identity = libraries.AddNode(unresolvedGraph, "core.identity", &error);
+        if (!identity) {
+            std::cerr << "could not construct generic node instance: " << error << '\n';
+            return 1;
+        }
+        // Deliberately no SetGenericBinding call.
+        FrustGraphCompileOptions options;
+        options.functionName = "generic_unresolved";
+        options.resultNode = identity->Id();
+        options.resultPin = identity->Outputs()[0].id;
+        const auto compiled = CompileBehaviorGraphToFrust(unresolvedGraph, libraries, options);
+        if (compiled.ok || compiled.error.find("unresolved type parameter") == std::string::npos) {
+            std::cerr << "an unresolved generic binding should have failed clearly: " << compiled.error << '\n';
+            return 1;
+        }
+    }
+
+    // A binding to a DataType FrustType has no mapping for (Vec3) fails
+    // with its own clear, specific error -- not a malformed/empty token.
+    {
+        Graph unsupportedGraph("generic_unsupported");
+        Node* identity = libraries.AddNode(unsupportedGraph, "core.identity", &error);
+        if (!identity) {
+            std::cerr << "could not construct generic node instance: " << error << '\n';
+            return 1;
+        }
+        identity->SetGenericBinding("T", DataType::Vec3);
+        FrustGraphCompileOptions options;
+        options.functionName = "generic_unsupported";
+        options.resultNode = identity->Id();
+        options.resultPin = identity->Outputs()[0].id;
+        const auto compiled = CompileBehaviorGraphToFrust(unsupportedGraph, libraries, options);
+        if (compiled.ok || compiled.error.find("unsupported type for a generic node") == std::string::npos) {
+            std::cerr << "an unsupported generic binding type should have failed clearly: " << compiled.error << '\n';
+            return 1;
+        }
+    }
+
+    // A generic node instance's binding survives a save/load round trip --
+    // a generic node that works programmatically but silently loses its
+    // binding on save/load would be a nasty, delayed failure.
+    {
+        Graph persistGraph("generic_persist");
+        Node* identity = libraries.AddNode(persistGraph, "core.identity", &error);
+        if (!identity) {
+            std::cerr << "could not construct generic node instance: " << error << '\n';
+            return 1;
+        }
+        identity->SetGenericBinding("T", DataType::Int);
+
+        const std::string serialized = SerializeGraph(persistGraph);
+        std::string loadError;
+        const auto reloaded = DeserializeGraph(serialized, loadError);
+        if (!reloaded) {
+            std::cerr << "failed to reload serialized generic-bound graph: " << loadError << '\n';
+            return 1;
+        }
+        const Node* reloadedNode = reloaded->FindNode(identity->Id());
+        if (!reloadedNode || reloadedNode->GenericBindings().size() != 1 ||
+            reloadedNode->GenericBindings().at("T") != DataType::Int) {
+            std::cerr << "generic binding did not survive a save/load round trip.\n";
+            return 1;
+        }
+        if (SerializeGraph(*reloaded) != serialized) {
+            std::cerr << "reloaded graph did not re-serialize byte-for-byte identical.\n";
+            return 1;
+        }
+    }
+
     std::cout << "Creation Engine reflected FRust graph codegen passed.\n";
     return 0;
 }

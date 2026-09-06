@@ -21,3 +21,13 @@ node pure pub fn core_literal_float(value: f64) -> f64 = { value }
 node pure pub fn core_literal_int(value: i64) -> i64 = { value }
 node pure pub fn core_literal_bool(value: bool) -> bool = { value }
 node pure pub fn core_literal_string(value: String) -> String = { value }
+
+// Real monomorphized generics for Schematic nodes plan, Phase 3: the proof
+// node. Generic over one type parameter appearing on TWO input pins and
+// the output (a stronger test of per-instance binding resolution than a
+// bare identity<T> would be) -- a plain value-select/ternary, not a
+// control-flow node (no exec pins at all, same "pure single-value" shape
+// core_add etc. already use).
+node pure pub fn core_select_value<T>(condition: bool, if_true: T, if_false: T) -> T = {
+    if (condition) { if_true } else { if_false }
+}

@@ -247,7 +247,20 @@ void ExtractNodes(const cgltf_data& data, LoadedModel& outModel) {
 // an already-parsed+buffer-loaded cgltf_data. Shared by both LoadGltf
 // and LoadGltfFromVfs — everything past "how were the bytes read" is
 // identical between the two modes.
+// Djehuti Bridge: pulls just "djehuti_asset_id" out of asset.extras's raw
+// JSON text (cgltf_extras::data -- a plain null-terminated JSON string cgltf
+// already gives us, not offset-based substring extraction). Deliberately
+// narrow: no general extras system, just this one field.
+juce::String ExtractDjehutiAssetId(const cgltf_asset& asset) {
+    if (asset.extras.data == nullptr) return {};
+    const auto parsed = juce::JSON::parse(juce::String(asset.extras.data));
+    if (const auto* object = parsed.getDynamicObject())
+        return object->getProperty("djehuti_asset_id").toString();
+    return {};
+}
+
 void ExtractModel(const cgltf_data& data, LoadedModel& outModel, std::vector<juce::String>& outMaterialTextureUris) {
+    outModel.djehutiAssetId = ExtractDjehutiAssetId(data.asset);
     outModel.materials.reserve(data.materials_count);
     outMaterialTextureUris.reserve(data.materials_count);
 
