@@ -201,6 +201,7 @@ int main()
         }
         const std::set<juce::String> expectedActionNames = {
             "MoveForward", "MoveBackward", "MoveLeft", "MoveRight", "Jump", "Sprint", "Crouch",
+            "Interact",
         };
         for (const auto& preset : presets) {
             if (preset.name.isEmpty() || preset.description.isEmpty()) {
@@ -208,7 +209,7 @@ int main()
                 return 1;
             }
             if (static_cast<std::size_t>(preset.bindings.actions.size()) != expectedActionNames.size()) {
-                std::cerr << "Preset \"" << preset.name << "\" does not have exactly the expected 7 Actions.\n";
+                std::cerr << "Preset \"" << preset.name << "\" does not have exactly the expected " << expectedActionNames.size() << " Actions.\n";
                 return 1;
             }
             std::set<juce::String> actualNames;

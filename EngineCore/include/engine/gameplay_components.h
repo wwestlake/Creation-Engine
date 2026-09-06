@@ -26,13 +26,4 @@ struct CharacterMotor
     bool alive = true;
 };
 
-struct RigidBody
-{
-    Vec3 velocity{};
-    float radius = 0.5f;
-    float gravity = -9.8f;
-    float restitution = 0.65f;
-    bool dynamic = true;
-};
-
 } // namespace ce::engine

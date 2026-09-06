@@ -10,6 +10,9 @@
 #include "engine/core_components.h"
 #include "engine/world.h"
 #include "Input/InputActionSystem.h"
+#include "Physics/PhysicsComponents.h"
+#include "Physics/PhysicsWorld.h"
+#include "Scene/AnimatorControl.h"
 #include "Scene/Components.h"
 
 namespace ce::frust
@@ -51,6 +54,20 @@ EngineFrustHost::EngineFrustHost(engine::World& worldToHost)
     runtime.registerHostFunction("engine_input_was_action_pressed", reinterpret_cast<void*>(&EngineFrustHost::inputWasActionPressed));
     runtime.registerHostFunction("engine_input_was_action_released", reinterpret_cast<void*>(&EngineFrustHost::inputWasActionReleased));
     runtime.registerHostFunction("engine_input_get_action_value_permille", reinterpret_cast<void*>(&EngineFrustHost::inputGetActionValuePerMille));
+    runtime.registerHostFunction("engine_physics_set_rigid_body", reinterpret_cast<void*>(&EngineFrustHost::physicsSetRigidBody));
+    runtime.registerHostFunction("engine_physics_set_collider_shape", reinterpret_cast<void*>(&EngineFrustHost::physicsSetColliderShape));
+    runtime.registerHostFunction("engine_physics_apply_force", reinterpret_cast<void*>(&EngineFrustHost::physicsApplyForce));
+    runtime.registerHostFunction("engine_physics_apply_impulse", reinterpret_cast<void*>(&EngineFrustHost::physicsApplyImpulse));
+    runtime.registerHostFunction("engine_physics_set_linear_velocity", reinterpret_cast<void*>(&EngineFrustHost::physicsSetLinearVelocity));
+    runtime.registerHostFunction("engine_physics_get_linear_velocity_x", reinterpret_cast<void*>(&EngineFrustHost::physicsGetLinearVelocityX));
+    runtime.registerHostFunction("engine_physics_get_linear_velocity_y", reinterpret_cast<void*>(&EngineFrustHost::physicsGetLinearVelocityY));
+    runtime.registerHostFunction("engine_physics_get_linear_velocity_z", reinterpret_cast<void*>(&EngineFrustHost::physicsGetLinearVelocityZ));
+    runtime.registerHostFunction("engine_physics_raycast", reinterpret_cast<void*>(&EngineFrustHost::physicsRaycast));
+    runtime.registerHostFunction("engine_physics_raycast_hit_entity", reinterpret_cast<void*>(&EngineFrustHost::physicsRaycastHitEntity));
+    runtime.registerHostFunction("engine_physics_raycast_hit_distance", reinterpret_cast<void*>(&EngineFrustHost::physicsRaycastHitDistance));
+    runtime.registerHostFunction("engine_physics_raycast_normal_x", reinterpret_cast<void*>(&EngineFrustHost::physicsRaycastNormalX));
+    runtime.registerHostFunction("engine_physics_raycast_normal_y", reinterpret_cast<void*>(&EngineFrustHost::physicsRaycastNormalY));
+    runtime.registerHostFunction("engine_physics_raycast_normal_z", reinterpret_cast<void*>(&EngineFrustHost::physicsRaycastNormalZ));
 
     // Real, pre-existing gap fixed here: control-flow/Event/Variable node
     // types were only ever registered into PodEditorPanel's own palette
@@ -71,6 +88,7 @@ EngineFrustHost::EngineFrustHost(engine::World& worldToHost)
         node_system::RegisterCoreCapabilityNodes(structuralTypes);
         node_system::RegisterCoreAnimationNodes(structuralTypes);
         node_system::RegisterCoreInputNodes(structuralTypes);
+        node_system::RegisterCorePhysicsNodes(structuralTypes);
 
         node_system::NodeLibraryDescriptor library;
         library.id = "core-structural";
@@ -177,6 +195,11 @@ void EngineFrustHost::tick(std::int64_t tick)
     // exactly "collected and held until start of the frame, available to
     // everything that runs before OpenGL."
     const auto firedCombos = inputActionSystem_ != nullptr ? inputActionSystem_->FiredCombos() : juce::StringArray{};
+    // Jolt vendoring plan (Decision 5) -- drained once per tick, same
+    // cadence as firedCombos above; dispatched per affected entity in the
+    // loop below, not broadcast to every attached Pod.
+    const auto collisionEvents = physicsWorld_ != nullptr ? physicsWorld_->DrainCollisionEvents()
+                                                          : std::vector<physics::CollisionEvent>{};
     for (const auto& [entityId, podId] : attachedObjectBehaviors())
     {
         ensureObjectLifecycle(entityId, podId, tick);
@@ -200,6 +223,18 @@ void EngineFrustHost::tick(std::int64_t tick)
             // name the moment a combo's display name needs sanitizing
             // (spaces, punctuation) for FRust identifier rules.
             const auto hookName = node_system::EventNodeFrustFunctionName("core.input.combo." + comboName.toStdString());
+            if (!hookName.empty()) {
+                invokeObjectHook(entityId, podId, hookName.c_str(), EngineFrustEvent::simulationTick, tick);
+            }
+        }
+        for (const auto& collisionEvent : collisionEvents) {
+            if (collisionEvent.entityA != entityId && collisionEvent.entityB != entityId) {
+                continue;
+            }
+            const char* typeName = collisionEvent.kind == physics::CollisionEvent::Kind::Begin ? "core.physics.onCollisionEnter"
+                                  : collisionEvent.kind == physics::CollisionEvent::Kind::Persist ? "core.physics.onCollisionStay"
+                                                                                                   : "core.physics.onCollisionExit";
+            const auto hookName = node_system::EventNodeFrustFunctionName(typeName);
             if (!hookName.empty()) {
                 invokeObjectHook(entityId, podId, hookName.c_str(), EngineFrustEvent::simulationTick, tick);
             }
@@ -409,37 +444,13 @@ std::int64_t EngineFrustHost::animSetActiveClip(std::int64_t entityId, const cha
 
 std::int64_t EngineFrustHost::animCrossfadeTo(std::int64_t entityId, const char* clipName, std::int64_t blendMillis)
 {
-    if (activeHost == nullptr || entityId < 0 || clipName == nullptr || *clipName == '\0') return 0;
+    if (activeHost == nullptr || entityId < 0) return 0;
     const auto entity = static_cast<entt::entity>(entityId);
     std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
     auto& registry = activeHost->world.Registry();
     auto* animator = registry.valid(entity) ? registry.try_get<scene::Animator>(entity) : nullptr;
-    if (animator == nullptr || animator->clips == nullptr) return 0;
-
-    const auto& clips = *animator->clips;
-    for (std::size_t i = 0; i < clips.size(); ++i) {
-        if (clips[i].name != clipName) {
-            continue;
-        }
-        if (animator->activeClip == static_cast<int>(i) && animator->blendFromClip < 0) {
-            return 1; // already the active clip and not mid-blend -- a no-op, not an error.
-        }
-        // If a previous crossfade is still in progress, its still-blending-
-        // FROM clip is deliberately dropped here in favor of the current
-        // (still-blending-TO) clip -- restarting a blend mid-blend loses
-        // that earlier clip's contribution rather than composing three
-        // clips together. Accepted simplification, not a bug: re-
-        // triggering a crossfade before the previous one finishes is an
-        // edge case a locomotion Pod can avoid via core.anim.isBlending.
-        animator->blendFromClip = animator->activeClip;
-        animator->blendFromTime = animator->time;
-        animator->activeClip = static_cast<int>(i);
-        animator->time = 0.0f;
-        animator->blendTime = 0.0f;
-        animator->blendDuration = juce::jmax<float>(0.0f, static_cast<float>(blendMillis) / 1000.0f);
-        return 1;
-    }
-    return 0;
+    if (animator == nullptr) return 0;
+    return scene::CrossfadeAnimatorTo(*animator, clipName, static_cast<int>(blendMillis)) ? 1 : 0;
 }
 
 std::int64_t EngineFrustHost::animSetPlaybackSpeedPerMille(std::int64_t entityId, std::int64_t speedPerMille)
@@ -518,6 +529,147 @@ std::int64_t EngineFrustHost::inputGetActionValuePerMille(const char* actionName
 {
     if (activeHost == nullptr || activeHost->inputActionSystem_ == nullptr || actionName == nullptr) return 0;
     return activeHost->inputActionSystem_->GetActionValuePerMille(actionName);
+}
+
+std::int64_t EngineFrustHost::physicsSetRigidBody(std::int64_t entityId, std::int64_t motionType, double mass,
+                                                  double friction, double restitution,
+                                                  double linearDamping, double angularDamping)
+{
+    if (activeHost == nullptr || entityId < 0) return 0;
+    const auto entity = static_cast<entt::entity>(entityId);
+    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
+    auto& registry = activeHost->world.Registry();
+    if (!registry.valid(entity)) return 0;
+
+    auto& rigidBody = registry.get_or_emplace<physics::RigidBodyComponent>(entity);
+    rigidBody.motionType = motionType == 0 ? physics::MotionType::Static
+                          : motionType == 1 ? physics::MotionType::Kinematic
+                                            : physics::MotionType::Dynamic;
+    rigidBody.mass = static_cast<float>(mass);
+    rigidBody.friction = static_cast<float>(friction);
+    rigidBody.restitution = static_cast<float>(restitution);
+    rigidBody.linearDamping = static_cast<float>(linearDamping);
+    rigidBody.angularDamping = static_cast<float>(angularDamping);
+    // Deliberately does NOT create the Jolt body itself -- PhysicsWorld's
+    // own reconciliation pass in Advance() does that once both this and
+    // ColliderComponent are present, so a Pod can set the two config
+    // nodes in either order (Jolt vendoring plan, Decision 3).
+    return 1;
+}
+
+std::int64_t EngineFrustHost::physicsSetColliderShape(std::int64_t entityId, std::int64_t shapeKind,
+                                                      double halfExtentX, double halfExtentY, double halfExtentZ,
+                                                      double radius, double halfHeight, std::int64_t collisionLayer,
+                                                      bool isSensor)
+{
+    if (activeHost == nullptr || entityId < 0) return 0;
+    const auto entity = static_cast<entt::entity>(entityId);
+    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
+    auto& registry = activeHost->world.Registry();
+    if (!registry.valid(entity)) return 0;
+
+    auto& collider = registry.get_or_emplace<physics::ColliderComponent>(entity);
+    collider.shape = shapeKind == 1 ? physics::ColliderShapeKind::Sphere
+                    : shapeKind == 2 ? physics::ColliderShapeKind::Capsule
+                                     : physics::ColliderShapeKind::Box;
+    collider.halfExtentX = static_cast<float>(halfExtentX);
+    collider.halfExtentY = static_cast<float>(halfExtentY);
+    collider.halfExtentZ = static_cast<float>(halfExtentZ);
+    collider.radius = static_cast<float>(radius);
+    collider.halfHeight = static_cast<float>(halfHeight);
+    collider.collisionLayer = static_cast<std::uint16_t>(collisionLayer);
+    collider.isSensor = isSensor;
+    return 1;
+}
+
+std::int64_t EngineFrustHost::physicsApplyForce(std::int64_t entityId, double x, double y, double z)
+{
+    if (activeHost == nullptr || activeHost->physicsWorld_ == nullptr || entityId < 0) return 0;
+    activeHost->physicsWorld_->ApplyForce(activeHost->world, entityId,
+                                          static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+    return 1;
+}
+
+std::int64_t EngineFrustHost::physicsApplyImpulse(std::int64_t entityId, double x, double y, double z)
+{
+    if (activeHost == nullptr || activeHost->physicsWorld_ == nullptr || entityId < 0) return 0;
+    activeHost->physicsWorld_->ApplyImpulse(activeHost->world, entityId,
+                                            static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+    return 1;
+}
+
+std::int64_t EngineFrustHost::physicsSetLinearVelocity(std::int64_t entityId, double x, double y, double z)
+{
+    if (activeHost == nullptr || activeHost->physicsWorld_ == nullptr || entityId < 0) return 0;
+    activeHost->physicsWorld_->SetLinearVelocity(activeHost->world, entityId,
+                                                 static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+    return 1;
+}
+
+double EngineFrustHost::physicsGetLinearVelocityX(std::int64_t entityId)
+{
+    if (activeHost == nullptr || activeHost->physicsWorld_ == nullptr || entityId < 0) return 0.0;
+    float x = 0, y = 0, z = 0;
+    activeHost->physicsWorld_->GetLinearVelocity(activeHost->world, entityId, x, y, z);
+    return static_cast<double>(x);
+}
+
+double EngineFrustHost::physicsGetLinearVelocityY(std::int64_t entityId)
+{
+    if (activeHost == nullptr || activeHost->physicsWorld_ == nullptr || entityId < 0) return 0.0;
+    float x = 0, y = 0, z = 0;
+    activeHost->physicsWorld_->GetLinearVelocity(activeHost->world, entityId, x, y, z);
+    return static_cast<double>(y);
+}
+
+double EngineFrustHost::physicsGetLinearVelocityZ(std::int64_t entityId)
+{
+    if (activeHost == nullptr || activeHost->physicsWorld_ == nullptr || entityId < 0) return 0.0;
+    float x = 0, y = 0, z = 0;
+    activeHost->physicsWorld_->GetLinearVelocity(activeHost->world, entityId, x, y, z);
+    return static_cast<double>(z);
+}
+
+bool EngineFrustHost::physicsRaycast(double originX, double originY, double originZ,
+                                     double dirX, double dirY, double dirZ, double maxDistance)
+{
+    if (activeHost == nullptr || activeHost->physicsWorld_ == nullptr) return false;
+    const auto hit = activeHost->physicsWorld_->CastRay(
+        static_cast<float>(originX), static_cast<float>(originY), static_cast<float>(originZ),
+        static_cast<float>(dirX), static_cast<float>(dirY), static_cast<float>(dirZ),
+        static_cast<float>(maxDistance));
+    activeHost->lastRaycastHit_.hit = hit.hit;
+    activeHost->lastRaycastHit_.hitEntity = hit.hitEntity;
+    activeHost->lastRaycastHit_.distance = static_cast<double>(hit.distance);
+    activeHost->lastRaycastHit_.normalX = static_cast<double>(hit.normalX);
+    activeHost->lastRaycastHit_.normalY = static_cast<double>(hit.normalY);
+    activeHost->lastRaycastHit_.normalZ = static_cast<double>(hit.normalZ);
+    return hit.hit;
+}
+
+std::int64_t EngineFrustHost::physicsRaycastHitEntity()
+{
+    return activeHost != nullptr ? activeHost->lastRaycastHit_.hitEntity : -1;
+}
+
+double EngineFrustHost::physicsRaycastHitDistance()
+{
+    return activeHost != nullptr ? activeHost->lastRaycastHit_.distance : 0.0;
+}
+
+double EngineFrustHost::physicsRaycastNormalX()
+{
+    return activeHost != nullptr ? activeHost->lastRaycastHit_.normalX : 0.0;
+}
+
+double EngineFrustHost::physicsRaycastNormalY()
+{
+    return activeHost != nullptr ? activeHost->lastRaycastHit_.normalY : 0.0;
+}
+
+double EngineFrustHost::physicsRaycastNormalZ()
+{
+    return activeHost != nullptr ? activeHost->lastRaycastHit_.normalZ : 0.0;
 }
 
 std::int64_t EngineFrustHost::podSetVariableString(std::int64_t entityId, const char* podId, const char* name, const char* value)

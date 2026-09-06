@@ -20,11 +20,12 @@ namespace ce::input {
 // own header comment: a future preset is a one-line addition here, never
 // a dialog code change.
 //
-// Scoped tightly to "basic character movement controls," as asked --
+// Originally scoped tightly to "basic character movement controls" --
 // MoveForward/MoveBackward/MoveLeft/MoveRight/Jump/Sprint/Crouch, all
-// Digital Actions, `combos` left empty. No interact/fire/aim/reload; a
-// broader gameplay-control preset is a separate, future addition, not
-// built speculatively here.
+// Digital Actions, `combos` left empty. Interact was added later
+// (Possessable Designer Character plan, Phase 3) as the one real gap that
+// surfaced once an actual gameplay interaction (hit a button) was needed --
+// fire/aim/reload remain a separate, future, not-yet-needed addition.
 //
 // Grounded in actual PC-gaming convention (not asserted from memory --
 // see the Modifier-Key Bindings + Starter Movement Mapping Presets plan
@@ -74,6 +75,10 @@ inline std::vector<InputMappingPreset> GetStarterInputMappingPresets() {
         MakeDigitalAction("Jump", jump),
         MakeDigitalAction("Sprint", sprint),
         MakeDigitalAction("Crouch", crouch),
+        // Possessable Designer Character plan, Phase 3 -- the one real,
+        // previously-confirmed-absent gap. 'E' is the entrenched PC-gaming
+        // interact/use convention (same era as WASD itself).
+        MakeDigitalAction("Interact", { InputSourceKind::KeyboardKey, 'E', 1000 }),
     };
 
     InputMappingPreset ergonomic;
@@ -87,6 +92,10 @@ inline std::vector<InputMappingPreset> GetStarterInputMappingPresets() {
         MakeDigitalAction("Jump", jump),
         MakeDigitalAction("Sprint", sprint),
         MakeDigitalAction("Crouch", crouch),
+        // 'E' is MoveForward in this scheme -- 'R' is the next free key
+        // continuing the same one-column-right shift this preset already
+        // applies to movement.
+        MakeDigitalAction("Interact", { InputSourceKind::KeyboardKey, 'R', 1000 }),
     };
 
     InputMappingPreset arrowKeys;
@@ -100,6 +109,7 @@ inline std::vector<InputMappingPreset> GetStarterInputMappingPresets() {
         MakeDigitalAction("Jump", jump),
         MakeDigitalAction("Sprint", sprint),
         MakeDigitalAction("Crouch", crouch),
+        MakeDigitalAction("Interact", { InputSourceKind::KeyboardKey, 'E', 1000 }),
     };
 
     return { standard, ergonomic, arrowKeys };

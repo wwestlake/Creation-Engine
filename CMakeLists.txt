@@ -112,6 +112,35 @@ if (NOT CREATION_ENGINE_IXWEBSOCKET_INCLUDE_DIR OR NOT CREATION_ENGINE_IXWEBSOCK
         "at least once first (its own CMake configure installs this).")
 endif()
 
+# Jolt Physics: same LLVM/vcpkg-manifest-safety reasoning as ixwebsocket above
+# -- NEVER added to this app's own vcpkg.json, since `vcpkg install` there
+# reconciles the whole manifest and would touch the LLVM install root. Jolt
+# is vendored into a completely separate, isolated vcpkg install
+# (third_party/jolt-vcpkg/vcpkg_installed), installed via classic mode
+# (`vcpkg install joltphysics:x64-windows --classic --x-install-root=...`),
+# never touching any manifest at all. Unlike ixwebsocket/OpenXR above, this
+# uses find_package (not manual find_path/find_library): Jolt's own
+# vcpkg-generated Jolt::Jolt imported target carries required
+# INTERFACE_COMPILE_DEFINITIONS (JPH_USE_CPU_COMPUTE, JPH_OBJECT_STREAM,
+# JPH_FLOATING_POINT_EXCEPTIONS_ENABLED, etc.) that MUST match between the
+# prebuilt static library and every consuming translation unit -- hand-
+# duplicating those via manual find_library would risk a silent ABI/struct-
+# layout mismatch, exactly the class of bug Jolt's own build docs warn
+# about.
+set(CREATION_ENGINE_JOLT_VCPKG_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/jolt-vcpkg/vcpkg_installed/x64-windows")
+if (NOT EXISTS "${CREATION_ENGINE_JOLT_VCPKG_ROOT}/share/Jolt/JoltConfig.cmake")
+    message(FATAL_ERROR
+        "Creation Engine requires Jolt Physics and did not find it at "
+        "${CREATION_ENGINE_JOLT_VCPKG_ROOT}. Install it into that isolated "
+        "root with: D:/vcpkg/vcpkg.exe install joltphysics:x64-windows "
+        "--classic --x-install-root=\"${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/jolt-vcpkg/vcpkg_installed\" "
+        "-- do NOT add joltphysics to this app's own vcpkg.json (see the "
+        "LLVM / vcpkg Build Rule above).")
+endif()
+list(APPEND CMAKE_PREFIX_PATH "${CREATION_ENGINE_JOLT_VCPKG_ROOT}")
+find_package(Jolt CONFIG REQUIRED)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -278,6 +307,9 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Render/Import/ObjLoader.cpp
     Source/Import/DjehutiImportWatcher.h
     Source/Import/DjehutiImportWatcher.cpp
+    Source/Physics/PhysicsComponents.h
+    Source/Physics/PhysicsWorld.h
+    Source/Physics/PhysicsWorld.cpp
     Source/Render/Scene/Light.h
     Source/Views/LightPanel.h
     Source/Views/LightPanel.cpp
@@ -309,6 +341,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Runtime/GameClientWindow.cpp
     Source/Character/CharacterDefinition.h
     Source/Character/CharacterDefinition.cpp
+    Source/Character/PossessedCharacter.h
+    Source/Character/PossessedCharacter.cpp
     Source/Views/PlaceholderPanel.h
     Source/Views/PlaceholderPanel.cpp
     Source/Views/HierarchyPanel.h
@@ -338,6 +372,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Scene/AssetPlacement.cpp
     Source/Scene/AnimationSampler.h
     Source/Scene/AnimationSampler.cpp
+    Source/Scene/AnimatorControl.h
+    Source/Scene/AnimatorControl.cpp
     Source/Scene/AnimationSlicer.h
     Source/Scene/AnimationSlicer.cpp
     Source/Import/AssetImporter.h
@@ -390,6 +426,7 @@ target_compile_definitions(CreationEngineEditor PRIVATE
 )
 
 target_link_libraries(CreationEngineEditor PRIVATE
+    Jolt::Jolt
     engine_core
     node_system
     creation_suite_material_system
@@ -421,6 +458,8 @@ add_executable(CreationEngineFrustPluginSmoke
     Source/Frust/EngineNodeLibraryLoader.cpp
     Source/Input/InputActionSystem.cpp
     Source/Input/InputBindingDocumentStore.cpp
+    Source/Physics/PhysicsWorld.cpp
+    Source/Scene/AnimatorControl.cpp
 )
 
 if(MSVC)
@@ -432,6 +471,7 @@ if(MSVC)
 endif()
 target_include_directories(CreationEngineFrustPluginSmoke PRIVATE Source)
 target_link_libraries(CreationEngineFrustPluginSmoke PRIVATE
+    Jolt::Jolt
     engine_core
     node_system
     creation_suite_asset_system
@@ -462,9 +502,12 @@ add_executable(CreationEngineObjectBehaviorSmoke
     Source/Frust/EngineNodeLibraryLoader.cpp
     Source/Input/InputActionSystem.cpp
     Source/Input/InputBindingDocumentStore.cpp
+    Source/Physics/PhysicsWorld.cpp
+    Source/Scene/AnimatorControl.cpp
 )
 target_include_directories(CreationEngineObjectBehaviorSmoke PRIVATE Source)
 target_link_libraries(CreationEngineObjectBehaviorSmoke PRIVATE
+    Jolt::Jolt
     engine_core
     node_system
     creation_suite_asset_system
@@ -538,6 +581,16 @@ target_compile_definitions(CreationEngineFrustCodegenSmoke PRIVATE
 )
 add_test(NAME creation_engine_frust_codegen_smoke COMMAND CreationEngineFrustCodegenSmoke)
 
+# Phase 5 of the Jolt vendoring plan -- proves RegisterCorePhysicsNodes'
+# Domain::Core physics nodes actually compile through frust_codegen and run,
+# not just that the registration code compiles.
+add_executable(CreationEnginePhysicsNodeCodegenSmoke
+    tests/PhysicsNodeCodegenSmoke.cpp
+)
+target_link_libraries(CreationEnginePhysicsNodeCodegenSmoke PRIVATE node_system)
+target_link_libraries(CreationEnginePhysicsNodeCodegenSmoke PRIVATE creation_suite_frust_plugin_runtime)
+add_test(NAME creation_engine_physics_node_codegen_smoke COMMAND CreationEnginePhysicsNodeCodegenSmoke)
+
 add_executable(CreationEngineFrustGenericNodeReflectionSmoke
     tests/FrustGenericNodeReflectionSmoke.cpp
 )
@@ -565,6 +618,39 @@ target_compile_definitions(CreationEngineF64FfiCheckSmoke PRIVATE
     CE_F64_FFI_CHECK_PLUGIN="${CMAKE_CURRENT_SOURCE_DIR}/tests/plugins/F64FfiCheck.frust"
 )
 add_test(NAME creation_engine_f64_ffi_check_smoke COMMAND CreationEngineF64FfiCheckSmoke)
+
+# Phase 1 of the Jolt vendoring plan -- prove Jolt links and runs at all,
+# isolated from any engine wrapper code. See CREATION_ENGINE_JOLT_VCPKG_ROOT
+# above.
+add_executable(CreationEnginePhysicsJoltLinkSmoke
+    tests/PhysicsJoltLinkSmoke.cpp
+)
+target_link_libraries(CreationEnginePhysicsJoltLinkSmoke PRIVATE Jolt::Jolt)
+add_test(NAME creation_engine_physics_jolt_link_smoke COMMAND CreationEnginePhysicsJoltLinkSmoke)
+
+# Phase 5 of the Jolt vendoring plan -- the real end-to-end proof: a
+# dynamic sphere configured purely via RigidBodyComponent/ColliderComponent
+# (the same components a Schematic config node sets) falls, collides with
+# a static ground body, fires a collision event, and settles at the
+# expected height.
+add_executable(CreationEnginePhysicsWorldSmoke
+    tests/PhysicsWorldSmoke.cpp
+    Source/Physics/PhysicsWorld.cpp
+)
+target_include_directories(CreationEnginePhysicsWorldSmoke PRIVATE Source)
+target_link_libraries(CreationEnginePhysicsWorldSmoke PRIVATE Jolt::Jolt engine_core)
+add_test(NAME creation_engine_physics_world_smoke COMMAND CreationEnginePhysicsWorldSmoke)
+
+# Possessable Designer Character plan, Phase 5 -- proves CharacterVirtual
+# sensor-vs-solid collider behavior (button pass-through with a contact
+# event, vs. a normal wall actually blocking movement).
+add_executable(CreationEngineCharacterControllerSmoke
+    tests/CharacterControllerSmoke.cpp
+    Source/Physics/PhysicsWorld.cpp
+)
+target_include_directories(CreationEngineCharacterControllerSmoke PRIVATE Source)
+target_link_libraries(CreationEngineCharacterControllerSmoke PRIVATE Jolt::Jolt engine_core)
+add_test(NAME creation_engine_character_controller_smoke COMMAND CreationEngineCharacterControllerSmoke)
 
 # --- Dedicated server executable ------------------------------------------
 # Headless build: no rendering or client-only assets. Only juce_core and

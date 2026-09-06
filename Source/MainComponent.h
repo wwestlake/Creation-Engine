@@ -7,6 +7,7 @@
 
 #include "engine/simulation.h"
 #include "engine/world.h"
+#include "Physics/PhysicsWorld.h"
 #include "Frust/EngineFrustHost.h"
 #include "Frust/PodCatalog.h"
 #include "Input/InputActionSystem.h"
@@ -176,6 +177,11 @@ private:
     juce::ApplicationCommandManager commandManager_;
 
     ce::engine::World world_;
+    // Lives alongside world_ for the app's whole session -- never owned by
+    // a dockable panel (Core Architectural Invariant 4, Jolt vendoring
+    // plan). AttachToWorld() is called once, in the constructor body.
+    ce::physics::PhysicsWorld physicsWorld_;
+    double lastPhysicsAdvanceSeconds_ = 0.0;
     ce::interaction::EditorInteraction interactions_ { world_ };
     ce::frust::EngineFrustHost frustHost_ { world_ };
     ce::input::InputActionSystem inputActionSystem_;

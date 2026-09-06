@@ -1,5 +1,7 @@
 #include "GameClientWindow.h"
 
+#include <mutex>
+
 #include <creation/ui/CreationSuiteLogos.h>
 #include "engine/foundation_gameplay.h"
 
@@ -17,6 +19,7 @@ GameClientContent::GameClientContent(int clientNumber, juce::ValueTree sceneStat
     // external host instead).
     : clientNumber_(clientNumber), world_(), viewport_(world_, interactions_, viewport_)
 {
+    physicsWorld_.AttachToWorld(world_);
     // A run client owns an isolated World, but it begins with the exact
     // authored scene selected in the editor rather than a blank test world.
     ce::scene::EngineSceneSerializer::restoreScene(world_, sceneState);
@@ -48,6 +51,15 @@ void GameClientContent::timerCallback()
     {
         engine::FoundationGameplay::Step(world_, {}, 1.0f / 30.0f);
         engine::Simulation::Step(world_, 1.0f / 30.0f);
+        const double nowSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+        const float physicsElapsedSeconds = lastPhysicsAdvanceSeconds_ > 0.0
+            ? static_cast<float>(nowSeconds - lastPhysicsAdvanceSeconds_) : 0.0f;
+        lastPhysicsAdvanceSeconds_ = nowSeconds;
+        const float physicsAlpha = physicsWorld_.Advance(world_, physicsElapsedSeconds);
+        {
+            std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
+            physicsWorld_.InterpolateTransforms(world_, physicsAlpha);
+        }
     }
     viewport_.repaint();
 }
