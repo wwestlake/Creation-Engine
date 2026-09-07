@@ -112,6 +112,11 @@ public:
 
 private:
     class AssetRow;
+    // A plain click selects a row (highlight only, AssetRow::SetSelected)
+    // without opening anything -- OpenAsset (an explicit double-click) is
+    // the only thing that opens an editor. Clears the previous selection's
+    // highlight first, so exactly one row is ever highlighted at a time.
+    void SelectRow(AssetRow* row, const creation::assets::AssetDescriptor& descriptor);
     void OpenAsset(const creation::assets::AssetDescriptor& descriptor);
     void CreateNewObjectDefinition();
     // The one visible entry point for creating anything (Decision 2) --
@@ -178,6 +183,16 @@ private:
     juce::TextButton searchButton_{ juce::String(juce::CharPointer_UTF8("\xf0\x9f\x94\x8d")) }; // magnifying glass, same UTF-8 fix as createMenuButton_ above.
     juce::Label emptyLabel_{ {}, "Open a project to browse its assets." };
 
+    // Column headers, one row above scrollView_ -- widths set in resized()
+    // to exactly match AssetRow's own column layout (the kColumnGap/
+    // kRightMargin/kModifiedColumnWidth/... constants both use), so labels
+    // stay aligned under their header instead of just repeating each
+    // metadata field crammed against the row's own right edge.
+    juce::Label columnHeaderName_{ {}, "Name" };
+    juce::Label columnHeaderCategory_{ {}, "Category" };
+    juce::Label columnHeaderSize_{ {}, "Size" };
+    juce::Label columnHeaderModified_{ {}, "Modified" };
+
     // Rows live inside this plain host, not directly on `this` --
     // scrollView_ scrolls the host, so the row list can grow past the
     // panel's own (often short, docked-at-the-bottom) height without
@@ -185,6 +200,10 @@ private:
     juce::Viewport scrollView_;
     juce::Component rowsHost_;
     juce::OwnedArray<AssetRow> rows_;
+    // Raw, non-owning -- rows_ owns the lifetime. Reset to nullptr in
+    // Refresh() before rows_ is rebuilt (every AssetRow instance is
+    // destroyed and recreated there), so this never dangles.
+    AssetRow* selectedRow_ = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ContentBrowserPanel)
 };
