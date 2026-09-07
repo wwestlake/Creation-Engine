@@ -682,7 +682,14 @@ void MainComponent::EnsureInputBindingsPanelOpen() {
         auto* panel = dockManager_->registerPanel("input-bindings", "Input Bindings",
                                                    std::make_unique<NonOwningPanelHost>(inputBindingsPanel_),
                                                    CreationDock::DockTargetZone::Right);
-        panel->onCloseRequested = [this](CreationDock::DockPanel*) { dockManager_->unregisterPanel("input-bindings"); };
+        // Deferred via callAsync -- see ClosePodEditor's comment for why
+        // (destroying a DockPanel synchronously from inside its own tab's
+        // close handler, still on the call stack, is a confirmed crash).
+        panel->onCloseRequested = [this](CreationDock::DockPanel*) {
+            juce::MessageManager::callAsync([this] {
+                if (dockManager_ != nullptr) dockManager_->unregisterPanel("input-bindings");
+            });
+        };
     }
     dockManager_->activatePanel("input-bindings");
 }
@@ -694,20 +701,40 @@ void MainComponent::EnsureLightPanelOpen() {
         auto* panel = dockManager_->registerPanel("lighting", "Lighting",
                                                    std::make_unique<NonOwningPanelHost>(lightPanel_),
                                                    CreationDock::DockTargetZone::Right);
-        panel->onCloseRequested = [this](CreationDock::DockPanel*) { dockManager_->unregisterPanel("lighting"); };
+        // Deferred via callAsync -- same reason as EnsureInputBindingsPanelOpen above.
+        panel->onCloseRequested = [this](CreationDock::DockPanel*) {
+            juce::MessageManager::callAsync([this] {
+                if (dockManager_ != nullptr) dockManager_->unregisterPanel("lighting");
+            });
+        };
     }
     dockManager_->activatePanel("lighting");
 }
 
 void MainComponent::ClosePodEditor(const juce::String& podName) {
     if (dockManager_ == nullptr) return;
-    dockManager_->unregisterPanel("pod-editor-" + podName);
-    dockManager_->unregisterPanel("pod-info-" + podName);
-    // Unlike the old single-instance version, this instance is fully
-    // destroyed (not kept around with stale content reset) -- a closed
-    // Pod editor has nowhere for stale content to leak into next time,
-    // since OpenPodEditor always constructs a fresh pair on next open.
-    openPodEditors_.erase(podName);
+    // Deferred, not synchronous: this is called from DockTab::mouseDown
+    // (via onCloseRequested), which is still on the call stack for the
+    // very tab being closed -- destroying its DockPanel (and the
+    // PodEditorPanel/PodInfoPanel it wraps) while that event handler is
+    // still executing is a real, reproduced crash (confirmed via a
+    // Windows crash dump: access violation reading freed memory, right at
+    // entry to this function, called directly from DockTab::mouseDown
+    // still on the stack). juce::MessageManager::callAsync runs the
+    // actual teardown on the next message-loop iteration instead, once
+    // the click has fully finished being handled -- the standard JUCE
+    // fix for "don't destroy a component from inside its own callback."
+    juce::MessageManager::callAsync([this, podName] {
+        if (dockManager_ == nullptr) return;
+        dockManager_->unregisterPanel("pod-editor-" + podName);
+        dockManager_->unregisterPanel("pod-info-" + podName);
+        // Unlike the old single-instance version, this instance is fully
+        // destroyed (not kept around with stale content reset) -- a
+        // closed Pod editor has nowhere for stale content to leak into
+        // next time, since OpenPodEditor always constructs a fresh pair
+        // on next open.
+        openPodEditors_.erase(podName);
+    });
 }
 
 void MainComponent::EnsureObjectDefinitionPanelOpen() {
