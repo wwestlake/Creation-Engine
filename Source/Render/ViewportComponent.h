@@ -5,10 +5,12 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <mutex>
 
 #include <JuceHeader.h>
 
 #include "engine/world.h"
+#include "Render/FrameSnapshot.h"
 #include "Render/Scene/Camera.h"
 #include "Render/Scene/FreeCamera.h"
 #include "Render/Scene/GridRenderer.h"
@@ -56,12 +58,28 @@ namespace ce {
 //   - world_.RegistryMutex() (std::mutex, owned by World itself so every
 //     class touching the shared World uses the same lock) guards every
 //     access to world_.Registry() — entities, Transforms, and the Mesh/
-//     Material each MeshRenderer references. As of SC3, HierarchyPanel
-//     reads the registry from the message thread while this class reads
-//     and mutates it from the render thread every frame; that's a real,
-//     exercised race without the lock, not a hypothetical.
+//     Material each MeshRenderer references.
 // Either way: copy in, copy out, never hand back a live reference the UI
 // thread could hold onto while the render thread is mid-frame.
+//
+// Engine Loop Decoupling plan, Phase 2: the continuous mesh-draw pass
+// (drawMeshes, inside renderOpenGL()) no longer touches world_.Registry()
+// or world_.RegistryMutex() at all -- it reads only the immutable
+// FrameSnapshot (Render/FrameSnapshot.h) PublishFrameSnapshot() builds and
+// publishes once per update tick, from the message thread
+// (MainComponent::timerCallback(), every tick regardless of Play state).
+// snapshotMutex_ below guards only a cheap shared_ptr swap, never the
+// snapshot's own data (immutable once published, so the render thread
+// reads through its copy of the pointer with no lock held at all).
+// world_.RegistryMutex() is still used, deliberately, by gizmo picking/
+// dragging and mouse-click selection (desktopPick,
+// updateDesktopTransformGizmo/Drag) -- those stay interactive, on-demand,
+// and render-thread-resident for the reason documented on
+// updateDesktopTransformDrag() itself (avoiding a worse contention
+// problem from message-thread mouse-move events). Snapshotting only
+// applies to the part of the frame that ran unconditionally, every tick,
+// regardless of user interaction -- the actual "render and update
+// everything at once" problem.
 //
 // Gizmo picking/dragging deliberately does NOT follow the "share via
 // RegistryMutex" rule above, for the same reason FreeCamera's WASD/look
@@ -114,6 +132,17 @@ public:
     void RemovePointLight(int index);
 
     void EnableFirstPersonMode() { freeCamera_.EnableFirstPersonMode(); }
+
+    // Engine Loop Decoupling plan, Phase 2: builds a fresh FrameSnapshot
+    // from the live World registry (resolving any not-yet-resolved
+    // MeshAssetReference, advancing every Animator by real elapsed time,
+    // sampling/blending/skinning each one) and publishes it for the next
+    // renderOpenGL() call to read -- see the class comment above and
+    // FrameSnapshot.h for why. Called once per update tick from
+    // MainComponent::timerCallback(), every tick regardless of Play state
+    // (edit-mode changes -- moving an object, reassigning a material --
+    // still need to reach the viewport). Message-thread only.
+    void PublishFrameSnapshot();
 
     // Possessable Designer Character plan, Phase 4 -- thin pass-throughs to
     // freeCamera_'s new possessed mode (see FreeCamera.h). SetPossessedFeetPosition
@@ -297,6 +326,21 @@ private:
     GridRenderer gridRenderer_;
     juce::OpenGLShaderProgram* gridProgram_ = nullptr;
     double lastFrameTimeSeconds_ = 0.0;
+
+    // Engine Loop Decoupling plan, Phase 2. Written by PublishFrameSnapshot()
+    // (message thread), read by renderOpenGL() (render thread) -- the lock
+    // guards only the shared_ptr copy itself, never the pointed-to data
+    // (immutable once published). Starts null; renderOpenGL() treats null
+    // as "nothing published yet" (draws nothing) rather than a crash, since
+    // the first snapshot publish and the first render can race harmlessly
+    // at startup.
+    std::mutex snapshotMutex_;
+    std::shared_ptr<const render::FrameSnapshot> currentSnapshot_;
+    // Real elapsed time since the last PublishFrameSnapshot() call, for
+    // Animator playback -- deliberately separate from lastFrameTimeSeconds_
+    // above (that one still measures real render-frame delta, still used
+    // for freeCamera_/VR rig movement, which stays render-thread work).
+    double lastSnapshotTimeSeconds_ = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ViewportComponent)
 };
