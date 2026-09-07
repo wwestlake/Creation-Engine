@@ -35,6 +35,12 @@ constexpr int kSizeColumnWidth = 64;
 constexpr int kCategoryColumnWidth = 140;
 constexpr int kColumnGap = 10;
 constexpr int kRightMargin = 12;
+// Leftmost column, always the asset's own AssetKind (Game/Scene/Pod/Model/
+// Object Definition/...) -- unlike Category (designer-set free text,
+// AssetKind only a fallback when unset), this is never blank and never
+// user-editable, so two rows sharing a name (a Game and a Scene both named
+// "Village Block") are still immediately distinguishable at a glance.
+constexpr int kTypeColumnWidth = 90;
 
 juce::String FormatFileSize(std::int64_t bytes) {
     if (bytes < 1024) return juce::String(bytes) + " B";
@@ -112,6 +118,12 @@ public:
         // before it ever reaches this row's own mouseDown/mouseDrag/mouseUp
         // -- exactly why rows were neither clickable nor draggable despite
         // this class's own handlers being entirely correct.
+        typeLabel_.setInterceptsMouseClicks(false, false);
+        typeLabel_.setText(creation::assets::toDisplayName(descriptor_.kind), juce::dontSendNotification);
+        typeLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6c7a8c));
+        typeLabel_.setFont(juce::Font(juce::FontOptions(12.0f)));
+        addAndMakeVisible(typeLabel_);
+
         nameLabel_.setInterceptsMouseClicks(false, false);
         nameLabel_.setText(descriptor_.displayName, juce::dontSendNotification);
         nameLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
@@ -145,6 +157,8 @@ public:
 
     void resized() override {
         auto bounds = getLocalBounds();
+        typeLabel_.setBounds(bounds.removeFromLeft(kTypeColumnWidth));
+        bounds.removeFromLeft(kColumnGap);
         bounds.removeFromRight(kRightMargin);
         modifiedLabel_.setBounds(bounds.removeFromRight(kModifiedColumnWidth));
         bounds.removeFromRight(kColumnGap);
@@ -222,6 +236,7 @@ private:
     bool placeable_;
     bool draggedThisGesture_ = false;
     bool selected_ = false;
+    juce::Label typeLabel_;
     juce::Label nameLabel_;
     juce::Label categoryLabel_;
     juce::Label sizeLabel_;
@@ -264,7 +279,7 @@ ContentBrowserPanel::ContentBrowserPanel(ViewportComponent& viewport, ImportPane
     // Small, muted, uppercase-reading header labels -- deliberately not
     // styled like a row (they're captions for the columns below, not
     // another row of data).
-    for (auto* header : { &columnHeaderName_, &columnHeaderCategory_, &columnHeaderSize_, &columnHeaderModified_ }) {
+    for (auto* header : { &columnHeaderType_, &columnHeaderName_, &columnHeaderCategory_, &columnHeaderSize_, &columnHeaderModified_ }) {
         header->setFont(juce::Font(juce::FontOptions(11.0f)));
         header->setColour(juce::Label::textColourId, juce::Colour(0xff6c7a8c));
         addAndMakeVisible(*header);
@@ -674,6 +689,7 @@ void ContentBrowserPanel::resized() {
     area.removeFromTop(8);
 
     if (emptyLabel_.isVisible()) {
+        columnHeaderType_.setVisible(false);
         columnHeaderName_.setVisible(false);
         columnHeaderCategory_.setVisible(false);
         columnHeaderSize_.setVisible(false);
@@ -682,6 +698,7 @@ void ContentBrowserPanel::resized() {
         scrollView_.setBounds(area);
         return;
     }
+    columnHeaderType_.setVisible(true);
     columnHeaderName_.setVisible(true);
     columnHeaderCategory_.setVisible(true);
     columnHeaderSize_.setVisible(true);
@@ -694,6 +711,8 @@ void ContentBrowserPanel::resized() {
     // be showing yet this frame.
     {
         auto headerRow = area.removeFromTop(18);
+        columnHeaderType_.setBounds(headerRow.removeFromLeft(kTypeColumnWidth));
+        headerRow.removeFromLeft(kColumnGap);
         headerRow.removeFromRight(kRightMargin);
         columnHeaderModified_.setBounds(headerRow.removeFromRight(kModifiedColumnWidth));
         headerRow.removeFromRight(kColumnGap);

@@ -151,6 +151,30 @@ private:
     void saveSessionToDisk(bool userInitiated = false);
     void loadSessionFromDisk();
     bool openActiveGame(juce::String& errorMessage);
+    // Consolidate Game/Scene Loading plan, Phase 1: the one place that
+    // decides which Game/Scene should be open and actually loads it --
+    // openActiveGame/selectGame/selectScene/createGame/createScene's post-
+    // creation load all become thin callers of these two instead of each
+    // separately re-implementing the same fallback-resolution + UI-sync
+    // tail (ResolveProjectAssets/prepareLevel/content-panel rewiring/
+    // saveAppSettings).
+    //
+    // Reads games_/lastOpenedGameId/lastOpenedSceneId once and resolves
+    // "the Game/Scene that should be open right now." Unlike the old
+    // openActiveGame, a last-opened game/scene that isn't found does NOT
+    // fall back to games.getFirst()/scenes.getFirst() -- it resolves to
+    // "open nothing," a real, reachable state. Returns false only for a
+    // genuine failure (no project active); "nothing was last-opened" is
+    // not a failure, it returns true having opened nothing.
+    bool LoadLastOpenedGameAndScene(juce::String& errorMessage);
+    // Does the actual load once a specific game/scene have been resolved
+    // (by LoadLastOpenedGameAndScene, or directly by selectGame/
+    // selectScene/createGame/createScene, which already know exactly
+    // which game/scene they mean). `scene.id.isEmpty()` is valid and
+    // means "set up the game context, but load no scene" -- another real,
+    // reachable state (a Game can exist as active with nothing rendering).
+    bool LoadGameAndScene(const ce::project::GameDocumentInfo& game, const ce::project::SceneDocumentInfo& scene,
+                          juce::String& errorMessage);
     void selectGame(const juce::String& gameId);
     void selectScene(const juce::String& sceneId);
     void createGame();

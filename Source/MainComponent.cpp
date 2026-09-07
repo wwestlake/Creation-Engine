@@ -1031,26 +1031,66 @@ bool MainComponent::openActiveGame(juce::String& errorMessage)
         errorMessage = "No Suite project is open.";
         return false;
     }
+    // ensureInitialGame's auto-creation stays unconditional here -- a
+    // project's first Game still gets a real starter Scene the moment it's
+    // created ("a blank game has a starter scene"), independent of whether
+    // anything was ever remembered as last-opened.
     juce::Array<ce::project::GameDocumentInfo> games;
     if (!ce::project::EngineGameDocumentStore::ensureInitialGame(projectSession_, games, errorMessage)) return false;
-    if (games.isEmpty()) {
-        errorMessage = "The project does not contain an Engine game.";
+    games_ = games;
+    return LoadLastOpenedGameAndScene(errorMessage);
+}
+
+bool MainComponent::LoadLastOpenedGameAndScene(juce::String& errorMessage)
+{
+    if (!projectSession_.isValid()) {
+        errorMessage = "No Suite project is open.";
         return false;
     }
+
     juce::String settingsError;
     const auto settings = creation::services::SuiteVfsJsonStore::loadJson("engine-settings.json", settingsError);
     const auto* settingsObject = settings.getDynamicObject();
     const auto lastGameId = settingsObject != nullptr ? settingsObject->getProperty("lastOpenedGameId").toString() : juce::String{};
     const auto lastSceneId = settingsObject != nullptr ? settingsObject->getProperty("lastOpenedSceneId").toString() : juce::String{};
-    activeGame_ = games.getFirst();
-    for (const auto& game : games)
-        if (game.id == lastGameId) { activeGame_ = game; break; }
-    for (const auto& scene : activeGame_.scenes)
-        if (scene.id == lastSceneId) { activeScene_ = scene; break; }
-    if (activeScene_.id.isEmpty())
-        for (const auto& scene : activeGame_.scenes)
-            if (scene.id == activeGame_.entrySceneId) { activeScene_ = scene; break; }
-    if (activeScene_.id.isEmpty() && !activeGame_.scenes.isEmpty()) activeScene_ = activeGame_.scenes.getFirst();
+
+    ce::project::GameDocumentInfo resolvedGame;
+    for (const auto& game : games_)
+        if (game.id == lastGameId) { resolvedGame = game; break; }
+    if (resolvedGame.id.isEmpty()) {
+        // Nothing was last-opened (or it no longer exists) -- open
+        // nothing. A real, reachable state, not a fallback to
+        // games_.getFirst(). Same "the void scene" reasoning as
+        // LoadGameAndScene's own empty-scene branch below -- whatever was
+        // previously loaded (e.g. a different project's scene, still live
+        // in world_ from before this project became active) must actually
+        // be cleared, not just have its id forgotten.
+        {
+            std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+            world_.Registry().clear();
+        }
+        world_.ResetTick();
+        activeGame_ = {};
+        activeScene_ = {};
+        return true;
+    }
+
+    ce::project::SceneDocumentInfo resolvedScene;
+    for (const auto& scene : resolvedGame.scenes)
+        if (scene.id == lastSceneId) { resolvedScene = scene; break; }
+    if (resolvedScene.id.isEmpty())
+        for (const auto& scene : resolvedGame.scenes)
+            if (scene.id == resolvedGame.entrySceneId) { resolvedScene = scene; break; }
+    // If still empty, LoadGameAndScene below sets up the game context with
+    // no scene loaded -- no scenes.getFirst() blind fallback.
+
+    return LoadGameAndScene(resolvedGame, resolvedScene, errorMessage);
+}
+
+bool MainComponent::LoadGameAndScene(const ce::project::GameDocumentInfo& game, const ce::project::SceneDocumentInfo& scene,
+                                     juce::String& errorMessage)
+{
+    activeGame_ = game;
     juce::String inputBindingsError;
     inputActionSystem_.LoadForGame(projectSession_, activeGame_, inputBindingsError);
     RefreshComboEventNodes();
@@ -1058,11 +1098,34 @@ bool MainComponent::openActiveGame(juce::String& errorMessage)
     importPanel_.SetProjectContent(&projectSession_, activeGame_.assetRoot());
     djehutiImportWatcher_.SetProjectContent(&projectSession_, projectSession_.getProjectId());
     contentBrowserPanel_.SetProjectContent(&projectSession_);
-    if (!ce::project::EngineGameDocumentStore::loadScene(projectSession_, activeGame_, activeScene_, world_, errorMessage)) return false;
+
+    if (scene.id.isEmpty()) {
+        // Game context is set up, but there's no scene to load -- a real,
+        // reachable "game open, nothing rendering" state, not an error.
+        // "The void scene": the viewport shows only its own always-drawn
+        // grid/free-fly camera (Render/ViewportComponent.cpp -- neither is
+        // gated on scene state), so the world_ registry itself must
+        // actually be cleared here -- EngineGameDocumentStore::loadScene
+        // (which we're not calling) is normally what does this via
+        // EngineSceneSerializer::restoreScene's own reg.clear(). Skipping
+        // that without clearing here would leave whatever scene was
+        // previously loaded still rendering.
+        {
+            std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+            world_.Registry().clear();
+        }
+        world_.ResetTick();
+        activeScene_ = {};
+        headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName + " | " + activeGame_.name);
+        saveAppSettings();
+        return true;
+    }
+
+    if (!ce::project::EngineGameDocumentStore::loadScene(projectSession_, activeGame_, scene, world_, errorMessage)) return false;
+    activeScene_ = scene;
     viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
     frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
     propertiesPanel_.Refresh();
-    games_ = games;
     headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName + " | " + activeGame_.name + " / " + activeScene_.name);
     saveAppSettings();
     return true;
@@ -1182,26 +1245,13 @@ void MainComponent::selectGame(const juce::String& gameId)
     for (const auto& game : games_) {
         if (game.id != gameId) continue;
         saveSessionToDisk(false);
-        activeGame_ = game;
-        activeScene_ = {};
-        for (const auto& scene : activeGame_.scenes)
-            if (scene.id == activeGame_.entrySceneId) { activeScene_ = scene; break; }
-        if (activeScene_.id.isEmpty() && !activeGame_.scenes.isEmpty()) activeScene_ = activeGame_.scenes.getFirst();
-        juce::String inputBindingsError;
-        inputActionSystem_.LoadForGame(projectSession_, activeGame_, inputBindingsError);
-        RefreshComboEventNodes();
-        inputBindingsPanel_.SetActiveGame(activeGame_);
-        importPanel_.SetProjectContent(&projectSession_, activeGame_.assetRoot());
-        djehutiImportWatcher_.SetProjectContent(&projectSession_, projectSession_.getProjectId());
-        contentBrowserPanel_.SetProjectContent(&projectSession_);
+        ce::project::SceneDocumentInfo entryScene;
+        for (const auto& scene : game.scenes)
+            if (scene.id == game.entrySceneId) { entryScene = scene; break; }
+        if (entryScene.id.isEmpty() && !game.scenes.isEmpty()) entryScene = game.scenes.getFirst();
         juce::String error;
-        if (!ce::project::EngineGameDocumentStore::loadScene(projectSession_, activeGame_, activeScene_, world_, error))
+        if (!LoadGameAndScene(game, entryScene, error))
             headerBar_.setStatusText("Could not open game: " + error);
-        else {
-            viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
-            frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
-            saveAppSettings();
-        }
         return;
     }
 }
@@ -1212,14 +1262,8 @@ void MainComponent::selectScene(const juce::String& sceneId)
         if (scene.id != sceneId) continue;
         saveSessionToDisk(false);
         juce::String error;
-        if (!ce::project::EngineGameDocumentStore::loadScene(projectSession_, activeGame_, scene, world_, error))
+        if (!LoadGameAndScene(activeGame_, scene, error))
             headerBar_.setStatusText("Could not open scene: " + error);
-        else {
-            activeScene_ = scene;
-            viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
-            frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
-            saveAppSettings();
-        }
         return;
     }
 }
@@ -1240,28 +1284,18 @@ void MainComponent::createGame()
             return;
         }
         safeThis->games_.add(game);
-        safeThis->activeGame_ = game;
-        safeThis->activeScene_ = scene;
-        safeThis->importPanel_.SetProjectContent(&safeThis->projectSession_, safeThis->activeGame_.assetRoot());
-        safeThis->djehutiImportWatcher_.SetProjectContent(&safeThis->projectSession_, safeThis->projectSession_.getProjectId());
-        safeThis->contentBrowserPanel_.SetProjectContent(&safeThis->projectSession_);
 
         // createGame() only writes the new scene's document -- it doesn't
         // load it into the live world_, the same gap selectGame/selectScene
         // already fix for switching TO an existing game. Load it here too,
         // required before any starter-content placement below (which needs
         // a live world_ to instantiate into).
-        if (!ce::project::EngineGameDocumentStore::loadScene(safeThis->projectSession_, safeThis->activeGame_,
-                                                              safeThis->activeScene_, safeThis->world_, error)) {
+        if (!safeThis->LoadGameAndScene(game, scene, error)) {
             safeThis->headerBar_.setStatusText("Created " + game.name + ", but could not load its scene: " + error);
             return;
         }
-        safeThis->viewport_.ResolveProjectAssets(safeThis->projectSession_, safeThis->suiteSettings_);
 
         safeThis->PlaceStarterContent(chosenTemplate);
-
-        safeThis->frustHost_.prepareLevel(static_cast<std::int64_t>(safeThis->world_.CurrentTick()));
-        safeThis->saveAppSettings();
         safeThis->headerBar_.setStatusText("Created " + game.name + " / " + scene.name);
     });
 }
@@ -1365,18 +1399,12 @@ void MainComponent::createScene()
         for (auto& game : safeThis->games_)
             if (game.id == safeThis->activeGame_.id) game = safeThis->activeGame_;
 
-        if (!ce::project::EngineGameDocumentStore::loadScene(safeThis->projectSession_, safeThis->activeGame_, scene,
-                                                              safeThis->world_, error)) {
+        if (!safeThis->LoadGameAndScene(safeThis->activeGame_, scene, error)) {
             safeThis->headerBar_.setStatusText("Created scene, but could not load it: " + error);
             return;
         }
-        safeThis->activeScene_ = scene;
-        safeThis->viewport_.ResolveProjectAssets(safeThis->projectSession_, safeThis->suiteSettings_);
 
         safeThis->PlaceStarterContent(chosenTemplate);
-
-        safeThis->frustHost_.prepareLevel(static_cast<std::int64_t>(safeThis->world_.CurrentTick()));
-        safeThis->saveAppSettings();
         safeThis->headerBar_.setStatusText("Created scene: " + scene.name);
     });
 }
