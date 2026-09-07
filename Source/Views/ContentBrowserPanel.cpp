@@ -307,8 +307,8 @@ void ContentBrowserPanel::OpenAsset(const creation::assets::AssetDescriptor& des
     if (onAssetOpened) onAssetOpened(descriptor);
 }
 
-void ContentBrowserPanel::CreateNewPod(frust::PodKind kind) {
-    if (projectSession_ == nullptr || !projectSession_->isValid()) return;
+juce::String ContentBrowserPanel::CreateNewPod(frust::PodKind kind) {
+    if (projectSession_ == nullptr || !projectSession_->isValid()) return {};
 
     const auto name = GenerateDefaultPodName(podCatalog_, kind);
     podCatalog_.GetOrCreateGraph(name, kind);
@@ -317,11 +317,12 @@ void ContentBrowserPanel::CreateNewPod(frust::PodKind kind) {
     if (!podCatalog_.Save(*projectSession_, name, error)) {
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Cannot Create Pod",
                                                 "Could not save the new Pod: " + error);
-        return;
+        return {};
     }
 
     Refresh();
     if (onPodCreated) onPodCreated(name);
+    return name;
 }
 
 void ContentBrowserPanel::CreateNewObjectDefinition() {

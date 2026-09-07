@@ -50,6 +50,12 @@ public:
     // entity.
     std::function<void(entt::entity)> onEntityDestroying;
 
+    // Editor UI/Workflow Overhaul plan, Phase 5 (Decision 1/4): the "Open
+    // Editor" entry point for a selected scene object. MainComponent
+    // decides what "open" means (open the first attached Pod's editor, or
+    // -- object-first -- create one and attach it now if none exists yet).
+    std::function<void(entt::entity)> onOpenEditorRequested;
+
     void resized() override;
     void paint(juce::Graphics& g) override;
 
@@ -62,6 +68,7 @@ private:
     entt::entity selectedEntity_ = entt::null;
 
     juce::TextButton deleteObjectButton_{ "Delete Object" };
+    juce::TextButton openEditorButton_{ "Open Editor" };
     juce::Viewport scrollView_;
     std::unique_ptr<ContentHost> content_;
 

@@ -54,9 +54,10 @@ constexpr DockPanelMenuEntry kDockPanelMenuEntries[] = {
     //
     // "pods"/"pod-info" also deliberately not listed here -- unlike every
     // other entry, they don't exist as dock tabs at all until a Pod is
-    // open (EnsurePodPanelsOpen(), called from the Content Browser), so a
-    // permanent View-menu entry for them would silently no-op most of the
-    // time. Open a Pod from its Content Browser row/right-click menu
+    // open (OpenPodEditor(), called from the Content Browser), and now
+    // there's one such pair per currently-open Pod rather than a single
+    // fixed pair, so a permanent View-menu entry wouldn't even name the
+    // right one. Open a Pod from its Content Browser row/right-click menu
     // instead; once open, its tab is right there to click on directly.
     // Pod/Asset Workflow plan Phase 5.
 };
@@ -128,19 +129,11 @@ MainComponent::MainComponent()
     if (!frustHost_.loadBundled(frustError)) {
         juce::Logger::writeToLog("Creation Engine FRust host: " + juce::String(frustError));
     }
-    podEditorPanel_ = std::make_unique<ce::views::PodEditorPanel>(frustHost_, podCatalog_, projectSession_);
-    podInfoPanel_ = std::make_unique<ce::views::PodInfoPanel>(podCatalog_, projectSession_, podEditorPanel_->Graph(),
-                                                               podEditorPanel_->Registry());
     objectDefinitionEditorPanel_ =
         std::make_unique<ce::views::ObjectDefinitionEditorPanel>(objectDefinitions_, podCatalog_, projectSession_);
-    // PodEditorPanel no longer owns the Pod's identity/interface UI or the
-    // node inspector itself, PodInfoPanel does.
-    podEditorPanel_->onOpenPodChanged = [this](const juce::String& name) { podInfoPanel_->SetOpenPod(name); };
-    podEditorPanel_->onSelectedNodeChanged = [this](ce::node_system::NodeId id) { podInfoPanel_->SetSelectedNode(id); };
     contentBrowserPanel_.onAssetOpened = [this](const creation::assets::AssetDescriptor& descriptor) {
         if (descriptor.kind == creation::assets::AssetKind::pod) {
-            EnsurePodPanelsOpen();
-            podEditorPanel_->OpenPod(descriptor.displayName);
+            OpenPodEditor(descriptor.displayName);
         } else if (descriptor.kind == creation::assets::AssetKind::objectDefinition) {
             EnsureObjectDefinitionPanelOpen();
             objectDefinitionEditorPanel_->OpenDefinition(descriptor.displayName);
@@ -162,10 +155,7 @@ MainComponent::MainComponent()
             }
         }
     };
-    contentBrowserPanel_.onPodCreated = [this](const juce::String& name) {
-        EnsurePodPanelsOpen();
-        podEditorPanel_->OpenPod(name);
-    };
+    contentBrowserPanel_.onPodCreated = [this](const juce::String& name) { OpenPodEditor(name); };
     contentBrowserPanel_.onObjectDefinitionCreated = [this](const juce::String& id) {
         EnsureObjectDefinitionPanelOpen();
         objectDefinitionEditorPanel_->OpenDefinition(id);
@@ -318,6 +308,34 @@ MainComponent::MainComponent()
 
     propertiesPanel_.onEntityDestroying = [this](entt::entity entity) {
         frustHost_.notifyObjectDestroyed(entity, static_cast<std::int64_t>(world_.CurrentTick()));
+    };
+    // Editor UI/Workflow Overhaul plan, Phase 5 (Decision 4): object-first
+    // Pod creation. If the selected entity already has an attached Pod,
+    // just open its editor (the first one, if it somehow has more than
+    // one -- no picker UI for that yet). If it has none, create one now
+    // via the same logic the Create menu uses and attach it immediately,
+    // so the code is connected from the instant it exists rather than a
+    // separate later step.
+    propertiesPanel_.onOpenEditorRequested = [this](entt::entity entity) {
+        juce::String podName;
+        {
+            std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+            auto& registry = world_.Registry();
+            if (!registry.valid(entity)) return;
+            if (const auto* attachments = registry.try_get<ce::scene::BehaviorAttachments>(entity);
+                attachments != nullptr && !attachments->podIds.empty()) {
+                podName = attachments->podIds.front();
+            }
+        }
+        if (podName.isEmpty()) {
+            podName = contentBrowserPanel_.CreateNewPod(ce::frust::PodKind::Behavior);
+            if (podName.isEmpty()) return; // creation failed; already reported to the user.
+            std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+            auto& registry = world_.Registry();
+            if (!registry.valid(entity)) return;
+            registry.get_or_emplace<ce::scene::BehaviorAttachments>(entity).podIds.push_back(podName);
+        }
+        OpenPodEditor(podName);
     };
     initialiseDockingWorkspace();
 
@@ -504,7 +522,7 @@ void MainComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             // "input-bindings" isn't part of the default eager-docked
             // layout (nothing should be, per the user's own stated intent
             // -- just not yet applied to every panel) -- register it lazily
-            // on first open, same shape as EnsurePodPanelsOpen().
+            // on first open, same shape as OpenPodEditor().
             if (id == "input-bindings") EnsureInputBindingsPanelOpen();
             else if (id == "lighting") EnsureLightPanelOpen();
             else dockManager_->activatePanel(id);
@@ -606,8 +624,9 @@ void MainComponent::initialiseDockingWorkspace()
     dockManager_->registerPanel("viewport", "Scene Viewport", std::make_unique<NonOwningPanelHost>(viewport_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("properties", "Properties", std::make_unique<NonOwningPanelHost>(propertiesPanel_), CreationDock::DockTargetZone::Right);
     // "pods"/"pod-info" deliberately NOT registered here -- they exist only
-    // while a Pod is open, via EnsurePodPanelsOpen(). Pod/Asset Workflow
-    // plan Phase 5. "input-bindings"/"lighting" are the same shape
+    // while a Pod is open, via OpenPodEditor(), one pair per open Pod
+    // (Editor UI/Workflow Overhaul plan, Phase 5). "input-bindings"/"lighting"
+    // are the same lazy shape
     // (EnsureInputBindingsPanelOpen()/EnsureLightPanelOpen(), called from
     // the View menu instead of Content Browser) -- unlike Pods they ARE
     // listed in kDockPanelMenuEntries/the View menu (there's exactly one of
@@ -627,20 +646,33 @@ void MainComponent::initialiseDockingWorkspace()
     dockManager_->registerPanel("log", "Log", std::make_unique<NonOwningPanelHost>(logPanel_), CreationDock::DockTargetZone::Bottom);
 }
 
-void MainComponent::EnsurePodPanelsOpen() {
-    if (dockManager_ == nullptr) return;
+void MainComponent::OpenPodEditor(const juce::String& podName) {
+    if (dockManager_ == nullptr || podName.isEmpty()) return;
 
-    if (!dockManager_->isRegistered("pods")) {
-        auto* panel = dockManager_->registerPanel("pods", "Pods", std::make_unique<NonOwningPanelHost>(*podEditorPanel_),
-                                                   CreationDock::DockTargetZone::CenterTab);
-        panel->onCloseRequested = [this](CreationDock::DockPanel*) { ClosePodPanels(); };
+    const auto editorId = "pod-editor-" + podName;
+    const auto infoId = "pod-info-" + podName;
+
+    if (openPodEditors_.find(podName) == openPodEditors_.end()) {
+        OpenPodEditorEntry entry;
+        entry.editor = std::make_unique<ce::views::PodEditorPanel>(frustHost_, podCatalog_, projectSession_);
+        entry.info = std::make_unique<ce::views::PodInfoPanel>(podCatalog_, projectSession_, entry.editor->Graph(),
+                                                                entry.editor->Registry());
+        // PodEditorPanel no longer owns the Pod's identity/interface UI or
+        // the node inspector itself, PodInfoPanel does.
+        entry.editor->onOpenPodChanged = [info = entry.info.get()](const juce::String& name) { info->SetOpenPod(name); };
+        entry.editor->onSelectedNodeChanged = [info = entry.info.get()](ce::node_system::NodeId id) { info->SetSelectedNode(id); };
+        entry.editor->OpenPod(podName);
+
+        auto* editorPanel = dockManager_->registerPanel(editorId, podName, std::make_unique<NonOwningPanelHost>(*entry.editor),
+                                                         CreationDock::DockTargetZone::CenterTab);
+        editorPanel->onCloseRequested = [this, podName](CreationDock::DockPanel*) { ClosePodEditor(podName); };
+        auto* infoPanel = dockManager_->registerPanel(infoId, "Pod: " + podName, std::make_unique<NonOwningPanelHost>(*entry.info),
+                                                       CreationDock::DockTargetZone::Right);
+        infoPanel->onCloseRequested = [this, podName](CreationDock::DockPanel*) { ClosePodEditor(podName); };
+
+        openPodEditors_[podName] = std::move(entry);
     }
-    if (!dockManager_->isRegistered("pod-info")) {
-        auto* panel = dockManager_->registerPanel("pod-info", "Pod", std::make_unique<NonOwningPanelHost>(*podInfoPanel_),
-                                                   CreationDock::DockTargetZone::Right);
-        panel->onCloseRequested = [this](CreationDock::DockPanel*) { ClosePodPanels(); };
-    }
-    dockManager_->activatePanel("pods");
+    dockManager_->activatePanel(editorId);
 }
 
 void MainComponent::EnsureInputBindingsPanelOpen() {
@@ -667,17 +699,15 @@ void MainComponent::EnsureLightPanelOpen() {
     dockManager_->activatePanel("lighting");
 }
 
-void MainComponent::ClosePodPanels() {
+void MainComponent::ClosePodEditor(const juce::String& podName) {
     if (dockManager_ == nullptr) return;
-    dockManager_->unregisterPanel("pods");
-    dockManager_->unregisterPanel("pod-info");
-    // PodEditorPanel's own openName_ is intentionally left as-is -- OpenPod()
-    // always fully resets its state on the next open, and it isn't visible
-    // (no dock tab) while nothing is open, so stale content never shows.
-    // PodInfoPanel's "No Pod open" placeholder does need resetting though,
-    // since it's the one thing that could otherwise show stale info if
-    // some other panel happened to still reference it.
-    podInfoPanel_->SetOpenPod({});
+    dockManager_->unregisterPanel("pod-editor-" + podName);
+    dockManager_->unregisterPanel("pod-info-" + podName);
+    // Unlike the old single-instance version, this instance is fully
+    // destroyed (not kept around with stale content reset) -- a closed
+    // Pod editor has nowhere for stale content to leak into next time,
+    // since OpenPodEditor always constructs a fresh pair on next open.
+    openPodEditors_.erase(podName);
 }
 
 void MainComponent::EnsureObjectDefinitionPanelOpen() {

@@ -54,6 +54,11 @@ PropertiesPanel::PropertiesPanel(engine::World& world, interaction::EditorIntera
     deleteObjectButton_.setEnabled(false);
     addAndMakeVisible(deleteObjectButton_);
 
+    openEditorButton_.onClick = [this] { if (selectedEntity_ != entt::null && onOpenEditorRequested) onOpenEditorRequested(selectedEntity_); };
+    openEditorButton_.setEnabled(false);
+    openEditorButton_.setTooltip("Open this object's attached Pod editor -- creates and attaches one first if it has none yet.");
+    addAndMakeVisible(openEditorButton_);
+
     content_ = std::make_unique<ContentHost>(transformPanel_, materialsPanel_, physicsPanel_, behaviorAttachmentPanel_);
     addAndMakeVisible(scrollView_);
     scrollView_.setViewedComponent(content_.get(), false);
@@ -65,6 +70,7 @@ PropertiesPanel::~PropertiesPanel() = default;
 void PropertiesPanel::SetSelectedEntity(entt::entity entity) {
     selectedEntity_ = entity;
     deleteObjectButton_.setEnabled(entity != entt::null);
+    openEditorButton_.setEnabled(entity != entt::null);
     transformPanel_.SetSelectedEntity(entity);
     materialsPanel_.SetSelectedEntity(entity);
     physicsPanel_.SetSelectedEntity(entity);
@@ -102,7 +108,10 @@ void PropertiesPanel::paint(juce::Graphics& g) {
 
 void PropertiesPanel::resized() {
     auto bounds = getLocalBounds();
-    deleteObjectButton_.setBounds(bounds.removeFromTop(28).reduced(4, 2));
+    auto buttonRow = bounds.removeFromTop(28);
+    const auto half = buttonRow.getWidth() / 2;
+    deleteObjectButton_.setBounds(buttonRow.removeFromLeft(half).reduced(4, 2));
+    openEditorButton_.setBounds(buttonRow.reduced(4, 2));
     scrollView_.setBounds(bounds);
     content_->UpdateLayout(scrollView_.getMaximumVisibleWidth());
 }
