@@ -1045,6 +1045,200 @@ void ViewportComponent::newOpenGLContextCreated() {
     std::cout << "[render] newOpenGLContextCreated: done" << std::endl;
 }
 
+void ViewportComponent::PublishFrameSnapshot() {
+    const double nowSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+    const float deltaSeconds = lastSnapshotTimeSeconds_ > 0.0
+        ? static_cast<float>(nowSeconds - lastSnapshotTimeSeconds_) : 0.0f;
+    lastSnapshotTimeSeconds_ = nowSeconds;
+
+    auto snapshot = std::make_shared<render::FrameSnapshot>();
+
+    // Everything below touches the World's registry — entities, their
+    // Transforms, and the Mesh/Material each MeshRenderer points at — so
+    // it all runs under one RegistryMutex lock for the rest of this
+    // function, same as renderOpenGL()'s draw pass used to do directly.
+    // entt::registry isn't internally thread-safe: authoring panels on the
+    // message thread genuinely touch the same registry concurrently with
+    // this call (also message-thread, from MainComponent::timerCallback(),
+    // but a different call site/time than an inspector edit).
+    const std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
+
+    // Object definitions persist an asset identifier rather than a GPU
+    // pointer. Resolve mesh only once the viewport owns a live GL context
+    // (Mesh::Upload already happened; re-fetching it every tick would be
+    // pure waste). Material is re-synced from the catalog every tick,
+    // unconditionally -- cheap (a mutex + hash lookup + a couple of
+    // shared_ptr copies) and it's what makes AssetCatalog::AssignMaterial
+    // (the Materials panel's "Assign to mesh" action) actually live: an
+    // already-placed entity picks up a reassigned material slot on the
+    // very next tick, no scene reload needed, because it's reading the
+    // catalog's current slot value instead of a value cached once at
+    // first resolve and never touched again. Moved here from
+    // renderOpenGL() (Phase 2): a pure catalog lookup + registry write, no
+    // GL call, so it belongs on the update tick like every other registry
+    // mutation, not the render thread.
+    auto unresolvedAssets = world_.Registry().view<const scene::MeshAssetReference>();
+    for (const auto entity : unresolvedAssets) {
+        const auto* existingConst = world_.Registry().try_get<const scene::MeshRenderer>(entity);
+        const bool meshAlreadyResolved = existingConst != nullptr && existingConst->mesh != nullptr;
+
+        const auto& reference = unresolvedAssets.get<const scene::MeshAssetReference>(entity);
+        // Try the exact pack-qualified identity first. A reference saved
+        // against an older pack version (packId set, but that exact
+        // version's manifest is no longer materialized on this machine --
+        // EngineAssetPack::version bumps over time) would otherwise never
+        // resolve even though the currently-installed pack registers the
+        // same asset under its plain engine name as an alias (see
+        // AssetCatalog::LoadAssetPack's AddAlias call). Fall back to that
+        // plain name so a stale pack-version reference still renders.
+        // A multi-part reference (reference.nodeIndex >= 0) was registered
+        // under AssetCatalog::NodeAssetKey, not the bare assetId -- see
+        // ResolveProjectAssets and docs/OBJECT_MODEL.md's "Multi-part
+        // import decomposes into components".
+        const auto plainAssetKey = reference.nodeIndex >= 0
+            ? scene::AssetCatalog::NodeAssetKey(reference.assetId, reference.versionId, reference.nodeIndex)
+            : reference.assetId;
+        auto asset = reference.packId.isNotEmpty()
+            ? assetCatalog_.Find(scene::AssetCatalog::PackAssetKey(reference.packId, reference.packVersion, reference.assetId))
+            : assetCatalog_.Find(plainAssetKey);
+        if (asset.mesh == nullptr && reference.packId.isNotEmpty()) {
+            asset = assetCatalog_.Find(plainAssetKey);
+        }
+        if (asset.mesh != nullptr && asset.material != nullptr) {
+            if (auto* existing = world_.Registry().try_get<scene::MeshRenderer>(entity)) {
+                if (!meshAlreadyResolved) existing->mesh = asset.mesh;
+                existing->material = asset.material;
+            } else {
+                world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ asset.mesh, asset.material });
+            }
+        }
+    }
+
+    const auto selectedEntity = interactions_.selected();
+    auto drawView = world_.Registry().view<const scene::Transform, const scene::MeshRenderer>();
+    for (auto entity : drawView) {
+        const auto& renderer = drawView.get<const scene::MeshRenderer>(entity);
+        if (!renderer.mesh || !renderer.material) {
+            continue;
+        }
+        if (const auto* sceneFlags = world_.Registry().try_get<const scene::SceneFlags>(entity)) {
+            if (!sceneFlags->visible || (sceneFlags->editorOnly && isPlaying_)) {
+                continue;
+            }
+        }
+
+        render::RenderableEntity renderable;
+        // Transform is local to the entity's parent. Folders are
+        // transparent and parent objects establish the coordinate space
+        // for descendants.
+        renderable.worldTransform = scene::WorldModelMatrix(world_.Registry(), entity);
+        renderable.mesh = renderer.mesh;
+        renderable.material = renderer.material;
+
+        // Runtime tint overrides leave the shared material unchanged;
+        // selection highlight wins over a Pod-driven tint, same precedence
+        // renderOpenGL()'s draw loop used before this moved here.
+        if (const auto* runtimeTint = world_.Registry().try_get<const engine::Tint>(entity)) {
+            renderable.tint = scene::ToJuceVector3D(runtimeTint->color);
+        }
+        if (entity == selectedEntity) {
+            renderable.tint = { 1.0f, 0.62f, 0.12f };
+        }
+
+        // Compiled material graph parameter overrides (Scalar/Vector
+        // Parameter nodes) -- an entity's own MaterialParameterOverrides
+        // wins over the Material's shared current value, same shared-vs-
+        // per-instance split as tint above.
+        if (const auto* parameterOverrides = world_.Registry().try_get<const engine::MaterialParameterOverrides>(entity)) {
+            for (const auto& [name, value] : parameterOverrides->scalars) {
+                renderable.parameterScalarOverrides.emplace(name, value);
+            }
+            for (const auto& [name, value] : parameterOverrides->colors) {
+                renderable.parameterColorOverrides.emplace(name, scene::ToJuceVector3D(value));
+            }
+        }
+
+        // AI5/AI7: advance this entity's Animator by this tick's real
+        // elapsed time and bake the resulting bone matrix palette into the
+        // snapshot -- moved here from renderOpenGL() (Phase 2), so
+        // playback speed is tied to the fixed update-tick cadence
+        // (matching physics' own fixed-tick-not-render-tick cadence), not
+        // however often the display happens to repaint.
+        if (const auto* skeleton = world_.Registry().try_get<const scene::Skeleton>(entity)) {
+            if (!skeleton->joints.empty()) {
+                std::vector<juce::Matrix3D<float>> localTransforms;
+                auto* animator = world_.Registry().try_get<scene::Animator>(entity);
+                const AnimationClip* activeClip = nullptr;
+                if (animator != nullptr && animator->clips != nullptr && animator->activeClip >= 0 &&
+                    static_cast<std::size_t>(animator->activeClip) < animator->clips->size()) {
+                    activeClip = &(*animator->clips)[static_cast<std::size_t>(animator->activeClip)];
+                }
+
+                if (activeClip != nullptr) {
+                    if (animator->playing) {
+                        animator->time += deltaSeconds * animator->playbackSpeed;
+                        if (activeClip->duration > 0.0f) {
+                            if (animator->loop) {
+                                animator->time = std::fmod(animator->time, activeClip->duration);
+                                if (animator->time < 0.0f) {
+                                    animator->time += activeClip->duration;
+                                }
+                            } else if (animator->time > activeClip->duration) {
+                                animator->time = activeClip->duration;
+                                animator->playing = false;
+                            }
+                        }
+                    }
+
+                    // AI7 crossfade: while blendFromClip names a valid clip,
+                    // blend it (frozen at blendFromTime, the pose it was in
+                    // the instant the crossfade started) against activeClip
+                    // (the target, still advancing normally above) by
+                    // blendTime/blendDuration. This advances independently of
+                    // playbackSpeed/playing -- a crossfade is a fixed real-
+                    // time transition, not clip content -- and self-clears
+                    // once the weight reaches 1, collapsing back to plain
+                    // single-clip sampling on the next tick.
+                    const AnimationClip* blendFromClipData = nullptr;
+                    if (animator->blendFromClip >= 0 && animator->clips != nullptr &&
+                        static_cast<std::size_t>(animator->blendFromClip) < animator->clips->size()) {
+                        blendFromClipData = &(*animator->clips)[static_cast<std::size_t>(animator->blendFromClip)];
+                    }
+
+                    if (blendFromClipData != nullptr) {
+                        animator->blendTime += deltaSeconds;
+                        const float weight = animator->blendDuration > 0.0f
+                                                  ? juce::jlimit(0.0f, 1.0f, animator->blendTime / animator->blendDuration)
+                                                  : 1.0f;
+                        localTransforms = scene::SampleBlendedLocalTransforms(
+                            *blendFromClipData, animator->blendFromTime, *activeClip, animator->time, weight, *skeleton);
+                        if (weight >= 1.0f) {
+                            animator->blendFromClip = -1;
+                            animator->blendFromTime = 0.0f;
+                            animator->blendTime = 0.0f;
+                            animator->blendDuration = 0.0f;
+                        }
+                    } else {
+                        localTransforms = scene::SampleLocalTransforms(*activeClip, animator->time, *skeleton);
+                    }
+                } else {
+                    localTransforms.reserve(skeleton->joints.size());
+                    for (const auto& joint : skeleton->joints) {
+                        localTransforms.push_back(joint.localBindTransform);
+                    }
+                }
+
+                renderable.boneMatrices = scene::ComputeSkinningMatrices(*skeleton, localTransforms);
+            }
+        }
+
+        snapshot->renderables.push_back(std::move(renderable));
+    }
+
+    const std::lock_guard<std::mutex> snapshotLock(snapshotMutex_);
+    currentSnapshot_ = std::move(snapshot);
+}
+
 void ViewportComponent::renderOpenGL() {
     bool vrFrameActive = false;
     if (openXRProvider_ != nullptr) {
@@ -1224,84 +1418,30 @@ void ViewportComponent::renderOpenGL() {
         pointLightsSnapshot = pointLights_;
     }
 
-    // Everything below touches the World's registry — entities, their
-    // Transforms, and the Mesh/Material each MeshRenderer points at — so
-    // it all runs under one RegistryMutex lock for the rest of this
-    // function. entt::registry isn't internally thread-safe: authoring
-    // panels on the message thread genuinely touch the same registry
-    // concurrently with this render loop.
-    const std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
-
-    // Object definitions persist an asset identifier rather than a GPU
-    // pointer. Resolve mesh only once the viewport owns a live GL context
-    // (Mesh::Upload already happened; re-fetching it every frame would be
-    // pure waste). Material is re-synced from the catalog every frame,
-    // unconditionally -- cheap (a mutex + hash lookup + a couple of
-    // shared_ptr copies, the same cost uCameraPos already pays every
-    // frame regardless) and it's what makes AssetCatalog::AssignMaterial
-    // (the Materials panel's "Assign to mesh" action) actually live: an
-    // already-placed entity picks up a reassigned material slot on the
-    // very next frame, no scene reload needed, because it's reading the
-    // catalog's current slot value instead of a value cached once at
-    // first resolve and never touched again.
-    auto unresolvedAssets = world_.Registry().view<const scene::MeshAssetReference>();
-    for (const auto entity : unresolvedAssets) {
-        const auto* existingConst = world_.Registry().try_get<const scene::MeshRenderer>(entity);
-        const bool meshAlreadyResolved = existingConst != nullptr && existingConst->mesh != nullptr;
-
-        const auto& reference = unresolvedAssets.get<const scene::MeshAssetReference>(entity);
-        // Try the exact pack-qualified identity first. A reference saved
-        // against an older pack version (packId set, but that exact
-        // version's manifest is no longer materialized on this machine --
-        // EngineAssetPack::version bumps over time) would otherwise never
-        // resolve even though the currently-installed pack registers the
-        // same asset under its plain engine name as an alias (see
-        // AssetCatalog::LoadAssetPack's AddAlias call). Fall back to that
-        // plain name so a stale pack-version reference still renders.
-        // A multi-part reference (reference.nodeIndex >= 0) was registered
-        // under AssetCatalog::NodeAssetKey, not the bare assetId -- see
-        // ResolveProjectAssets and docs/OBJECT_MODEL.md's "Multi-part
-        // import decomposes into components".
-        const auto plainAssetKey = reference.nodeIndex >= 0
-            ? scene::AssetCatalog::NodeAssetKey(reference.assetId, reference.versionId, reference.nodeIndex)
-            : reference.assetId;
-        auto asset = reference.packId.isNotEmpty()
-            ? assetCatalog_.Find(scene::AssetCatalog::PackAssetKey(reference.packId, reference.packVersion, reference.assetId))
-            : assetCatalog_.Find(plainAssetKey);
-        if (asset.mesh == nullptr && reference.packId.isNotEmpty()) {
-            asset = assetCatalog_.Find(plainAssetKey);
-        }
-        if (asset.mesh != nullptr && asset.material != nullptr) {
-            if (auto* existing = world_.Registry().try_get<scene::MeshRenderer>(entity)) {
-                if (!meshAlreadyResolved) existing->mesh = asset.mesh;
-                existing->material = asset.material;
-            } else {
-                world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ asset.mesh, asset.material });
-            }
-        }
+    // Engine Loop Decoupling plan, Phase 2: the draw pass below reads only
+    // the immutable snapshot PublishFrameSnapshot() built this update tick
+    // -- world_.Registry()/world_.RegistryMutex() are never touched here.
+    // snapshotMutex_ guards only this pointer copy, not the snapshot's own
+    // data (see ViewportComponent.h's class comment).
+    std::shared_ptr<const render::FrameSnapshot> frameSnapshot;
+    {
+        const std::lock_guard<std::mutex> lock(snapshotMutex_);
+        frameSnapshot = currentSnapshot_;
     }
 
     auto drawMeshes = [&](const Camera& eyeCamera, const juce::Vector3D<float>& eyePosition) {
-    auto drawView = world_.Registry().view<const scene::Transform, const scene::MeshRenderer>();
-    for (auto entity : drawView) {
-        const auto& renderer = drawView.get<const scene::MeshRenderer>(entity);
-        if (!renderer.mesh || !renderer.material) {
+    if (frameSnapshot == nullptr) return; // Nothing published yet (first frame at startup).
+    for (const auto& renderable : frameSnapshot->renderables) {
+        if (!renderable.mesh || !renderable.material) {
             continue;
         }
-        if (const auto* sceneFlags = world_.Registry().try_get<const scene::SceneFlags>(entity)) {
-            if (!sceneFlags->visible || (sceneFlags->editorOnly && isPlaying_)) {
-                continue;
-            }
-        }
 
-        auto* program = renderer.material->Resolve(*shaderComposer_, openGLContext_);
+        auto* program = renderable.material->Resolve(*shaderComposer_, openGLContext_);
         if (program == nullptr) {
             continue;
         }
 
-        // Transform is local to the entity's parent. Folders are transparent
-        // and parent objects establish the coordinate space for descendants.
-        const auto model = scene::WorldModelMatrix(world_.Registry(), entity);
+        const auto& model = renderable.worldTransform;
         const auto normalMatrix = ExtractUpperLeft3x3(model);
 
         program->use();
@@ -1317,39 +1457,31 @@ void ViewportComponent::renderOpenGL() {
         // entirely for the compiled path, see Material.h).
         program->setUniform("uTime", static_cast<float>(lastFrameTimeSeconds_));
 
-        // Runtime tint overrides leave the shared material unchanged.
-        juce::Vector3D<float> tint{ 1.0f, 1.0f, 1.0f };
-        if (const auto* runtimeTint = world_.Registry().try_get<const engine::Tint>(entity)) {
-            tint = { runtimeTint->color.x, runtimeTint->color.y, runtimeTint->color.z };
-        }
-        if (entity == interactions_.selected()) {
-            tint = { 1.0f, 0.62f, 0.12f };
-        }
-        renderer.material->ApplyUniforms(*program, tint);
+        // Selection highlight and any runtime Tint were already resolved
+        // into renderable.tint at snapshot-build time.
+        renderable.material->ApplyUniforms(*program, renderable.tint);
 
         // Compiled material graph parameters (Scalar/Vector Parameter
-        // nodes) -- an entity's own engine::MaterialParameterOverrides
-        // wins over the Material's shared current value, same
-        // shared-vs-per-instance split as tint above. Harmless no-op for
-        // the fixed pbr_lit path or any material with no parameters: an
-        // empty map just skips the loop, and setUniform on a name the
-        // active program doesn't declare is a silent no-op (GL ignores
-        // uniform location -1), same as uTime already relies on.
-        const auto* parameterOverrides = world_.Registry().try_get<const engine::MaterialParameterOverrides>(entity);
-        for (const auto& [name, value] : renderer.material->parameterFloatValues) {
+        // nodes) -- renderable.parameter*Overrides (baked from this
+        // entity's MaterialParameterOverrides at snapshot-build time) win
+        // over the Material's shared current value, same shared-vs-per-
+        // instance split as tint above. Harmless no-op for the fixed
+        // pbr_lit path or any material with no parameters: an empty map
+        // just skips the loop, and setUniform on a name the active
+        // program doesn't declare is a silent no-op (GL ignores uniform
+        // location -1), same as uTime already relies on.
+        for (const auto& [name, value] : renderable.material->parameterFloatValues) {
             float resolved = value;
-            if (parameterOverrides != nullptr) {
-                if (const auto it = parameterOverrides->scalars.find(name); it != parameterOverrides->scalars.end())
-                    resolved = it->second;
-            }
+            if (const auto it = renderable.parameterScalarOverrides.find(name);
+                it != renderable.parameterScalarOverrides.end())
+                resolved = it->second;
             program->setUniform(("uMaterial_" + name).c_str(), resolved);
         }
-        for (const auto& [name, value] : renderer.material->parameterColorValues) {
+        for (const auto& [name, value] : renderable.material->parameterColorValues) {
             auto resolved = value;
-            if (parameterOverrides != nullptr) {
-                if (const auto it = parameterOverrides->colors.find(name); it != parameterOverrides->colors.end())
-                    resolved = { it->second.x, it->second.y, it->second.z };
-            }
+            if (const auto it = renderable.parameterColorOverrides.find(name);
+                it != renderable.parameterColorOverrides.end())
+                resolved = it->second;
             program->setUniform(("uMaterial_" + name).c_str(), resolved.x, resolved.y, resolved.z);
         }
 
@@ -1360,7 +1492,7 @@ void ViewportComponent::renderOpenGL() {
         // a texture (unit 0) for the FIXED path, returning early as a
         // no-op for a compiled material, so this never collides with it.
         int materialTextureUnit = 0;
-        for (const auto& [uniformName, texture] : renderer.material->textureBindings) {
+        for (const auto& [uniformName, texture] : renderable.material->textureBindings) {
             if (texture == nullptr) continue;
             texture->Bind(static_cast<unsigned int>(materialTextureUnit));
             program->setUniform(uniformName.c_str(), materialTextureUnit);
@@ -1384,87 +1516,16 @@ void ViewportComponent::renderOpenGL() {
         }
         program->setUniform("uPointLightCount", pointLightCount);
 
-        // AI5: for a skinned entity, advance its Animator (if playing)
-        // and upload the resulting bone matrix palette. Reads/writes the
-        // Animator component in place -- safe under the same
-        // RegistryMutex lock already held for this whole draw pass, and
-        // consistent with how the demo-entity spin above mutates a
-        // component straight from the render thread.
-        if (const auto* skeleton = world_.Registry().try_get<const scene::Skeleton>(entity)) {
-            if (!skeleton->joints.empty()) {
-                std::vector<juce::Matrix3D<float>> localTransforms;
-                auto* animator = world_.Registry().try_get<scene::Animator>(entity);
-                const AnimationClip* activeClip = nullptr;
-                if (animator != nullptr && animator->clips != nullptr && animator->activeClip >= 0 &&
-                    static_cast<std::size_t>(animator->activeClip) < animator->clips->size()) {
-                    activeClip = &(*animator->clips)[static_cast<std::size_t>(animator->activeClip)];
-                }
-
-                if (activeClip != nullptr) {
-                    if (animator->playing) {
-                        animator->time += deltaSeconds * animator->playbackSpeed;
-                        if (activeClip->duration > 0.0f) {
-                            if (animator->loop) {
-                                animator->time = std::fmod(animator->time, activeClip->duration);
-                                if (animator->time < 0.0f) {
-                                    animator->time += activeClip->duration;
-                                }
-                            } else if (animator->time > activeClip->duration) {
-                                animator->time = activeClip->duration;
-                                animator->playing = false;
-                            }
-                        }
-                    }
-
-                    // AI7 crossfade: while blendFromClip names a valid clip,
-                    // blend it (frozen at blendFromTime, the pose it was in
-                    // the instant the crossfade started) against activeClip
-                    // (the target, still advancing normally above) by
-                    // blendTime/blendDuration. This advances independently of
-                    // playbackSpeed/playing -- a crossfade is a fixed real-
-                    // time transition, not clip content -- and self-clears
-                    // once the weight reaches 1, collapsing back to plain
-                    // single-clip sampling on the next frame.
-                    const AnimationClip* blendFromClipData = nullptr;
-                    if (animator->blendFromClip >= 0 && animator->clips != nullptr &&
-                        static_cast<std::size_t>(animator->blendFromClip) < animator->clips->size()) {
-                        blendFromClipData = &(*animator->clips)[static_cast<std::size_t>(animator->blendFromClip)];
-                    }
-
-                    if (blendFromClipData != nullptr) {
-                        animator->blendTime += deltaSeconds;
-                        const float weight = animator->blendDuration > 0.0f
-                                                  ? juce::jlimit(0.0f, 1.0f, animator->blendTime / animator->blendDuration)
-                                                  : 1.0f;
-                        localTransforms = scene::SampleBlendedLocalTransforms(
-                            *blendFromClipData, animator->blendFromTime, *activeClip, animator->time, weight, *skeleton);
-                        if (weight >= 1.0f) {
-                            animator->blendFromClip = -1;
-                            animator->blendFromTime = 0.0f;
-                            animator->blendTime = 0.0f;
-                            animator->blendDuration = 0.0f;
-                        }
-                    } else {
-                        localTransforms = scene::SampleLocalTransforms(*activeClip, animator->time, *skeleton);
-                    }
-                } else {
-                    localTransforms.reserve(skeleton->joints.size());
-                    for (const auto& joint : skeleton->joints) {
-                        localTransforms.push_back(joint.localBindTransform);
-                    }
-                }
-
-                const auto skinningMatrices = scene::ComputeSkinningMatrices(*skeleton, localTransforms);
-                const int boneCount = juce::jmin(static_cast<int>(skinningMatrices.size()), kMaxBones);
-                for (int b = 0; b < boneCount; ++b) {
-                    const juce::String uniformName = "uBoneMatrices[" + juce::String(b) + "]";
-                    program->setUniformMat4(uniformName.toRawUTF8(), skinningMatrices[static_cast<std::size_t>(b)].mat,
-                                             1, GL_FALSE);
-                }
-            }
+        // AI5/AI7: bone matrix palette was already sampled/blended/skinned
+        // this update tick by PublishFrameSnapshot() -- just upload it.
+        const int boneCount = juce::jmin(static_cast<int>(renderable.boneMatrices.size()), kMaxBones);
+        for (int b = 0; b < boneCount; ++b) {
+            const juce::String uniformName = "uBoneMatrices[" + juce::String(b) + "]";
+            program->setUniformMat4(uniformName.toRawUTF8(), renderable.boneMatrices[static_cast<std::size_t>(b)].mat,
+                                     1, GL_FALSE);
         }
 
-        renderer.mesh->Draw();
+        renderable.mesh->Draw();
     }
     };
 

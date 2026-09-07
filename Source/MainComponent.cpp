@@ -799,6 +799,15 @@ void MainComponent::timerCallback() {
         const float physicsElapsedSeconds = RunPhysicsResolvePhase();
         RunPostPhysicsPhase(physicsElapsedSeconds);
     }
+    // Engine Loop Decoupling plan, Phase 2: publish a fresh FrameSnapshot
+    // every tick, unconditionally -- not just while isPlaying_. The
+    // viewport renders continuously either way (orbiting the camera while
+    // stopped, previewing an inspector edit), so it needs a snapshot
+    // refreshed on the same cadence regardless of Play state. This is the
+    // one place per tick that resolves MeshAssetReferences and advances
+    // every Animator now (moved out of ViewportComponent::renderOpenGL()
+    // -- see its own comment).
+    viewport_.PublishFrameSnapshot();
     propertiesPanel_.Refresh();
 }
 
