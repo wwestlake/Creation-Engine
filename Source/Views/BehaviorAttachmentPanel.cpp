@@ -143,6 +143,16 @@ void BehaviorAttachmentPanel::resized() {
     }
 }
 
+int BehaviorAttachmentPanel::PreferredHeight() const {
+    constexpr int kHeaderHeight = 22 + 4;
+    if (selectedEntity_ == entt::null) {
+        return kHeaderHeight + 20;
+    }
+    constexpr int kPickerRowHeight = 26 + 8;
+    constexpr int kRowHeight = 24 + 2;
+    return kHeaderHeight + kPickerRowHeight + rows_.size() * kRowHeight;
+}
+
 void BehaviorAttachmentPanel::paint(juce::Graphics& g) {
     g.fillAll(juce::Colour(0xff15181d));
 }

@@ -16,7 +16,7 @@
 #include "Interaction/EditorInteraction.h"
 #include "Render/ViewportComponent.h"
 #include "Scene/ObjectDefinitions.h"
-#include "Views/BehaviorAttachmentPanel.h"
+#include "Views/PropertiesPanel.h"
 #include "Diagnostics/EngineLogVfsWriter.h"
 #include "Views/ContentBrowserPanel.h"
 #include "Views/InputBindingsPanel.h"
@@ -29,9 +29,7 @@
 #include "Views/PodInfoPanel.h"
 #include "Views/LightPanel.h"
 #include "Views/MaterialGraphPanel.h"
-#include "Views/MaterialsPanel.h"
 #include "Views/PlaceholderPanel.h"
-#include "Views/TransformPanel.h"
 #include "Views/ExplorerPanel.h"
 #include "Runtime/GameClientWindow.h"
 #include "Project/EngineGameDocument.h"
@@ -112,6 +110,10 @@ private:
     void EnsurePodPanelsOpen();
     void ClosePodPanels();
     void EnsureInputBindingsPanelOpen();
+    // Same lazy-registration shape as EnsureInputBindingsPanelOpen -- the
+    // View menu's "Lighting" entry can't just activatePanel("lighting")
+    // since lightPanel_ is no longer eagerly registered at startup.
+    void EnsureLightPanelOpen();
 
     // Same lazy-registration shape as the Pod editor pair above, for the
     // (much smaller) Object Definition editor -- opened from
@@ -245,31 +247,25 @@ private:
     ce::HierarchyPanel hierarchyPanel_;
     ce::views::ExplorerPanel explorerPanel_;
     juce::Label inspectorTitle_ { {}, "Inspector" };
-    juce::Label tickLabel_;
     juce::TextButton runGameButton_ { "Run Game Client" };
     juce::TextButton possessCharacterButton_ { "Possess Character" };
 
-    ce::TransformPanel transformPanel_;
-
-    // Selection-driven per-entity PBR editor (albedo/metallic/roughness),
-    // replacing the old viewport-global roughness/metallic slider pair.
-    // Not to be confused with materialsPanel_ below (the "Materials" dock
-    // panel's future node-based material editor).
-    ce::MaterialsPanel pbrMaterialPanel_;
-
-    // Selection-driven attach/detach UI for scene::BehaviorAttachments --
-    // see docs/BEHAVIOR_COMPONENT_MODEL.md. Sits alongside
-    // pbrMaterialPanel_ for the same reason: both are per-selected-entity
-    // property editors.
-    ce::BehaviorAttachmentPanel behaviorAttachmentPanel_ { world_, frustHost_, podCatalog_ };
+    // Editor UI/Workflow Overhaul plan, Phase 2: the one always-open,
+    // selection-driven panel -- replaces the four separate standing panels
+    // (Transform, Material Inspector, Behaviors, Lighting) that used to sit
+    // here, each independently reading whatever entity was selected.
+    ce::PropertiesPanel propertiesPanel_ { world_, interactions_, frustHost_, podCatalog_ };
 
     // Input Binding System plan -- authors the active Game's one
-    // InputBindings document. Sits alongside behaviorAttachmentPanel_ for
-    // a similar reason: both are always-docked, session-lifetime editors,
-    // not per-selected-entity though (this one edits inputActionSystem_'s
-    // whole loaded set, unrelated to hierarchy selection).
+    // InputBindings document. Always-docked, session-lifetime editor, not
+    // per-selected-entity (edits inputActionSystem_'s whole loaded set,
+    // unrelated to selection) -- so it isn't part of propertiesPanel_ above.
     ce::views::InputBindingsPanel inputBindingsPanel_ { inputActionSystem_, projectSession_ };
 
+    // Global scene lighting (sun + point lights) -- NOT per-entity, so it
+    // doesn't belong in propertiesPanel_ above. No longer a standing dock
+    // tab (Editor UI/Workflow Overhaul plan); opened lazily from the View
+    // menu instead, same treatment as inputBindingsPanel_'s own lazy-open.
     ce::LightPanel lightPanel_;
 
     // AI1: Import Hub -- real panel, not a placeholder. Declared after

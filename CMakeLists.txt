@@ -353,6 +353,10 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/TransformPanel.cpp
     Source/Views/MaterialsPanel.h
     Source/Views/MaterialsPanel.cpp
+    Source/Views/PhysicsPropertiesPanel.h
+    Source/Views/PhysicsPropertiesPanel.cpp
+    Source/Views/PropertiesPanel.h
+    Source/Views/PropertiesPanel.cpp
     Source/Views/MaterialGraphPanel.h
     Source/Views/MaterialGraphPanel.cpp
     Source/Views/ImportPanel.h

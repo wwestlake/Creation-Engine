@@ -31,6 +31,13 @@ public:
     void resized() override;
     void paint(juce::Graphics& g) override;
 
+    // Editor UI/Workflow Overhaul plan: lets PropertiesPanel size this
+    // panel's slot correctly when stacking it alongside Transform/Material/
+    // Physics -- same convention as TransformPanel::kPreferredHeight/
+    // MaterialsPanel::kPreferredHeight, just a method here since this
+    // panel's content height varies with attachment count.
+    int PreferredHeight() const;
+
 private:
     class AttachmentRow;
 
