@@ -32,6 +32,7 @@ EngineFrustHost::EngineFrustHost(engine::World& worldToHost)
     runtime.registerHostFunction("engine_first_transform_entity", reinterpret_cast<void*>(&EngineFrustHost::firstTransformEntity));
     runtime.registerHostFunction("engine_current_object_entity", reinterpret_cast<void*>(&EngineFrustHost::currentObjectEntity));
     runtime.registerHostFunction("engine_entity_find_by_name", reinterpret_cast<void*>(&EngineFrustHost::entityFindByName));
+    runtime.registerHostFunction("engine_entity_find_by_instance_id", reinterpret_cast<void*>(&EngineFrustHost::entityFindByInstanceId));
     runtime.registerHostFunction("engine_set_position_x", reinterpret_cast<void*>(&EngineFrustHost::setPositionX));
     runtime.registerHostFunction("engine_set_material_color_parameter", reinterpret_cast<void*>(&EngineFrustHost::setMaterialColorParameter));
     runtime.registerHostFunction("engine_set_material_scalar_parameter", reinterpret_cast<void*>(&EngineFrustHost::setMaterialScalarParameter));
@@ -359,6 +360,18 @@ std::int64_t EngineFrustHost::entityFindByName(const char* name)
     const auto view = activeHost->world.Registry().view<scene::Name>();
     for (const auto entity : view)
         if (view.get<scene::Name>(entity).value == target)
+            return static_cast<std::int64_t>(entt::to_integral(entity));
+    return -1;
+}
+
+std::int64_t EngineFrustHost::entityFindByInstanceId(const char* instanceId)
+{
+    if (activeHost == nullptr || instanceId == nullptr) return -1;
+    const juce::String target(instanceId);
+    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
+    const auto view = activeHost->world.Registry().view<scene::InstanceId>();
+    for (const auto entity : view)
+        if (view.get<scene::InstanceId>(entity).value == target)
             return static_cast<std::int64_t>(entt::to_integral(entity));
     return -1;
 }

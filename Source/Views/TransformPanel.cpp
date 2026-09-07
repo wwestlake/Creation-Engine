@@ -100,6 +100,7 @@ TransformPanel::TransformPanel(engine::World& world, interaction::EditorInteract
     SetEditorsVisible(false);
     SetAnimationControlsVisible(false);
     SetBehaviorPauseControlsVisible(false);
+    hasSelection_ = hasAnimator_ = hasBehaviors_ = false;
 }
 
 void TransformPanel::SetSelectedEntity(entt::entity entity) {
@@ -122,6 +123,7 @@ void TransformPanel::Refresh() {
         SetEditorsVisible(false);
         SetAnimationControlsVisible(false);
         SetBehaviorPauseControlsVisible(false);
+        hasSelection_ = hasAnimator_ = hasBehaviors_ = false;
         return;
     }
 
@@ -152,9 +154,11 @@ void TransformPanel::Refresh() {
         SetEditorsVisible(false);
         SetAnimationControlsVisible(false);
         SetBehaviorPauseControlsVisible(false);
+        hasSelection_ = hasAnimator_ = hasBehaviors_ = false;
         return;
     }
 
+    hasSelection_ = true;
     positionXSlider_.setValue(transform.position.x, juce::dontSendNotification);
     positionYSlider_.setValue(transform.position.y, juce::dontSendNotification);
     positionZSlider_.setValue(transform.position.z, juce::dontSendNotification);
@@ -200,6 +204,8 @@ void TransformPanel::Refresh() {
         behaviorPaused = registry.all_of<scene::BehaviorPaused>(selectedEntity_);
     }
 
+    hasAnimator_ = hasAnimator;
+    hasBehaviors_ = hasBehaviors;
     SetAnimationControlsVisible(hasAnimator);
     SetBehaviorPauseControlsVisible(hasBehaviors);
     if (hasBehaviors) {
@@ -389,7 +395,14 @@ void TransformPanel::resized() {
     angleSnapSlider_.setBounds(angleSnapRow);
     bounds.removeFromTop(kRowGap);
 
-    noSelectionLabel_.setBounds(bounds.removeFromTop(kLabelHeight));
+    // Every row below is conditional on hasSelection_/hasAnimator_/
+    // hasBehaviors_ -- skip reserving its space entirely when hidden,
+    // not just skip painting it. This is what PreferredHeight() below
+    // must match exactly (same three members, same row order).
+    if (!hasSelection_) {
+        noSelectionLabel_.setBounds(bounds.removeFromTop(kLabelHeight));
+        return;
+    }
 
     positionLabel_.setBounds(bounds.removeFromTop(kLabelHeight));
     auto positionRow = bounds.removeFromTop(kSliderHeight);
@@ -413,15 +426,44 @@ void TransformPanel::resized() {
     scaleXSlider_.setBounds(scaleRow.removeFromLeft(third));
     scaleYSlider_.setBounds(scaleRow.removeFromLeft(third));
     scaleZSlider_.setBounds(scaleRow);
-    bounds.removeFromTop(kRowGap);
 
-    animationLabel_.setBounds(bounds.removeFromTop(kLabelHeight));
-    auto animationRow = bounds.removeFromTop(kSliderHeight + 4);
-    clipSelector_.setBounds(animationRow.removeFromLeft(animationRow.getWidth() * 2 / 3));
-    playPauseButton_.setBounds(animationRow);
-    bounds.removeFromTop(kRowGap);
+    if (hasAnimator_) {
+        bounds.removeFromTop(kRowGap);
+        animationLabel_.setBounds(bounds.removeFromTop(kLabelHeight));
+        auto animationRow = bounds.removeFromTop(kSliderHeight + 4);
+        clipSelector_.setBounds(animationRow.removeFromLeft(animationRow.getWidth() * 2 / 3));
+        playPauseButton_.setBounds(animationRow);
+    }
 
-    behaviorPausedToggle_.setBounds(bounds.removeFromTop(kSliderHeight));
+    if (hasBehaviors_) {
+        bounds.removeFromTop(kRowGap);
+        behaviorPausedToggle_.setBounds(bounds.removeFromTop(kSliderHeight));
+    }
+}
+
+int TransformPanel::PreferredHeight() const {
+    // Header rows: title + mode row + gap + grid snap + gap + angle snap
+    // + gap -- always shown, matches resized() above exactly.
+    int height = 20 + (kSliderHeight + 4) + kRowGap + kSliderHeight + kRowGap + kSliderHeight + kRowGap;
+
+    if (!hasSelection_) {
+        return height + kLabelHeight; // just noSelectionLabel_.
+    }
+
+    // Position + Rotation + Scale: each a label + slider row + trailing gap.
+    height += 3 * (kLabelHeight + kSliderHeight + kRowGap);
+    // The loop above added one trailing kRowGap too many (Scale's own row
+    // has no gap after it unless a conditional row follows) -- corrected
+    // by only adding gaps below when a following section actually exists.
+    height -= kRowGap;
+
+    if (hasAnimator_) {
+        height += kRowGap + kLabelHeight + (kSliderHeight + 4);
+    }
+    if (hasBehaviors_) {
+        height += kRowGap + kSliderHeight;
+    }
+    return height;
 }
 
 } // namespace ce

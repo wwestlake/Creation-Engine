@@ -132,6 +132,12 @@ private:
     // View menu's "Lighting" entry can't just activatePanel("lighting")
     // since lightPanel_ is no longer eagerly registered at startup.
     void EnsureLightPanelOpen();
+    // Same lazy-registration shape again -- an editor for a specific
+    // Material asset has no reason to be open before any Material is
+    // being edited (this one was missed when Input Bindings/Lighting
+    // first got this treatment, a real bug -- Materials was still
+    // eagerly registered/shown at startup).
+    void EnsureMaterialsPanelOpen();
 
     // Same lazy-registration shape as the Pod editor pair above, for the
     // (much smaller) Object Definition editor -- opened from

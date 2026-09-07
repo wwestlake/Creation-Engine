@@ -129,6 +129,7 @@ void MaterialsPanel::PushToRegistry() {
 }
 
 void MaterialsPanel::SetEditorsVisible(bool visible) {
+    hasSelection_ = visible;
     noSelectionLabel_.setVisible(!visible);
     for (juce::Component* component : std::initializer_list<juce::Component*>{
              &albedoLabel_, &albedoRSlider_, &albedoGSlider_, &albedoBSlider_, &metallicLabel_, &metallicSlider_,
@@ -143,7 +144,11 @@ void MaterialsPanel::resized() {
     auto bounds = getLocalBounds();
 
     titleLabel_.setBounds(bounds.removeFromTop(20));
-    noSelectionLabel_.setBounds(bounds.removeFromTop(kLabelHeight));
+
+    if (!hasSelection_) {
+        noSelectionLabel_.setBounds(bounds.removeFromTop(kLabelHeight));
+        return;
+    }
 
     albedoLabel_.setBounds(bounds.removeFromTop(kLabelHeight));
     auto albedoRow = bounds.removeFromTop(kSliderHeight);
@@ -159,6 +164,13 @@ void MaterialsPanel::resized() {
 
     roughnessLabel_.setBounds(bounds.removeFromTop(kLabelHeight));
     roughnessSlider_.setBounds(bounds.removeFromTop(kSliderHeight));
+}
+
+int MaterialsPanel::PreferredHeight() const {
+    if (!hasSelection_) return 20 + kLabelHeight;
+    return 20 + (kLabelHeight + kSliderHeight + kRowGap) // albedo
+             + (kLabelHeight + kSliderHeight + kRowGap)  // metallic
+             + (kLabelHeight + kSliderHeight);           // roughness, no trailing gap
 }
 
 } // namespace ce

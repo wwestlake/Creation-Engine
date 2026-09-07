@@ -11,6 +11,7 @@
 #include "Assets/EngineAssetPack.h"
 #include "Diagnostics/EngineLog.h"
 #include "Import/Importers/GltfAssetImporter.h"
+#include "Scene/AssetPlacement.h"
 #include "Scene/Components.h"
 #include "Scene/EngineSceneSerializer.h"
 #include "Scene/ObjectDefinitionNaming.h"
@@ -526,6 +527,7 @@ void MainComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             // on first open, same shape as OpenPodEditor().
             if (id == "input-bindings") EnsureInputBindingsPanelOpen();
             else if (id == "lighting") EnsureLightPanelOpen();
+            else if (id == "materials") EnsureMaterialsPanelOpen();
             else dockManager_->activatePanel(id);
         }
         return;
@@ -568,13 +570,28 @@ void MainComponent::possessDesignerCharacter()
     // this (message) thread.
     const auto spawnPos = viewport_.SpawnPosition(0.0f);
 
+    // "Humanoid_Robot" (assets/EnginePack/pack.json, EngineAssetPack
+    // version 1.0.4) is the editor's default player character -- a real,
+    // visible, skinned model with a Skeleton/Animator instead of the bare
+    // invisible Transform-only entity this used to spawn. Its animation
+    // clips are already named Idle/Walk/Run, exactly matching
+    // PossessedCharacter::Update's crossfade targets, so movement drives
+    // real animation with no further wiring needed. Falls back to the old
+    // bare-entity behavior if the asset can't be found for some reason
+    // (a stale/uninstalled pack), so possession still works either way.
+    const auto characterAsset = viewport_.Catalog().Find("Humanoid_Robot");
     entt::entity entity;
     {
         std::lock_guard<std::mutex> lock(world_.RegistryMutex());
-        auto& registry = world_.Registry();
-        entity = registry.create();
-        auto& transform = registry.emplace<ce::engine::Transform>(entity);
-        transform.position = { spawnPos.x, spawnPos.y, spawnPos.z };
+        if (characterAsset.mesh != nullptr) {
+            entity = ce::scene::PlaceAssetEntity(world_, characterAsset, "Designer Character",
+                                                 { spawnPos.x, spawnPos.y, spawnPos.z });
+        } else {
+            auto& registry = world_.Registry();
+            entity = registry.create();
+            auto& transform = registry.emplace<ce::engine::Transform>(entity);
+            transform.position = { spawnPos.x, spawnPos.y, spawnPos.z };
+        }
     }
     const auto entityId = static_cast<std::int64_t>(entt::to_integral(entity));
 
@@ -626,14 +643,18 @@ void MainComponent::initialiseDockingWorkspace()
     dockManager_->registerPanel("properties", "Properties", std::make_unique<NonOwningPanelHost>(propertiesPanel_), CreationDock::DockTargetZone::Right);
     // "pods"/"pod-info" deliberately NOT registered here -- they exist only
     // while a Pod is open, via OpenPodEditor(), one pair per open Pod
-    // (Editor UI/Workflow Overhaul plan, Phase 5). "input-bindings"/"lighting"
-    // are the same lazy shape
-    // (EnsureInputBindingsPanelOpen()/EnsureLightPanelOpen(), called from
-    // the View menu instead of Content Browser) -- unlike Pods they ARE
-    // listed in kDockPanelMenuEntries/the View menu (there's exactly one of
-    // each, not one per opened asset), they just aren't part of the default
-    // eager-docked layout the panels above are.
-    dockManager_->registerPanel("materials", "Materials", std::make_unique<NonOwningPanelHost>(materialsPanel_), CreationDock::DockTargetZone::CenterTab);
+    // (Editor UI/Workflow Overhaul plan, Phase 5). "input-bindings"/
+    // "lighting"/"materials" are the same lazy shape
+    // (EnsureInputBindingsPanelOpen()/EnsureLightPanelOpen()/
+    // EnsureMaterialsPanelOpen(), called from the View menu instead of
+    // Content Browser) -- unlike Pods they ARE listed in
+    // kDockPanelMenuEntries/the View menu (there's exactly one of each,
+    // not one per opened asset), they just aren't part of the default
+    // eager-docked layout the panels above are. Materials specifically
+    // was missed when this lazy pattern was first applied to Input
+    // Bindings/Lighting -- a real bug (an editor for a specific Material
+    // asset has no reason to be open before any Material is being edited,
+    // same reasoning as every other on-demand editor here).
     // "assets" (the old standalone Import screen) is gone -- import/export/
     // browse/place all live in Content Browser now. importPanel_ itself
     // stays alive as backing logic (importer registry, audio catalog) that
@@ -710,6 +731,24 @@ void MainComponent::EnsureLightPanelOpen() {
         };
     }
     dockManager_->activatePanel("lighting");
+}
+
+void MainComponent::EnsureMaterialsPanelOpen() {
+    if (dockManager_ == nullptr) return;
+
+    if (!dockManager_->isRegistered("materials")) {
+        auto* panel = dockManager_->registerPanel("materials", "Materials",
+                                                   std::make_unique<NonOwningPanelHost>(materialsPanel_),
+                                                   CreationDock::DockTargetZone::CenterTab);
+        // Deferred via callAsync -- same reason as EnsureInputBindingsPanelOpen/
+        // EnsureLightPanelOpen above.
+        panel->onCloseRequested = [this](CreationDock::DockPanel*) {
+            juce::MessageManager::callAsync([this] {
+                if (dockManager_ != nullptr) dockManager_->unregisterPanel("materials");
+            });
+        };
+    }
+    dockManager_->activatePanel("materials");
 }
 
 void MainComponent::ClosePodEditor(const juce::String& podName) {
