@@ -204,6 +204,20 @@ MainComponent::MainComponent()
             return;
         }
     };
+    // Editor UI/Workflow Overhaul plan, Phase 4: Content Browser's row
+    // context menu's Rename action for Game/Scene rows -- same catalogAssetId
+    // -> internal-id lookup shape as onGameDeleteRequested/onSceneDeleteRequested
+    // above, reusing RenameGame/RenameScene (previously only reachable from
+    // the now-deleted Explorer panel).
+    contentBrowserPanel_.onGameRenameRequested = [this](const juce::String& catalogAssetId) {
+        for (const auto& game : games_)
+            if (game.catalogAssetId == catalogAssetId) { RenameGame(game.id); return; }
+    };
+    contentBrowserPanel_.onSceneRenameRequested = [this](const juce::String& catalogAssetId) {
+        for (const auto& game : games_)
+            for (const auto& scene : game.scenes)
+                if (scene.catalogAssetId == catalogAssetId) { RenameScene(game.id, scene.id); return; }
+    };
     // Content Browser is the only source that produces this description
     // shape (see ContentBrowserPanel::AssetRow::mouseDrag). Placement lives
     // here, not in ViewportComponent or ContentBrowserPanel, because it
@@ -1232,11 +1246,6 @@ void MainComponent::createScene()
     });
 }
 
-// Editor UI/Workflow Overhaul plan, Phase 3: temporarily uncalled -- their
-// only caller (ExplorerPanel's right-click "Rename...") is gone along with
-// Explorer itself. Kept, not deleted: Phase 4's Content Browser redesign
-// adds a right-click "Rename" action on Game/Scene rows that reuses this
-// exact dialog + EngineGameDocumentStore::renameGame/renameScene logic.
 void MainComponent::RenameGame(const juce::String& gameId)
 {
     const auto* found = std::find_if(games_.begin(), games_.end(), [&](const auto& g) { return g.id == gameId; });
