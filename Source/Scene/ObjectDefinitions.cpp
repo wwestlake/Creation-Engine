@@ -190,6 +190,7 @@ entt::entity instantiateDefinition(engine::World& world, const ObjectDefinitionC
     const auto transform = composeTransform(parentTransform, definition.initialTransform);
     const auto entity = world.CreateEntity();
     auto& registry = world.Registry();
+    registry.emplace<InstanceId>(entity, InstanceId{ juce::Uuid().toString() });
     registry.emplace<Name>(entity, Name{ definition.displayName });
     registry.emplace<Transform>(entity, transform);
     SceneFlags flags;
@@ -230,6 +231,7 @@ entt::entity instantiateDefinition(engine::World& world, const ObjectDefinitionC
             attachments.podIds.push_back(component.podId);
         } else if (component.kind == ObjectComponentKind::Mesh && component.meshAssetId.isNotEmpty()) {
             const auto meshEntity = world.CreateEntity();
+            registry.emplace<InstanceId>(meshEntity, InstanceId{ juce::Uuid().toString() });
             registry.emplace<Name>(meshEntity, Name{ component.meshNodeName.isNotEmpty() ? component.meshNodeName
                                                                                           : definition.displayName });
             registry.emplace<Transform>(meshEntity, component.meshLocalTransform);

@@ -3,6 +3,7 @@
 #include <memory>
 #include <vector>
 
+#include <creation/assets/AssetTypes.h>
 #include <entt/entt.hpp>
 #include <juce_core/juce_core.h>
 #include <juce_graphics/juce_graphics.h>
@@ -27,6 +28,23 @@ namespace ce::scene {
 // Material, Camera, Light) with no notion of "a scene" at all.
 
 struct Name {
+    juce::String value;
+};
+
+// Scene/Game VFS Rearchitecture plan, Phase 1: a stable, persistent identity
+// that survives across saves -- unlike the entt::entity handle (a live,
+// per-session ECS identity that entt is free to reuse across
+// create/destroy), this is minted exactly once, when an entity is first
+// placed into a scene, and never regenerated. Two jobs: (1) the VFS
+// filename segment for this entity's own instance entry once scene storage
+// stops being one serialized blob per scene, (2) the serialized
+// Parent-reference cross-key, replacing the ephemeral numeric entt id
+// EngineSceneSerializer uses for that today (which only round-trips
+// correctly within a single save/load pair). Every entity that persists
+// into a saved scene gets one; the synthetic SceneRoot and purely
+// transient entities (e.g. a possessed character, destroyed on Stop) don't
+// need one and don't get one.
+struct InstanceId {
     juce::String value;
 };
 
@@ -74,6 +92,24 @@ struct MeshAssetReference {
     // entity's component, not the original definition.
     int nodeIndex = -1;
     juce::String nodeName;
+
+    // Scene/Game VFS Rearchitecture plan: which of AssetResolver's three
+    // modes (shared/AssetSystem/include/creation/assets/AssetTypes.h) this
+    // instance wants -- exact (default, pinned to versionId forever,
+    // today's actual always-pinned behavior exactly), latest (always
+    // tracks the newest version), or compatibleLatest (prefers versionId,
+    // falls back if it's gone). AssetResolver::resolve already implements
+    // all three correctly and is already tested (AssetSystemSmoke.cpp) --
+    // this field only gives a scene instance somewhere to record which one
+    // it wants; a confirmed, real gap (every actual resolution path
+    // hardcoded `exact`, so `latest`/`compatibleLatest` were unreachable
+    // from a placed instance despite being fully built). Storage only for
+    // now -- ResolveProjectAssets (ViewportComponent.cpp) still always
+    // resolves by the exact stored assetId/versionId; wiring it to
+    // actually re-resolve via AssetResolver::resolve for latest/
+    // compatibleLatest is separate, not-yet-scoped follow-up work, not
+    // silently claimed done by this field's existence alone.
+    creation::assets::AssetReferenceMode referenceMode = creation::assets::AssetReferenceMode::exact;
 };
 
 // Identity and authored behavior remain on the entity rather than inside a
