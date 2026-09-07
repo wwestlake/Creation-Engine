@@ -163,11 +163,19 @@ private:
     creation::assets::ProjectSession* projectSession_ = nullptr;
 
     juce::Label titleLabel_{ {}, "Content Browser" };
-    juce::TextButton createMenuButton_{ "Create \xe2\x96\xbe" }; // trailing UTF-8 down-chevron.
+    // juce::CharPointer_UTF8 wrapping is required here, not a plain string
+    // literal -- confirmed as a real bug (rendered as garbled "Create
+    // â–¾"-looking text): juce::String's plain const char* constructor
+    // interprets raw bytes via the OS codepage, not as UTF-8, so a bare
+    // "\xe2\x96\xbe" literal gets misread byte-by-byte instead of decoded
+    // as the intended single character. Matches the same pattern the old
+    // Section::paint() chevron code (removed in Phase 4) already used
+    // correctly.
+    juce::TextButton createMenuButton_{ juce::String(juce::CharPointer_UTF8("Create \xe2\x96\xbe")) }; // trailing UTF-8 down-chevron.
     juce::TextButton importButton_{ "Import..." };
     juce::Label hintLabel_{ {}, "Drag a placeable asset into the viewport to add it to the scene. Right-click an asset for more actions." };
     juce::TextEditor searchBox_;
-    juce::TextButton searchButton_{ "\xf0\x9f\x94\x8d" }; // magnifying glass.
+    juce::TextButton searchButton_{ juce::String(juce::CharPointer_UTF8("\xf0\x9f\x94\x8d")) }; // magnifying glass, same UTF-8 fix as createMenuButton_ above.
     juce::Label emptyLabel_{ {}, "Open a project to browse its assets." };
 
     // Rows live inside this plain host, not directly on `this` --

@@ -10,6 +10,7 @@ entt::entity PlaceAssetEntity(engine::World& world, const AssetCatalog::Asset& a
     auto& registry = world.Registry();
 
     const entt::entity newEntity = world.CreateEntity();
+    registry.emplace<scene::InstanceId>(newEntity, scene::InstanceId{ juce::Uuid().toString() });
     registry.emplace<scene::Name>(newEntity, scene::Name{ name });
     registry.emplace<scene::Transform>(newEntity, scene::Transform{ position });
     registry.emplace<scene::MeshRenderer>(newEntity, scene::MeshRenderer{ asset.mesh, asset.material });
