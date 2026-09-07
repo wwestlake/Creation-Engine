@@ -134,6 +134,13 @@ private:
 
     juce::Array<juce::File> pendingDropFiles_;
 
+    // Added to the metadata popup's juce::AlertWindow via
+    // addCustomComponent (which does not take ownership, unlike
+    // addTextEditor) -- a class member so its lifetime outlives the
+    // popup's own modal state regardless of how ShowImportMetadataPopup's
+    // local juce::AlertWindow gets released/recreated per file.
+    juce::ToggleButton isSceneFileToggle_{ "This is a scene file (place independent parts at their original positions)" };
+
     // Only one preview clip can play at a time (previewPlayer_ is a
     // single player) -- TogglePlay/IsPlayingClip/RefreshPlayButtonLabels
     // keep every row's button text in sync with that single shared piece

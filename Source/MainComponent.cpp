@@ -1341,34 +1341,44 @@ void MainComponent::PlaceStarterContent(const ce::project::StarterGameTemplate& 
         return;
     }
 
-    auto definitionId = ce::scene::FindWrapperDefinitionForRenderAsset(objectDefinitions_, result.createdAssetId);
-    if (definitionId.isEmpty()) {
-        ce::scene::ObjectDefinition wrapper;
-        wrapper.id = ce::scene::GenerateWrapperDefinitionName(objectDefinitions_, chosenTemplate.displayName);
-        wrapper.displayName = chosenTemplate.displayName;
-        ce::scene::ObjectComponentEntry meshComponent;
-        meshComponent.kind = ce::scene::ObjectComponentKind::Mesh;
-        meshComponent.meshAssetId = result.createdAssetId;
-        wrapper.components.push_back(std::move(meshComponent));
-
-        juce::String upsertError;
-        if (!objectDefinitions_.upsert(wrapper, upsertError)) {
-            headerBar_.setStatusText("Scene created, but starter content could not be placed: " + upsertError);
-            return;
+    // result.sceneParts already names every independent Object Definition
+    // BuildNodeDecomposedDefinitions built for this file (one entry even
+    // for the ordinary single-object case) -- no need to separately find-
+    // or-build a wrapper here anymore, that was this function's own
+    // pre-existing duplicate of decomposition the importer already does
+    // correctly. A multi-object starter file (e.g. "Village Block": a
+    // house, a road, lamps, each independently positioned) places EVERY
+    // part at its own recovered original position -- placing only the
+    // first one at the scene's origin was the actual bug behind starter
+    // content silently missing most of its own layout.
+    int placedCount = 0;
+    for (const auto& part : result.sceneParts) {
+        ce::engine::Transform placement;
+        placement.position = { part.posX, part.posY, part.posZ };
+        placement.eulerRotationRadians = { part.rotX, part.rotY, part.rotZ };
+        placement.scale = { part.scaleX, part.scaleY, part.scaleZ };
+        const auto instantiation = ce::scene::ObjectFactory::instantiate(world_, objectDefinitions_, part.objectDefinitionId,
+                                                                          placement.position, error);
+        if (instantiation.root == entt::null) {
+            headerBar_.setStatusText("Scene created, but \"" + part.displayName + "\" could not be placed: " + error);
+            continue;
         }
-        juce::String saveError;
-        if (!objectDefinitions_.Save(projectSession_, wrapper.id, saveError)) {
-            headerBar_.setStatusText("Scene created, but starter content could not be placed: " + saveError);
-            return;
+        // instantiate() only takes a position (see its own signature) --
+        // rotation/scale for a placed root aren't part of its contract
+        // today (every existing caller places at identity rotation/scale,
+        // e.g. drag-and-drop from Content Browser), so set them directly
+        // on the freshly-placed root's own Transform afterward.
+        {
+            std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+            if (auto* transform = world_.Registry().try_get<ce::engine::Transform>(instantiation.root)) {
+                transform->eulerRotationRadians = placement.eulerRotationRadians;
+                transform->scale = placement.scale;
+            }
         }
-        definitionId = wrapper.id;
+        ++placedCount;
     }
-
-    // Placed at the scene's own origin -- the starter environments are
-    // self-contained layouts authored around (0,0,0).
-    const auto instantiation = ce::scene::ObjectFactory::instantiate(world_, objectDefinitions_, definitionId, ce::engine::Vec3{}, error);
-    if (instantiation.root == entt::null) {
-        headerBar_.setStatusText("Scene created, but starter content could not be placed: " + error);
+    if (placedCount == 0) {
+        headerBar_.setStatusText("Scene created, but starter content could not be placed.");
         return;
     }
     viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);

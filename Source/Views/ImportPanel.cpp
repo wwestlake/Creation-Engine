@@ -219,6 +219,7 @@ void ImportPanel::ProcessNextPendingDropFile() {
         context_.pendingDisplayName.clear();
         context_.pendingDescription.clear();
         context_.pendingTags.clear();
+        context_.pendingIsSceneFile = false;
 
         if (!importer->NeedsImportMetadata()) {
             RunImporterAndLog(*importer, file);
@@ -241,6 +242,8 @@ void ImportPanel::ShowImportMetadataPopup(const juce::File& file, import::AssetI
     alert->addTextEditor("name", suggestedName, "Name");
     alert->addTextEditor("description", "", "Description (optional)");
     alert->addTextEditor("tags", "", "Tags, comma-separated (optional)");
+    isSceneFileToggle_.setToggleState(false, juce::dontSendNotification);
+    alert->addCustomComponent(&isSceneFileToggle_);
     alert->addButton("Import", 1, juce::KeyPress(juce::KeyPress::returnKey));
     alert->addButton("Skip This File", 0, juce::KeyPress(juce::KeyPress::escapeKey));
 
@@ -256,6 +259,7 @@ void ImportPanel::ShowImportMetadataPopup(const juce::File& file, import::AssetI
                 context_.pendingTags = juce::StringArray::fromTokens(owned->getTextEditorContents("tags"), ",", "");
                 for (auto& tag : context_.pendingTags) tag = tag.trim();
                 context_.pendingTags.removeEmptyStrings();
+                context_.pendingIsSceneFile = isSceneFileToggle_.getToggleState();
                 RunImporterAndLog(*importerPtr, file);
             } else {
                 AppendLogLine("[skip] " + file.getFileName() + " -- import cancelled.");

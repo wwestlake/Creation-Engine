@@ -109,7 +109,8 @@ void ApplyAnimationImportOptions(LoadedModel& model, const AnimationImportOption
 // already safely stored either way by the time this runs.
 juce::String BuildNodeDecomposedDefinitions(scene::ObjectDefinitionCatalog& catalog, creation::assets::ProjectSession& session,
                                             const LoadedModel& model, const juce::String& meshAssetId,
-                                            const juce::String& meshAssetVersionId, const juce::String& displayName) {
+                                            const juce::String& meshAssetVersionId, const juce::String& displayName,
+                                            std::vector<ImportResult::PlacedPart>& outSceneParts) {
     std::vector<int> meshNodeIndices;
     for (std::size_t i = 0; i < model.nodes.size(); ++i) {
         if (model.nodes[i].meshIndex >= 0) meshNodeIndices.push_back(static_cast<int>(i));
@@ -227,6 +228,24 @@ juce::String BuildNodeDecomposedDefinitions(scene::ObjectDefinitionCatalog& cata
                                                     groupDisplayName + ".");
         combinedNote += " Also created Object Definition \"" + definition.id + "\" (" +
                juce::String(static_cast<int>(groupNodeIndices.size())) + " parts).";
+
+        // The root's own authored local transform IS its position in the
+        // overall file's coordinate space -- it has no parent (that's the
+        // definition of "root" here), so unlike every other node's local
+        // transform (relative to a real parent, composed above), this one
+        // was never included in meshLocalTransform on purpose. For a
+        // single-group file this is always identity (no real siblings to
+        // be relative to); for a multi-root file this is exactly the
+        // "where this object sat relative to the rest of the layout" data
+        // a scene-style import needs to reconstruct.
+        const auto& rootNode = model.nodes[static_cast<std::size_t>(rootNodeIndex)];
+        ImportResult::PlacedPart part;
+        part.objectDefinitionId = definition.id;
+        part.displayName = groupDisplayName;
+        part.posX = rootNode.localTranslation.x; part.posY = rootNode.localTranslation.y; part.posZ = rootNode.localTranslation.z;
+        part.rotX = rootNode.localEulerRotationRadians.x; part.rotY = rootNode.localEulerRotationRadians.y; part.rotZ = rootNode.localEulerRotationRadians.z;
+        part.scaleX = rootNode.localScale.x; part.scaleY = rootNode.localScale.y; part.scaleZ = rootNode.localScale.z;
+        outSceneParts.push_back(std::move(part));
     }
     return combinedNote;
 }
@@ -274,9 +293,11 @@ ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportConte
         return ImportResult::Failed("The imported model could not be registered with its project asset identity.");
 
     juce::String objectDefinitionNote;
+    std::vector<ImportResult::PlacedPart> sceneParts;
     if (context.objectDefinitions != nullptr) {
         objectDefinitionNote = BuildNodeDecomposedDefinitions(*context.objectDefinitions, *context.projectSession, model,
-                                                             sourceDescriptor.id, sourceDescriptor.versionId, assetName);
+                                                             sourceDescriptor.id, sourceDescriptor.versionId, assetName,
+                                                             sceneParts);
     }
 
     // Import only stages the asset in the catalog -- it does NOT place an
@@ -285,6 +306,7 @@ ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportConte
     // place-from-catalog treatment as Pods/Object Definitions).
     auto result = ImportResult::Ok(assetName + " stored in project content." + animationNote + objectDefinitionNote);
     result.createdAssetId = sourceDescriptor.id;
+    result.sceneParts = std::move(sceneParts);
     return result;
 }
 
@@ -325,12 +347,16 @@ ImportResult GltfAssetImporter::Reimport(const juce::File& sourceFile,
         return ImportResult::Failed("The reimported model could not be re-registered with its project asset identity.");
 
     juce::String objectDefinitionNote;
+    std::vector<ImportResult::PlacedPart> sceneParts;
     if (context.objectDefinitions != nullptr) {
         objectDefinitionNote = BuildNodeDecomposedDefinitions(*context.objectDefinitions, *context.projectSession, model,
-                                                             newDescriptor.id, newDescriptor.versionId, existingAsset.displayName);
+                                                             newDescriptor.id, newDescriptor.versionId, existingAsset.displayName,
+                                                             sceneParts);
     }
 
-    return ImportResult::Ok(existingAsset.displayName + " updated to a new version." + animationNote + objectDefinitionNote);
+    auto result = ImportResult::Ok(existingAsset.displayName + " updated to a new version." + animationNote + objectDefinitionNote);
+    result.sceneParts = std::move(sceneParts);
+    return result;
 }
 
 } // namespace ce::import

@@ -75,6 +75,16 @@ struct ImportContext {
     juce::String pendingDisplayName;
     juce::String pendingDescription;
     juce::StringArray pendingTags;
+    // Same popup, same per-file-not-sticky convention as the three fields
+    // above. Set when the user (or the source file's own exporter, e.g.
+    // a Blender plugin marking its own export) says this file represents
+    // a whole scene layout -- independent top-level objects whose real
+    // world-relative spacing is the actual content, not noise to discard.
+    // GltfAssetImporter reads this to decide whether to also generate a
+    // real, standalone Scene (each independent part placed at its
+    // recovered original position) alongside the ordinary per-part Object
+    // Definitions it always creates. Every other importer ignores it.
+    bool pendingIsSceneFile = false;
 };
 
 struct ImportResult {
@@ -87,6 +97,33 @@ struct ImportResult {
     // content placement) skip a lookup-by-display-name round trip. Unused,
     // harmless default for every importer that doesn't set it.
     juce::String createdAssetId;
+
+    // One entry per independent top-level Object Definition the import
+    // produced (see docs/OBJECT_MODEL.md's "Multi-part import decomposes
+    // into components" and GltfAssetImporter's own BuildNodeDecomposedDefinitions
+    // comment), alongside that part's recovered original position/
+    // rotation/scale from the source file -- the same value the
+    // definition's own data deliberately excludes (a root's transform
+    // only meant something relative to its now-independent siblings, not
+    // to anything the definition itself should carry). Empty for the
+    // ordinary single-object case, or when the importer doesn't support
+    // this (only GltfAssetImporter populates it today). A caller placing
+    // "the whole imported layout" (PlaceStarterContent, or a future
+    // "import a scene file" action) uses these positions directly instead
+    // of placing everything at one origin point; a caller that just wants
+    // one asset for reuse elsewhere ignores this entirely.
+    struct PlacedPart {
+        juce::String objectDefinitionId;
+        juce::String displayName;
+        // engine::Transform is EngineCore-side (framework-agnostic); this
+        // header has no reason to depend on it, so position/rotation/
+        // scale are stored as plain floats here and reassembled by
+        // whichever caller actually needs an engine::Transform.
+        float posX = 0.0f, posY = 0.0f, posZ = 0.0f;
+        float rotX = 0.0f, rotY = 0.0f, rotZ = 0.0f;
+        float scaleX = 1.0f, scaleY = 1.0f, scaleZ = 1.0f;
+    };
+    std::vector<PlacedPart> sceneParts;
 
     static ImportResult Ok(juce::String msg) { return { true, std::move(msg) }; }
     static ImportResult Failed(juce::String msg) { return { false, std::move(msg) }; }
