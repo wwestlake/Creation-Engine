@@ -124,6 +124,10 @@ private:
     // capability today).
     void ShowRowContextMenu(const creation::assets::AssetDescriptor& descriptor);
     void RenameAsset(const creation::assets::AssetDescriptor& descriptor);
+    // Editor UI/Workflow Overhaul plan, Phase 6: a plain text dialog that
+    // writes AssetDescriptor::category (a designer-set, free-text label --
+    // Players/NPCs/Props/whatever a game needs -- distinct from AssetKind).
+    void SetCategory(const creation::assets::AssetDescriptor& descriptor);
 
     // Runs the delete-with-dependency-check operation (Suite-Asset-
     // Pipeline-Model.md) for one logical asset: findDependents() first: if
