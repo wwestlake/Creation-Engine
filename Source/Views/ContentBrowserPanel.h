@@ -35,17 +35,21 @@ namespace ce::views {
 // separate, already-identified piece of pending work (the Materials-editor
 // redesign), not an oversight here.
 //
-// Assets are grouped into a collapsible section per AssetKind (a Pods
-// section, a Model section, etc.) rather than one flat sorted list -- this
-// IS the asset tool the engine is missing: browse what exists, right-click
-// a kind's section to create a new one of that kind. The Pods section
-// always renders, even with zero Pods, so there's always somewhere to
-// right-click "New Pod" -- other kinds only get a section once they have
-// at least one asset (they're populated via Import, unchanged, no "New"
-// affordance needed for them yet). A kind editor (the Pod editor) is never
-// a standing dock tab of its own; this panel is what owns discovery and
-// creation, matching Unreal Engine 4's actual Content Browser workflow.
-// Pod/Asset Workflow plan, Phase 3.
+// Editor UI/Workflow Overhaul plan, Phase 4: one flat, alphabetically-
+// sorted list -- NOT grouped by AssetKind. AssetKind
+// (shared/AssetSystem/include/creation/assets/AssetTypes.h) is a Suite-wide
+// enum mixing audio/music-production kinds (patch, foleyPatch,
+// trackerArrangement, samplePack, midi) in with the four Creation Engine
+// actually has (pod, objectDefinition, game, scene); surfacing it as
+// user-facing grouping was engine-internal plumbing leaking into the UI,
+// confirmed directly as a real discoverability failure. Creating anything
+// now goes through the one visible "Create v" menu under the title
+// (Decision 2) instead of a hidden right-click-only affordance on a
+// section header. A row's actions (Delete/Export/Reimport/Rename where
+// applicable) live behind right-click on that row instead of always-
+// visible per-row buttons. A kind editor (the Pod editor) is still never a
+// standing dock tab of its own; this panel still owns discovery and
+// creation.
 class ContentBrowserPanel final : public juce::Component,
                                   public juce::FileDragAndDropTarget {
 public:
@@ -87,17 +91,31 @@ public:
     // afterward.
     std::function<void(juce::String catalogAssetId)> onGameDeleteRequested;
     std::function<void(juce::String catalogAssetId)> onSceneDeleteRequested;
+    // Same shape, for the row context menu's Rename action -- only offered
+    // for Game/Scene rows (the only kinds with any rename capability
+    // today; MainComponent's RenameGame/RenameScene already existed,
+    // previously only reachable from the now-deleted Explorer panel).
+    std::function<void(juce::String catalogAssetId)> onGameRenameRequested;
+    std::function<void(juce::String catalogAssetId)> onSceneRenameRequested;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
 
 private:
     class AssetRow;
-    class Section;
     void OpenAsset(const creation::assets::AssetDescriptor& descriptor);
     void CreateNewPod(frust::PodKind kind);
     void CreateNewObjectDefinition();
-    Section* FindOrCreateSection(creation::assets::AssetKind kind);
+    // The one visible entry point for creating anything (Decision 2) --
+    // shows the "Create v" menu's items. Extensible: a future asset kind
+    // is a one-line addition here, matching StarterGameTemplates.h's own
+    // open-ended-vector precedent.
+    void ShowCreateMenu();
+    // Right-click on a row -- Delete/Export/Reimport always offered;
+    // Rename only for Game/Scene (the only kinds with any rename
+    // capability today).
+    void ShowRowContextMenu(const creation::assets::AssetDescriptor& descriptor);
+    void RenameAsset(const creation::assets::AssetDescriptor& descriptor);
 
     // Runs the delete-with-dependency-check operation (Suite-Asset-
     // Pipeline-Model.md) for one logical asset: findDependents() first: if
@@ -133,18 +151,20 @@ private:
     creation::assets::ProjectSession* projectSession_ = nullptr;
 
     juce::Label titleLabel_{ {}, "Content Browser" };
-    juce::Label hintLabel_{ {}, "Assets by kind. Drag a placeable one into the viewport to add it to the scene." };
-    juce::TextEditor searchBox_;
+    juce::TextButton createMenuButton_{ "Create \xe2\x96\xbe" }; // trailing UTF-8 down-chevron.
     juce::TextButton importButton_{ "Import..." };
+    juce::Label hintLabel_{ {}, "Drag a placeable asset into the viewport to add it to the scene. Right-click an asset for more actions." };
+    juce::TextEditor searchBox_;
+    juce::TextButton searchButton_{ "\xf0\x9f\x94\x8d" }; // magnifying glass.
     juce::Label emptyLabel_{ {}, "Open a project to browse its assets." };
 
-    // Sections live inside this plain host, not directly on `this` --
-    // scrollView_ scrolls the host, so the section list can grow past the
+    // Rows live inside this plain host, not directly on `this` --
+    // scrollView_ scrolls the host, so the row list can grow past the
     // panel's own (often short, docked-at-the-bottom) height without
     // clipping.
     juce::Viewport scrollView_;
-    juce::Component sectionsHost_;
-    juce::OwnedArray<Section> sections_;
+    juce::Component rowsHost_;
+    juce::OwnedArray<AssetRow> rows_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ContentBrowserPanel)
 };
