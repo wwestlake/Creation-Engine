@@ -43,9 +43,7 @@ constexpr DockPanelMenuEntry kDockPanelMenuEntries[] = {
     { "explorer", "Explorer" },
     { "hierarchy", "Hierarchy" },
     { "viewport", "Scene Viewport" },
-    { "transform", "Transform" },
-    { "materials-pbr", "Material Inspector" },
-    { "behaviors", "Behaviors" },
+    { "properties", "Properties" },
     { "input-bindings", "Input Bindings" },
     { "lighting", "Lighting" },
     { "materials", "Materials" },
@@ -63,7 +61,6 @@ constexpr DockPanelMenuEntry kDockPanelMenuEntries[] = {
     // time. Open a Pod from its Content Browser row/right-click menu
     // instead; once open, its tab is right there to click on directly.
     // Pod/Asset Workflow plan Phase 5.
-    { "runtime-status", "Runtime Status" },
 };
 
 class NonOwningPanelHost final : public juce::Component
@@ -81,8 +78,6 @@ private:
 MainComponent::MainComponent()
     : viewport_(world_, interactions_, viewportRenderHost_),
       hierarchyPanel_(world_, viewport_),
-      transformPanel_(world_, interactions_),
-      pbrMaterialPanel_(world_),
       importPanel_(world_, viewport_, projectSession_),
       djehutiImportWatcher_(world_, viewport_, objectDefinitions_),
       lightPanel_(viewport_),
@@ -315,9 +310,7 @@ MainComponent::MainComponent()
 
     hierarchyPanel_.onSelectionChanged = [this](entt::entity entity) {
         interactions_.select(entity);
-        transformPanel_.SetSelectedEntity(entity);
-        pbrMaterialPanel_.SetSelectedEntity(entity);
-        behaviorAttachmentPanel_.SetSelectedEntity(entity);
+        propertiesPanel_.SetSelectedEntity(entity);
     };
     explorerPanel_.onGameSelected = [this](const juce::String& gameId) { selectGame(gameId); };
     explorerPanel_.onSceneSelected = [this](const juce::String& sceneId) { selectScene(sceneId); };
@@ -333,7 +326,6 @@ MainComponent::MainComponent()
     };
     inspectorTitle_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
     inspectorTitle_.setColour(juce::Label::textColourId, juce::Colours::white);
-    tickLabel_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
 
     initialiseDockingWorkspace();
 
@@ -363,8 +355,8 @@ void MainComponent::resized() {
 
     headerBar_.setBounds(bounds.removeFromTop(96));
     if (menuBar_ != nullptr) menuBar_->setBounds(bounds.removeFromTop(28));
-    runGameButton_.setBounds(getWidth() - 170, 105, 158, 34);
-    possessCharacterButton_.setBounds(getWidth() - 170 - 8 - 158, 105, 158, 34);
+    runGameButton_.setBounds(getWidth() - 170, 128, 158, 34);
+    possessCharacterButton_.setBounds(getWidth() - 170 - 8 - 158, 128, 158, 34);
 
     if (dockManager_ != nullptr) dockManager_->setBounds(bounds);
 
@@ -522,6 +514,7 @@ void MainComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             // -- just not yet applied to every panel) -- register it lazily
             // on first open, same shape as EnsurePodPanelsOpen().
             if (id == "input-bindings") EnsureInputBindingsPanelOpen();
+            else if (id == "lighting") EnsureLightPanelOpen();
             else dockManager_->activatePanel(id);
         }
         return;
@@ -621,29 +614,26 @@ void MainComponent::initialiseDockingWorkspace()
     dockManager_->registerPanel("hierarchy", "Hierarchy", std::make_unique<NonOwningPanelHost>(hierarchyPanel_), CreationDock::DockTargetZone::Left);
     dockManager_->registerPanel("explorer", "Explorer", std::make_unique<NonOwningPanelHost>(explorerPanel_), CreationDock::DockTargetZone::Left);
     dockManager_->registerPanel("viewport", "Scene Viewport", std::make_unique<NonOwningPanelHost>(viewport_), CreationDock::DockTargetZone::CenterTab);
-    dockManager_->registerPanel("transform", "Transform", std::make_unique<NonOwningPanelHost>(transformPanel_), CreationDock::DockTargetZone::Right);
-    dockManager_->registerPanel("materials-pbr", "Material Inspector", std::make_unique<NonOwningPanelHost>(pbrMaterialPanel_), CreationDock::DockTargetZone::Right);
-    dockManager_->registerPanel("behaviors", "Behaviors", std::make_unique<NonOwningPanelHost>(behaviorAttachmentPanel_), CreationDock::DockTargetZone::Right);
-    dockManager_->registerPanel("lighting", "Lighting", std::make_unique<NonOwningPanelHost>(lightPanel_), CreationDock::DockTargetZone::Right);
+    dockManager_->registerPanel("properties", "Properties", std::make_unique<NonOwningPanelHost>(propertiesPanel_), CreationDock::DockTargetZone::Right);
     // "pods"/"pod-info" deliberately NOT registered here -- they exist only
     // while a Pod is open, via EnsurePodPanelsOpen(). Pod/Asset Workflow
-    // plan Phase 5. "input-bindings" is the same shape (EnsureInputBindingsPanelOpen(),
-    // called from the View menu instead of Content Browser) -- unlike Pods
-    // it IS listed in kDockPanelMenuEntries/the View menu (there's exactly
-    // one of it, not one per opened asset), it just isn't part of the
-    // default eager-docked layout the panels above are.
+    // plan Phase 5. "input-bindings"/"lighting" are the same shape
+    // (EnsureInputBindingsPanelOpen()/EnsureLightPanelOpen(), called from
+    // the View menu instead of Content Browser) -- unlike Pods they ARE
+    // listed in kDockPanelMenuEntries/the View menu (there's exactly one of
+    // each, not one per opened asset), they just aren't part of the default
+    // eager-docked layout the panels above are.
     dockManager_->registerPanel("materials", "Materials", std::make_unique<NonOwningPanelHost>(materialsPanel_), CreationDock::DockTargetZone::CenterTab);
     // "assets" (the old standalone Import screen) is gone -- import/export/
     // browse/place all live in Content Browser now. importPanel_ itself
     // stays alive as backing logic (importer registry, audio catalog) that
     // Content Browser and Reimport call into; it's never mounted as a panel.
-    // Docked at the Bottom (not a CenterTab) so it's open by default, same
-    // as Runtime Status -- this is meant to be glanced at constantly while
-    // building a scene, not a screen you navigate to.
+    // Docked at the Bottom (not a CenterTab) so it's open by default --
+    // this is meant to be glanced at constantly while building a scene,
+    // not a screen you navigate to.
     dockManager_->registerPanel("content-browser", "Content Browser", std::make_unique<NonOwningPanelHost>(contentBrowserPanel_), CreationDock::DockTargetZone::Bottom);
     // "server"/"settings" not registered -- see kDockPanelMenuEntries'
     // comment above.
-    dockManager_->registerPanel("runtime-status", "Runtime Status", std::make_unique<NonOwningPanelHost>(tickLabel_), CreationDock::DockTargetZone::Bottom);
     dockManager_->registerPanel("log", "Log", std::make_unique<NonOwningPanelHost>(logPanel_), CreationDock::DockTargetZone::Bottom);
 }
 
@@ -673,6 +663,18 @@ void MainComponent::EnsureInputBindingsPanelOpen() {
         panel->onCloseRequested = [this](CreationDock::DockPanel*) { dockManager_->unregisterPanel("input-bindings"); };
     }
     dockManager_->activatePanel("input-bindings");
+}
+
+void MainComponent::EnsureLightPanelOpen() {
+    if (dockManager_ == nullptr) return;
+
+    if (!dockManager_->isRegistered("lighting")) {
+        auto* panel = dockManager_->registerPanel("lighting", "Lighting",
+                                                   std::make_unique<NonOwningPanelHost>(lightPanel_),
+                                                   CreationDock::DockTargetZone::Right);
+        panel->onCloseRequested = [this](CreationDock::DockPanel*) { dockManager_->unregisterPanel("lighting"); };
+    }
+    dockManager_->activatePanel("lighting");
 }
 
 void MainComponent::ClosePodPanels() {
@@ -798,10 +800,8 @@ void MainComponent::timerCallback() {
         }
         frustHost_.tick(static_cast<std::int64_t>(world_.CurrentTick()));
     }
-    tickLabel_.setText("tick " + juce::String(world_.CurrentTick()), juce::dontSendNotification);
     hierarchyPanel_.Refresh();
-    transformPanel_.Refresh();
-    pbrMaterialPanel_.Refresh();
+    propertiesPanel_.Refresh();
 }
 
 void MainComponent::createNewProject()
@@ -935,8 +935,7 @@ bool MainComponent::openActiveGame(juce::String& errorMessage)
     viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
     frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
     hierarchyPanel_.Refresh();
-    transformPanel_.Refresh();
-    pbrMaterialPanel_.Refresh();
+    propertiesPanel_.Refresh();
     games_ = games;
     refreshExplorerPanel();
     headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName + " | " + activeGame_.name + " / " + activeScene_.name);
