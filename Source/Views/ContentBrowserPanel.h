@@ -188,6 +188,7 @@ private:
     // kRightMargin/kModifiedColumnWidth/... constants both use), so labels
     // stay aligned under their header instead of just repeating each
     // metadata field crammed against the row's own right edge.
+    juce::Label columnHeaderType_{ {}, "Type" };
     juce::Label columnHeaderName_{ {}, "Name" };
     juce::Label columnHeaderCategory_{ {}, "Category" };
     juce::Label columnHeaderSize_{ {}, "Size" };
