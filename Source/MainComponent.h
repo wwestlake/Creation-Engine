@@ -1,5 +1,7 @@
 #pragma once
 
+#include <map>
+
 #include <JuceHeader.h>
 #include <creation/ui/CreationSuiteHeaderBar.h>
 #include <creation/ui/SuiteShellController.h>
@@ -99,14 +101,21 @@ private:
     // Stop (headerBar_.onStop) is the one way out, matching every other Play state.
     void possessDesignerCharacter();
 
-    // The Pod editor + its Pod-info panel are a lazily-registered, matched
-    // pair -- neither exists as a dock tab at all until a Pod is actually
-    // open. Called from ContentBrowserPanel's onAssetOpened (an existing
-    // Pod row clicked) and onPodCreated (a new one just made); safe to
-    // call repeatedly once both are already registered. ClosePodPanels is
-    // wired to both panels' tab-close (X) button via onCloseRequested.
-    void EnsurePodPanelsOpen();
-    void ClosePodPanels();
+    // Editor UI/Workflow Overhaul plan, Phase 5: opens (or, if already
+    // open, just activates) an independent PodEditorPanel+PodInfoPanel
+    // pair for one specific Pod, registered under a unique DockManager id
+    // per Pod name -- several different Pods can be open, each its own
+    // dock tab, simultaneously (DockManager::registerPanel already
+    // supports arbitrary ids; this is just no longer reusing one fixed
+    // "pods"/"pod-info" pair the way the single-instance version did).
+    // Called from ContentBrowserPanel's onAssetOpened (an existing Pod row
+    // clicked), onPodCreated (a new one just made via the Create menu),
+    // and propertiesPanel_'s onOpenEditorRequested (object-first: create +
+    // attach + open, all in one, if the selected entity had no Pod yet).
+    void OpenPodEditor(const juce::String& podName);
+    // Wired to a specific instance's tab-close (X) via onCloseRequested --
+    // unregisters and destroys just that one pair, not every open Pod.
+    void ClosePodEditor(const juce::String& podName);
     void EnsureInputBindingsPanelOpen();
     // Same lazy-registration shape as EnsureInputBindingsPanelOpen -- the
     // View menu's "Lighting" entry can't just activatePanel("lighting")
@@ -296,12 +305,18 @@ private:
     ce::diagnostics::EngineLogVfsWriter engineLogVfsWriter_;
 
     // --- Other modes: stand-ins until their milestones land ---
-    std::unique_ptr<ce::views::PodEditorPanel> podEditorPanel_;
-    // A Pod's identity/characteristics + selected-node property editor,
-    // as its own dockable panel -- see PodInfoPanel.h. Constructed after
-    // podEditorPanel_ since it needs a reference to that panel's live
-    // Graph& (Pod Editor UX & Architecture Fixes plan Phase 6).
-    std::unique_ptr<ce::views::PodInfoPanel> podInfoPanel_;
+    // Editor UI/Workflow Overhaul plan, Phase 5: one PodEditorPanel +
+    // PodInfoPanel pair per currently-open Pod, keyed by Pod name --
+    // replaces the old single podEditorPanel_/podInfoPanel_ pair so
+    // multiple Pods can be open, each its own dock tab, at once. PodInfoPanel
+    // needs a reference to its own PodEditorPanel's live Graph& (Pod Editor
+    // UX & Architecture Fixes plan Phase 6), which is why these come as a
+    // struct pair rather than two parallel maps.
+    struct OpenPodEditorEntry {
+        std::unique_ptr<ce::views::PodEditorPanel> editor;
+        std::unique_ptr<ce::views::PodInfoPanel> info;
+    };
+    std::map<juce::String, OpenPodEditorEntry> openPodEditors_;
     // Small mesh-picker + attached-Pods editor for one Object Definition --
     // lazily opened/closed the same way podEditorPanel_/podInfoPanel_ are
     // (EnsureObjectDefinitionPanelOpen/CloseObjectDefinitionPanel), never a

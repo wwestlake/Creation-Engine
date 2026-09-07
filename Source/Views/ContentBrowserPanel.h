@@ -101,10 +101,18 @@ public:
     void paint(juce::Graphics& g) override;
     void resized() override;
 
+    // Editor UI/Workflow Overhaul plan, Phase 5: public (not just the
+    // Create menu's own private call site) so MainComponent can reuse this
+    // exact creation logic for the Properties panel's object-first "Open
+    // Editor" flow -- create a Pod, then attach it to the selected entity
+    // immediately, so the code is connected from the instant it exists.
+    // Returns the new Pod's name, or an empty string on failure (already
+    // reported to the user via an AlertWindow).
+    juce::String CreateNewPod(frust::PodKind kind);
+
 private:
     class AssetRow;
     void OpenAsset(const creation::assets::AssetDescriptor& descriptor);
-    void CreateNewPod(frust::PodKind kind);
     void CreateNewObjectDefinition();
     // The one visible entry point for creating anything (Decision 2) --
     // shows the "Create v" menu's items. Extensible: a future asset kind
