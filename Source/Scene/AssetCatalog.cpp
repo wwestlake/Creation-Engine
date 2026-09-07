@@ -3,11 +3,118 @@
 #include <algorithm>
 #include <iostream>
 
+#include <creation/material/material_compiler.h>
+#include <creation/material/material_nodes.h>
+#include <node_system/frgraph_serialization.h>
+#include <node_system/graph.h>
+#include <node_system/type_registry.h>
+
 #include "Assets/AssetPackStore.h"
 #include "Render/Import/GltfLoader.h"
 #include "Render/Scene/ProceduralMesh.h"
 
 namespace ce::scene {
+
+namespace {
+
+node_system::Pin* FindInputPin(node_system::Node& node, const char* name) {
+    const auto it = std::find_if(node.Inputs().begin(), node.Inputs().end(),
+                                  [&](const node_system::Pin& pin) { return pin.name == name; });
+    return it == node.Inputs().end() ? nullptr : node.FindPin(it->id);
+}
+
+// One Texture Sample node, its "texture" input set to the given absolute
+// disk path -- the same convention MaterialGraphPanel's hand-authored
+// graphs already use (material_nodes.cpp's own doc: "texture is an
+// absolute file path, resolved into a real GPU texture when the graph
+// compiles").
+node_system::Node* AddTextureSampleNode(node_system::Graph& graph, const node_system::NodeTypeRegistry& registry,
+                                         const juce::String& texturePath) {
+    auto* node = node_system::AddRegisteredNode(graph, registry, "material.texture.sample2d");
+    if (node == nullptr) return nullptr;
+    if (auto* texturePin = FindInputPin(*node, "texture")) texturePin->defaultValue = texturePath.toStdString();
+    return node;
+}
+
+// glTF import's answer to "the importer can just build the material
+// itself" -- a real Material Graph (the same data model
+// MaterialGraphPanel's hand-authored graphs use), generated directly from
+// whatever texture maps the source file actually has, then compiled and
+// bound exactly the way MaterialGraphPanel::compileAndSave already does.
+// No human has to open the graph editor for the common "here's a base
+// color texture, maybe a metallic-roughness texture" case -- this IS that
+// graph, authored programmatically instead of by hand.
+//
+// Normal maps are intentionally NOT wired to Material Output's normal
+// input here (see LoadedMaterial::normalTexturePath's own comment,
+// GltfLoader.h) -- the compiled-graph pipeline has no tangent basis to
+// decode a tangent-space sample into a valid world-space normal yet, so a
+// Texture Sample node is still generated (present and ready once that
+// support exists) but left unconnected rather than wired to something
+// that would render visibly wrong.
+void ApplyGeneratedMaterialGraph(Material& material, const LoadedMaterial& srcMaterial, AssetCatalog& catalog) {
+    node_system::NodeTypeRegistry registry;
+    material::RegisterMaterialNodes(registry);
+    node_system::Graph graph("Imported Material", node_system::GraphTarget::Material);
+
+    auto* outputNode = node_system::AddRegisteredNode(graph, registry, "material.surface.output");
+    if (outputNode == nullptr) return;
+
+    if (srcMaterial.baseColorTexturePath.existsAsFile()) {
+        if (auto* sampleNode = AddTextureSampleNode(graph, registry, srcMaterial.baseColorTexturePath.getFullPathName())) {
+            if (auto* baseColorInput = FindInputPin(*outputNode, "baseColor"))
+                graph.Connect(sampleNode->Id(), sampleNode->Outputs().front().id, outputNode->Id(), baseColorInput->id);
+        }
+    }
+
+    if (srcMaterial.metallicRoughnessTexturePath.existsAsFile()) {
+        // glTF spec, "Metal-Roughness Material": G channel = roughness,
+        // B channel = metallic -- the same texture packed both ways every
+        // common export pipeline (Blender, Substance) already uses.
+        if (auto* sampleNode =
+                AddTextureSampleNode(graph, registry, srcMaterial.metallicRoughnessTexturePath.getFullPathName())) {
+            auto addMask = [&](const char* channel, const char* outputInputName) {
+                auto* maskNode = node_system::AddRegisteredNode(graph, registry, "material.componentmask");
+                if (maskNode == nullptr) return;
+                if (auto* channelPin = FindInputPin(*maskNode, "channel")) channelPin->defaultValue = std::string(channel);
+                if (auto* valuePin = FindInputPin(*maskNode, "value"))
+                    graph.Connect(sampleNode->Id(), sampleNode->Outputs().front().id, maskNode->Id(), valuePin->id);
+                if (auto* outputInput = FindInputPin(*outputNode, outputInputName))
+                    graph.Connect(maskNode->Id(), maskNode->Outputs().front().id, outputNode->Id(), outputInput->id);
+            };
+            addMask("g", "roughness");
+            addMask("b", "metallic");
+        }
+    }
+
+    if (srcMaterial.normalTexturePath.existsAsFile()) {
+        AddTextureSampleNode(graph, registry, srcMaterial.normalTexturePath.getFullPathName());
+    }
+
+    const auto compileResult = material::CompileMaterialGraph(graph, registry);
+    if (!compileResult.ok) {
+        // A generated graph failing to compile is a real bug in this
+        // function, not a user-facing condition -- fall back to the
+        // factor-only flat material (already set by the caller) rather
+        // than leaving the entity with no material at all.
+        std::cout << "[catalog] generated material graph failed to compile; using flat material instead." << std::endl;
+        for (const auto& err : compileResult.errors) std::cout << "  " << err << std::endl;
+        return;
+    }
+
+    material.compiledMaterialSource = juce::String(compileResult.source.declarations) + "\n" +
+                                       juce::String(compileResult.source.evaluateFunction) + "\n" +
+                                       juce::String(compileResult.source.vertexFunction);
+    material.savedGraphSource = node_system::SerializeGraph(graph);
+    material.textureBindings.clear();
+    for (const auto& tex : compileResult.source.textures) {
+        if (auto texture = catalog.GetOrLoadTexture(juce::File(tex.path))) {
+            material.textureBindings[tex.uniformName] = texture;
+        }
+    }
+}
+
+} // namespace
 
 juce::String AssetCatalog::PackAssetKey(const juce::String& packId, const juce::String& version,
                                         const juce::String& assetId)
@@ -142,7 +249,19 @@ bool AssetCatalog::BuildAssetFromPrimitive(const juce::String& name, const Loade
         material->metallic = srcMaterial.metallicFactor;
         material->roughness = srcMaterial.roughnessFactor;
 
-        if (vfs != nullptr && srcMaterial.baseColorTextureVirtualPath.isNotEmpty()) {
+        const bool hasAnyDiskTexture = vfs == nullptr &&
+            (srcMaterial.baseColorTexturePath.existsAsFile() || srcMaterial.metallicRoughnessTexturePath.existsAsFile() ||
+             srcMaterial.normalTexturePath.existsAsFile());
+
+        if (hasAnyDiskTexture) {
+            // A real Material Graph, generated on the spot from whichever
+            // texture maps this material actually has -- see
+            // ApplyGeneratedMaterialGraph's own comment above. Replaces
+            // (rather than supplements) the fixed albedo/albedoTexture
+            // path below: Material::Resolve() picks one or the other
+            // based on compiledMaterialSource being set, never both.
+            ApplyGeneratedMaterialGraph(*material, srcMaterial, *this);
+        } else if (vfs != nullptr && srcMaterial.baseColorTextureVirtualPath.isNotEmpty()) {
             juce::MemoryBlock textureBytes;
             if (vfs->readFile(srcMaterial.baseColorTextureVirtualPath, textureBytes)) {
                 texture = std::make_unique<gl::Texture2D>();
@@ -150,11 +269,6 @@ bool AssetCatalog::BuildAssetFromPrimitive(const juce::String& name, const Loade
                                              srcMaterial.baseColorTextureVirtualPath)) {
                     material->albedoTexture = texture.get();
                 }
-            }
-        } else if (srcMaterial.baseColorTexturePath.existsAsFile()) {
-            texture = std::make_unique<gl::Texture2D>();
-            if (texture->LoadFromFile(srcMaterial.baseColorTexturePath)) {
-                material->albedoTexture = texture.get();
             }
         }
     }
