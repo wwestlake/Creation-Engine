@@ -24,6 +24,17 @@ juce::ValueTree EngineSceneSerializer::serializeScene(ce::engine::World& world)
         if (auto* name = reg.try_get<Name>(entity))
             entityNode.setProperty("name", name->value, nullptr);
 
+        // Scene/Game VFS Rearchitecture plan, Phase 1: InstanceId is minted
+        // once at placement (AssetPlacement.cpp/ObjectDefinitions.cpp) but
+        // was never actually persisted here despite that -- silently
+        // dangling every reference keyed by it (Pod-to-scene-instance
+        // references) the moment a project was saved and reopened. The
+        // synthetic SceneRoot/purely-transient entities that never get one
+        // in the first place naturally skip this the same way they always
+        // have (try_get returns nullptr).
+        if (auto* instanceId = reg.try_get<InstanceId>(entity))
+            entityNode.setProperty("instanceId", instanceId->value, nullptr);
+
         if (auto* parent = reg.try_get<Parent>(entity))
         {
             // A Parent pointing at the synthetic SceneRoot isn't real
@@ -150,6 +161,10 @@ bool EngineSceneSerializer::restoreScene(ce::engine::World& world, const juce::V
         auto nameText = entityNode.getProperty("name").toString();
         if (nameText.isNotEmpty())
             reg.emplace<Name>(entity, nameText);
+
+        const auto instanceIdText = entityNode.getProperty("instanceId").toString();
+        if (instanceIdText.isNotEmpty())
+            reg.emplace<InstanceId>(entity, InstanceId{ instanceIdText });
 
         if (entityNode.getProperty("isFolder", false))
             reg.emplace<Folder>(entity);
