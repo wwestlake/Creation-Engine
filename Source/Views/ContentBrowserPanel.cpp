@@ -24,6 +24,18 @@ bool IsPlaceableKind(creation::assets::AssetKind kind) {
     return kind == creation::assets::AssetKind::render || kind == creation::assets::AssetKind::objectDefinition;
 }
 
+// Shared between the header row (ContentBrowserPanel::resized()) and every
+// AssetRow (below) so the two stay pixel-aligned -- a metadata column that
+// doesn't line up under its own header is as good as no header at all.
+// kColumnGap/kRightMargin exist because there previously wasn't one: every
+// metadata column was flush against the row's own right edge, reading as
+// "squished against the panel border" (a real, reported complaint).
+constexpr int kModifiedColumnWidth = 120;
+constexpr int kSizeColumnWidth = 64;
+constexpr int kCategoryColumnWidth = 140;
+constexpr int kColumnGap = 10;
+constexpr int kRightMargin = 12;
+
 juce::String FormatFileSize(std::int64_t bytes) {
     if (bytes < 1024) return juce::String(bytes) + " B";
     if (bytes < 1024 * 1024) return juce::String(bytes / 1024.0, 1) + " KB";
@@ -133,23 +145,57 @@ public:
 
     void resized() override {
         auto bounds = getLocalBounds();
-        modifiedLabel_.setBounds(bounds.removeFromRight(120));
-        sizeLabel_.setBounds(bounds.removeFromRight(64));
-        categoryLabel_.setBounds(bounds.removeFromRight(140));
+        bounds.removeFromRight(kRightMargin);
+        modifiedLabel_.setBounds(bounds.removeFromRight(kModifiedColumnWidth));
+        bounds.removeFromRight(kColumnGap);
+        sizeLabel_.setBounds(bounds.removeFromRight(kSizeColumnWidth));
+        bounds.removeFromRight(kColumnGap);
+        categoryLabel_.setBounds(bounds.removeFromRight(kCategoryColumnWidth));
+        bounds.removeFromRight(kColumnGap);
         nameLabel_.setBounds(bounds);
     }
 
-    // Right-click shows the actions menu (Delete/Export/Reimport/Rename);
-    // a plain click (that wasn't a drag) opens the asset -- e.g. a Pod row
-    // opens straight into the Pod editor. A drag that moves far enough is
-    // handled in mouseDrag instead, below.
+    // Selection highlight only -- a flat accent fill behind the row's own
+    // labels, same idea as any list/table's selected-row state. Not drawn
+    // via a Label colour (there are four of them per row) so one fill
+    // covers the whole row consistently regardless of how many labels sit
+    // on top of it.
+    void paint(juce::Graphics& g) override {
+        if (selected_) {
+            g.setColour(juce::Colour(0xff2d5a8c).withAlpha(0.45f));
+            g.fillRect(getLocalBounds());
+        }
+    }
+
+    void SetSelected(bool selected) {
+        if (selected_ == selected) return;
+        selected_ = selected;
+        repaint();
+    }
+
+    // Right-click shows the actions menu (Delete/Export/Reimport/Rename).
+    // A plain click that wasn't a drag SELECTS the row (highlight only --
+    // matches every other list/table convention, and lets browsing rows
+    // without opening an editor for each one actually be possible). Only
+    // an explicit double-click opens the asset -- e.g. a Pod row opens
+    // straight into the Pod editor. Previously a single click opened
+    // immediately, which is why casually clicking through rows kept
+    // leaving Pod editor / Materials tabs open with nothing deliberately
+    // asked for. A drag that moves far enough is handled in mouseDrag
+    // instead, below.
     void mouseUp(const juce::MouseEvent& event) override {
         if (event.mods.isPopupMenu()) {
             owner_.ShowRowContextMenu(descriptor_);
         } else if (!draggedThisGesture_) {
-            owner_.OpenAsset(descriptor_);
+            owner_.SelectRow(this, descriptor_);
         }
         draggedThisGesture_ = false;
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent& event) override {
+        if (event.mods.isPopupMenu()) return;
+        owner_.SelectRow(this, descriptor_);
+        owner_.OpenAsset(descriptor_);
     }
 
     // Only placeable kinds (Render, Object Definition) start a real OS-
@@ -175,6 +221,7 @@ private:
     creation::assets::AssetDescriptor descriptor_;
     bool placeable_;
     bool draggedThisGesture_ = false;
+    bool selected_ = false;
     juce::Label nameLabel_;
     juce::Label categoryLabel_;
     juce::Label sizeLabel_;
@@ -213,6 +260,17 @@ ContentBrowserPanel::ContentBrowserPanel(ViewportComponent& viewport, ImportPane
     emptyLabel_.setColour(juce::Label::textColourId, juce::Colours::grey);
     emptyLabel_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(emptyLabel_);
+
+    // Small, muted, uppercase-reading header labels -- deliberately not
+    // styled like a row (they're captions for the columns below, not
+    // another row of data).
+    for (auto* header : { &columnHeaderName_, &columnHeaderCategory_, &columnHeaderSize_, &columnHeaderModified_ }) {
+        header->setFont(juce::Font(juce::FontOptions(11.0f)));
+        header->setColour(juce::Label::textColourId, juce::Colour(0xff6c7a8c));
+        addAndMakeVisible(*header);
+    }
+    columnHeaderSize_.setJustificationType(juce::Justification::centredRight);
+    columnHeaderModified_.setJustificationType(juce::Justification::centredRight);
 
     addAndMakeVisible(scrollView_);
     scrollView_.setViewedComponent(&rowsHost_, false);
@@ -311,6 +369,9 @@ void ContentBrowserPanel::SetProjectContent(creation::assets::ProjectSession* se
 void ContentBrowserPanel::Refresh() {
     const bool projectOpen = projectSession_ != nullptr && projectSession_->isValid();
     emptyLabel_.setVisible(!projectOpen);
+    // Every AssetRow is about to be destroyed and rebuilt below --
+    // selectedRow_ would otherwise dangle.
+    selectedRow_ = nullptr;
     if (!projectOpen) {
         rows_.clear();
         resized();
@@ -347,6 +408,13 @@ void ContentBrowserPanel::Refresh() {
     }
 
     resized();
+}
+
+void ContentBrowserPanel::SelectRow(AssetRow* row, const creation::assets::AssetDescriptor&) {
+    if (selectedRow_ == row) return;
+    if (selectedRow_ != nullptr) selectedRow_->SetSelected(false);
+    selectedRow_ = row;
+    if (selectedRow_ != nullptr) selectedRow_->SetSelected(true);
 }
 
 void ContentBrowserPanel::OpenAsset(const creation::assets::AssetDescriptor& descriptor) {
@@ -606,9 +674,35 @@ void ContentBrowserPanel::resized() {
     area.removeFromTop(8);
 
     if (emptyLabel_.isVisible()) {
+        columnHeaderName_.setVisible(false);
+        columnHeaderCategory_.setVisible(false);
+        columnHeaderSize_.setVisible(false);
+        columnHeaderModified_.setVisible(false);
         emptyLabel_.setBounds(area.removeFromTop(40));
         scrollView_.setBounds(area);
         return;
+    }
+    columnHeaderName_.setVisible(true);
+    columnHeaderCategory_.setVisible(true);
+    columnHeaderSize_.setVisible(true);
+    columnHeaderModified_.setVisible(true);
+
+    // Same column math as AssetRow::resized() below, minus the row's own
+    // scrollbar-width adjustment (scrollView_.getMaximumVisibleWidth(),
+    // read further down) -- close enough for a header row that just needs
+    // to roughly line up, not pixel-match a scrollbar that may or may not
+    // be showing yet this frame.
+    {
+        auto headerRow = area.removeFromTop(18);
+        headerRow.removeFromRight(kRightMargin);
+        columnHeaderModified_.setBounds(headerRow.removeFromRight(kModifiedColumnWidth));
+        headerRow.removeFromRight(kColumnGap);
+        columnHeaderSize_.setBounds(headerRow.removeFromRight(kSizeColumnWidth));
+        headerRow.removeFromRight(kColumnGap);
+        columnHeaderCategory_.setBounds(headerRow.removeFromRight(kCategoryColumnWidth));
+        headerRow.removeFromRight(kColumnGap);
+        columnHeaderName_.setBounds(headerRow);
+        area.removeFromTop(4);
     }
 
     scrollView_.setBounds(area);

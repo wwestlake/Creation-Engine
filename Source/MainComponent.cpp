@@ -237,7 +237,7 @@ MainComponent::MainComponent()
     });
     frustHost_.setInputActionSystem(&inputActionSystem_);
 
-    headerBar_.setAppTitle("Creation Engine");
+    headerBar_.setAppTitle("Djehuti Engine");
     headerBar_.setLogoImage(creation::ui::getSuiteLogoImage(creation::ui::SuiteLogoId::engine));
     headerBar_.setProjectLabel("Project: Untitled Engine");
     headerBar_.audioButton.setButtonText("Engine");
@@ -763,6 +763,14 @@ void MainComponent::SetPlaying(bool playing) {
     viewport_.SetPlaying(playing); // hides SceneFlags::editorOnly entities (e.g. the cart) while playing.
     const auto tick = static_cast<std::int64_t>(world_.CurrentTick());
     if (playing) {
+        // RunPhysicsResolvePhase() treats lastPhysicsAdvanceSeconds_ <= 0.0
+        // as "first tick, elapsed = 0" -- reset it here so THAT guard also
+        // covers "first tick after resuming Play," not just "first tick
+        // ever." Without this, a second Play press feeds Advance() the
+        // real wall-clock gap since physics last ran (however long the
+        // editor sat stopped), producing one huge instantaneous physics
+        // step -- objects visibly sliding/jumping on resume.
+        lastPhysicsAdvanceSeconds_ = 0.0;
         frustHost_.beginPlay(tick);
     } else {
         frustHost_.endPlay(tick);
