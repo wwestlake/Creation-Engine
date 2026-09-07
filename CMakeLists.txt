@@ -345,10 +345,6 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Character/PossessedCharacter.cpp
     Source/Views/PlaceholderPanel.h
     Source/Views/PlaceholderPanel.cpp
-    Source/Views/HierarchyPanel.h
-    Source/Views/HierarchyPanel.cpp
-    Source/Views/ExplorerPanel.h
-    Source/Views/ExplorerPanel.cpp
     Source/Views/TransformPanel.h
     Source/Views/TransformPanel.cpp
     Source/Views/MaterialsPanel.h

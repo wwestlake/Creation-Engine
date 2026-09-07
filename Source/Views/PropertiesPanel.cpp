@@ -1,5 +1,7 @@
 #include "Views/PropertiesPanel.h"
 
+#include <mutex>
+
 namespace ce {
 
 namespace {
@@ -46,8 +48,12 @@ private:
 
 PropertiesPanel::PropertiesPanel(engine::World& world, interaction::EditorInteraction& interactions,
                                  frust::EngineFrustHost& frustHost, frust::PodCatalog& catalog)
-    : transformPanel_(world, interactions), materialsPanel_(world), physicsPanel_(world),
+    : world_(world), transformPanel_(world, interactions), materialsPanel_(world), physicsPanel_(world),
       behaviorAttachmentPanel_(world, frustHost, catalog) {
+    deleteObjectButton_.onClick = [this] { DeleteSelectedEntity(); };
+    deleteObjectButton_.setEnabled(false);
+    addAndMakeVisible(deleteObjectButton_);
+
     content_ = std::make_unique<ContentHost>(transformPanel_, materialsPanel_, physicsPanel_, behaviorAttachmentPanel_);
     addAndMakeVisible(scrollView_);
     scrollView_.setViewedComponent(content_.get(), false);
@@ -57,11 +63,26 @@ PropertiesPanel::PropertiesPanel(engine::World& world, interaction::EditorIntera
 PropertiesPanel::~PropertiesPanel() = default;
 
 void PropertiesPanel::SetSelectedEntity(entt::entity entity) {
+    selectedEntity_ = entity;
+    deleteObjectButton_.setEnabled(entity != entt::null);
     transformPanel_.SetSelectedEntity(entity);
     materialsPanel_.SetSelectedEntity(entity);
     physicsPanel_.SetSelectedEntity(entity);
     behaviorAttachmentPanel_.SetSelectedEntity(entity);
     resized();
+}
+
+void PropertiesPanel::DeleteSelectedEntity() {
+    if (selectedEntity_ == entt::null) return;
+
+    const auto entity = selectedEntity_;
+    if (onEntityDestroying) onEntityDestroying(entity);
+    {
+        std::lock_guard<std::mutex> lock(world_.RegistryMutex());
+        auto& registry = world_.Registry();
+        if (registry.valid(entity)) registry.destroy(entity);
+    }
+    SetSelectedEntity(entt::null);
 }
 
 void PropertiesPanel::Refresh() {
@@ -80,7 +101,9 @@ void PropertiesPanel::paint(juce::Graphics& g) {
 }
 
 void PropertiesPanel::resized() {
-    scrollView_.setBounds(getLocalBounds());
+    auto bounds = getLocalBounds();
+    deleteObjectButton_.setBounds(bounds.removeFromTop(28).reduced(4, 2));
+    scrollView_.setBounds(bounds);
     content_->UpdateLayout(scrollView_.getMaximumVisibleWidth());
 }
 

@@ -21,7 +21,6 @@
 #include "Views/ContentBrowserPanel.h"
 #include "Views/InputBindingsPanel.h"
 #include "Views/LogPanel.h"
-#include "Views/HierarchyPanel.h"
 #include "Import/DjehutiImportWatcher.h"
 #include "Views/ImportPanel.h"
 #include "Views/ObjectDefinitionEditorPanel.h"
@@ -30,7 +29,6 @@
 #include "Views/LightPanel.h"
 #include "Views/MaterialGraphPanel.h"
 #include "Views/PlaceholderPanel.h"
-#include "Views/ExplorerPanel.h"
 #include "Runtime/GameClientWindow.h"
 #include "Project/EngineGameDocument.h"
 #include "Project/StarterGameTemplates.h"
@@ -139,7 +137,6 @@ private:
     // of createGame()/createScene() once a starter template is chosen. A
     // no-op if the template names no starter model (e.g. "Empty Scene").
     void PlaceStarterContent(const ce::project::StarterGameTemplate& chosenTemplate);
-    void refreshExplorerPanel();
     bool ensureProjectSessionActive(juce::String& errorMessage);
     void saveAppSettings();
     void loadAppSettings();
@@ -238,15 +235,7 @@ private:
     // whose constructor takes a reference to it.
     juce::Component viewportRenderHost_;
 
-    // viewport_ must be declared (and therefore constructed) before
-    // hierarchyPanel_: HierarchyPanel now takes a ViewportComponent&
-    // (SC5's "+ Add" menu reads the asset catalog and camera position
-    // through it), and member init order follows declaration order, not
-    // the constructor's initializer-list order.
     ce::ViewportComponent viewport_;
-    ce::HierarchyPanel hierarchyPanel_;
-    ce::views::ExplorerPanel explorerPanel_;
-    juce::Label inspectorTitle_ { {}, "Inspector" };
     juce::TextButton runGameButton_ { "Run Game Client" };
     juce::TextButton possessCharacterButton_ { "Possess Character" };
 
@@ -269,8 +258,8 @@ private:
     ce::LightPanel lightPanel_;
 
     // AI1: Import Hub -- real panel, not a placeholder. Declared after
-    // viewport_ (like hierarchyPanel_ above) since its constructor also
-    // needs a fully-constructed ViewportComponent&.
+    // viewport_ since its constructor also needs a fully-constructed
+    // ViewportComponent&.
     ce::ImportPanel importPanel_;
 
     // Djehuti Bridge engine-side handoff -- watches the current project's
