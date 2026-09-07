@@ -17,6 +17,7 @@
 #include "Project/EngineGameDocument.h"
 #include "Views/NewGameDialog.h"
 #include "engine/foundation_gameplay.h"
+#include "engine/tick_phase.h"
 
 namespace {
 constexpr juce::CommandID kRunGameClientCommand = 0x1001;
@@ -794,63 +795,84 @@ void MainComponent::timerCallback() {
         if (resumeAfterTransition) SetPlaying(true);
     }
     if (isPlaying_) {
-        // Input Binding System plan: poll raw keyboard/mouse/controller
-        // state once, before anything below reads it -- a Pod's on_tick
-        // this same tick sees this tick's poll (core.input.isActionActive
-        // et al.), not a stale one from last tick.
-        inputActionSystem_.PollOncePerFrame();
-        // GS6: runs every attached ScriptComponent's on_tick (and
-        // on_start, on an entity's first playing tick) before advancing
-        // World's tick counter -- the same Simulation::Step
-        // CreationEngineServer's main loop calls, so the editor and
-        // server genuinely execute scripts identically. 1/30s matches
-        // this timer's own 30 Hz rate (startTimerHz(30) below).
-        ce::engine::Simulation::Step(world_, 1.0f / 30.0f);
-        ce::engine::FoundationGameplay::Step(world_, {}, 1.0f / 30.0f);
-        // Jolt runs on its own fixed 60 Hz accumulator, decoupled from this
-        // 30 Hz UI timer (Core Architectural Invariant 2, Jolt vendoring
-        // plan) -- real measured elapsed time, not this timer's own
-        // assumed 1/30s literal (which the two calls above still use, a
-        // separate, pre-existing gap this doesn't fix).
-        const double nowSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0;
-        const float physicsElapsedSeconds = lastPhysicsAdvanceSeconds_ > 0.0
-            ? static_cast<float>(nowSeconds - lastPhysicsAdvanceSeconds_) : 0.0f;
-        lastPhysicsAdvanceSeconds_ = nowSeconds;
-        const float physicsAlpha = physicsWorld_.Advance(world_, physicsElapsedSeconds);
-        {
-            // InterpolateTransforms() itself doesn't lock (its usual caller,
-            // the render pass, already holds this same lock for its whole
-            // draw pass -- see ViewportComponent.cpp) -- this call site
-            // needs its own, since nothing above holds it once Advance()
-            // returns.
-            std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
-            physicsWorld_.InterpolateTransforms(world_, physicsAlpha);
-        }
-        if (possessedEntityId_ != -1) {
-            // JPH::CharacterVirtual is its own separate, manually-driven
-            // system (not tracked by physicsWorld_.Advance() above -- see
-            // PhysicsWorld.h's own comment on CreateCharacter), so it needs
-            // its own per-tick update here, before frustHost_.tick() below
-            // drains this tick's collision events.
-            const auto cameraForward = viewport_.CameraForward();
-            const float forwardYawRadians = std::atan2(cameraForward.x, -cameraForward.z);
-            possessedCharacter_.Update(world_, physicsWorld_, inputActionSystem_,
-                                      possessedEntityId_, forwardYawRadians, physicsElapsedSeconds);
-
-            juce::Vector3D<float> feetPosition;
-            {
-                std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
-                const auto entityHandle = static_cast<entt::entity>(possessedEntityId_);
-                if (world_.Registry().valid(entityHandle)) {
-                    const auto& transform = world_.Registry().get<ce::engine::Transform>(entityHandle);
-                    feetPosition = { transform.position.x, transform.position.y, transform.position.z };
-                }
-            }
-            viewport_.SetPossessedFeetPosition(feetPosition);
-        }
-        frustHost_.tick(static_cast<std::int64_t>(world_.CurrentTick()));
+        RunPreUpdatePhase();
+        const float physicsElapsedSeconds = RunPhysicsResolvePhase();
+        RunPostPhysicsPhase(physicsElapsedSeconds);
     }
     propertiesPanel_.Refresh();
+}
+
+void MainComponent::RunPreUpdatePhase() {
+    // ce::engine::EngineTickPhase::PreUpdate (engine/tick_phase.h).
+    //
+    // Input Binding System plan: poll raw keyboard/mouse/controller state
+    // once, before anything below reads it -- a Pod's on_tick this same
+    // tick sees this tick's poll (core.input.isActionActive et al.), not a
+    // stale one from last tick.
+    inputActionSystem_.PollOncePerFrame();
+    // GS6: runs every attached ScriptComponent's on_tick (and on_start, on
+    // an entity's first playing tick) before advancing World's tick
+    // counter -- the same Simulation::Step CreationEngineServer's main
+    // loop calls, so the editor and server genuinely execute scripts
+    // identically. 1/30s matches this timer's own 30 Hz rate
+    // (startTimerHz(30) below).
+    ce::engine::Simulation::Step(world_, 1.0f / 30.0f);
+    ce::engine::FoundationGameplay::Step(world_, {}, 1.0f / 30.0f);
+}
+
+float MainComponent::RunPhysicsResolvePhase() {
+    // ce::engine::EngineTickPhase::PhysicsResolve -- the boundary between
+    // PreUpdate's declared intent and PostPhysics's settled results, not a
+    // phase gameplay code runs in.
+    //
+    // Jolt runs on its own fixed 60 Hz accumulator, decoupled from this
+    // 30 Hz UI timer (Core Architectural Invariant 2, Jolt vendoring
+    // plan) -- real measured elapsed time, not this timer's own assumed
+    // 1/30s literal (which PreUpdate's calls still use, a separate,
+    // pre-existing gap this doesn't fix).
+    const double nowSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+    const float physicsElapsedSeconds = lastPhysicsAdvanceSeconds_ > 0.0
+        ? static_cast<float>(nowSeconds - lastPhysicsAdvanceSeconds_) : 0.0f;
+    lastPhysicsAdvanceSeconds_ = nowSeconds;
+    const float physicsAlpha = physicsWorld_.Advance(world_, physicsElapsedSeconds);
+    {
+        // InterpolateTransforms() itself doesn't lock (its usual caller,
+        // the render pass, already holds this same lock for its whole
+        // draw pass -- see ViewportComponent.cpp) -- this call site needs
+        // its own, since nothing above holds it once Advance() returns.
+        std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
+        physicsWorld_.InterpolateTransforms(world_, physicsAlpha);
+    }
+    return physicsElapsedSeconds;
+}
+
+void MainComponent::RunPostPhysicsPhase(float physicsElapsedSeconds) {
+    // ce::engine::EngineTickPhase::PostPhysics -- safe to read this same
+    // tick's fresh physics results (a collision that just happened, a
+    // character's just-resolved position).
+    if (possessedEntityId_ != -1) {
+        // JPH::CharacterVirtual is its own separate, manually-driven
+        // system (not tracked by PhysicsResolve's Advance() -- see
+        // PhysicsWorld.h's own comment on CreateCharacter), so it needs
+        // its own per-tick update here, before frustHost_.tick() below
+        // drains this tick's collision events.
+        const auto cameraForward = viewport_.CameraForward();
+        const float forwardYawRadians = std::atan2(cameraForward.x, -cameraForward.z);
+        possessedCharacter_.Update(world_, physicsWorld_, inputActionSystem_,
+                                  possessedEntityId_, forwardYawRadians, physicsElapsedSeconds);
+
+        juce::Vector3D<float> feetPosition;
+        {
+            std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
+            const auto entityHandle = static_cast<entt::entity>(possessedEntityId_);
+            if (world_.Registry().valid(entityHandle)) {
+                const auto& transform = world_.Registry().get<ce::engine::Transform>(entityHandle);
+                feetPosition = { transform.position.x, transform.position.y, transform.position.z };
+            }
+        }
+        viewport_.SetPossessedFeetPosition(feetPosition);
+    }
+    frustHost_.tick(static_cast<std::int64_t>(world_.CurrentTick()));
 }
 
 void MainComponent::createNewProject()

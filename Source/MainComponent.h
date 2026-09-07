@@ -90,6 +90,17 @@ private:
     void syncViewportRenderHost();
 
     void timerCallback() override;
+    // Engine Loop Decoupling plan, Phase 1: the three ce::engine::
+    // EngineTickPhase phases (engine/tick_phase.h) as real, separately-
+    // named methods -- timerCallback()'s own isPlaying_ block calls these
+    // in order, instead of the phases only existing as an implicit
+    // function-call sequence. No behavior change from what timerCallback()
+    // already did; physicsElapsedSeconds is threaded through since
+    // PostPhysics (possession) needs the same real-elapsed-time value
+    // PhysicsResolve computed.
+    void RunPreUpdatePhase();
+    float RunPhysicsResolvePhase();
+    void RunPostPhysicsPhase(float physicsElapsedSeconds);
     void SetPlaying(bool playing);
     void initialiseDockingWorkspace();
     void openGameClient();
