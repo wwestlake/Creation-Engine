@@ -70,28 +70,46 @@ void ApplyAnimationImportOptions(LoadedModel& model, const AnimationImportOption
     }
 }
 
-// A source file's mesh-bearing nodes ALWAYS decompose into one Object
-// Definition, one Mesh-kind component per mesh-bearing node -- see
-// docs/OBJECT_MODEL.md's "Multi-part import decomposes into components".
-// There is deliberately no special case for exactly one mesh-bearing node:
-// a node's own local transform (relative to its parent) is real authored
-// data regardless of how many sibling nodes it has, and silently dropping
-// it for a single-node file was a real, confirmed bug (a boulder asset
-// with a nonzero node offset rendered at the wrong position because the
-// old ">1 nodes" threshold skipped decomposition entirely for it). A file
-// with genuinely zero mesh-bearing nodes is the only real no-op -- nothing
-// exists to place. `meshAssetId` is the asset's DURABLE id (stable across
-// Reimport's version bumps), not its version -- so re-detecting the same
-// asset on Reimport finds and updates the same definition rather than
-// creating a duplicate. A failure here does NOT fail the whole import --
-// the durable render asset itself is already safely stored either way by
-// the time this runs -- but IS returned as text so it lands in the
-// importer's own result message instead of disappearing silently (this
-// used to only go to std::cout, which a windowed app with no attached
-// console never shows anyone).
-juce::String BuildNodeDecomposedDefinition(scene::ObjectDefinitionCatalog& catalog, creation::assets::ProjectSession& session,
-                                           const LoadedModel& model, const juce::String& meshAssetId,
-                                           const juce::String& meshAssetVersionId, const juce::String& displayName) {
+// A source file's mesh-bearing nodes decompose into one Object Definition
+// PER independent top-level node in the source, one Mesh-kind component
+// per mesh-bearing node within each -- see docs/OBJECT_MODEL.md's
+// "Multi-part import decomposes into components". Never invent a parent
+// that doesn't exist in the source: two mesh nodes only ever land in the
+// SAME definition if the file itself actually related them through a real
+// parent chain. A Blender export with several independent top-level
+// objects produces several independent definitions, not one shared
+// container bundling unrelated objects together (a confirmed bug -- one
+// invented "definition root" was silently composing every top-level
+// node's own file-space offset as if they were meaningfully related,
+// which they weren't).
+//
+// A node with no parent (the ultimate root of its own group) gets
+// meshLocalTransform == identity, not its own authored local transform --
+// that transform only ever meant "this object's position relative to
+// its sibling objects in the file's own arbitrary space," which stops
+// meaning anything once it's split out into its own independent
+// definition. A node WITH a real parent keeps its transform relative to
+// that parent exactly as authored -- genuine, meaningful relationship
+// data, composed the same way as before.
+//
+// There is deliberately no special case for exactly one mesh-bearing
+// node: a node's own local transform (relative to its REAL parent, if it
+// has one) is authored data regardless of how many sibling nodes it has,
+// and silently dropping it for a single-node file was a real, confirmed
+// bug (a boulder asset with a nonzero node offset rendered at the wrong
+// position because the old ">1 nodes" threshold skipped decomposition
+// entirely for it). A file with genuinely zero mesh-bearing nodes is the
+// only real no-op -- nothing exists to place. `meshAssetId` is the
+// asset's DURABLE id (stable across Reimport's version bumps), not its
+// version -- so re-detecting the same asset on Reimport finds and
+// updates the same definition rather than creating a duplicate, for the
+// common single-group case (see the NOTE below for the multi-group
+// limitation). A failure on any one group does NOT fail the whole
+// import, or stop the other groups -- the durable render asset itself is
+// already safely stored either way by the time this runs.
+juce::String BuildNodeDecomposedDefinitions(scene::ObjectDefinitionCatalog& catalog, creation::assets::ProjectSession& session,
+                                            const LoadedModel& model, const juce::String& meshAssetId,
+                                            const juce::String& meshAssetVersionId, const juce::String& displayName) {
     std::vector<int> meshNodeIndices;
     for (std::size_t i = 0; i < model.nodes.size(); ++i) {
         if (model.nodes[i].meshIndex >= 0) meshNodeIndices.push_back(static_cast<int>(i));
@@ -101,59 +119,116 @@ juce::String BuildNodeDecomposedDefinition(scene::ObjectDefinitionCatalog& catal
         return {};
     }
 
-    scene::ObjectDefinition definition;
-    const auto existingId = scene::FindWrapperDefinitionForRenderAsset(catalog, meshAssetId);
-    definition.id = existingId.isNotEmpty() ? existingId : scene::GenerateWrapperDefinitionName(catalog, displayName);
-    definition.displayName = displayName;
+    // Ultimate root (walk parentIndex to -1) for each mesh-bearing node --
+    // nodes sharing the same root are genuinely related in the source
+    // file; nodes with different roots are independent siblings and MUST
+    // become separate definitions, per this function's own comment above.
+    const auto ultimateRoot = [&](int nodeIndex) {
+        int idx = nodeIndex;
+        while (model.nodes[static_cast<std::size_t>(idx)].parentIndex != -1)
+            idx = model.nodes[static_cast<std::size_t>(idx)].parentIndex;
+        return idx;
+    };
 
+    std::vector<int> rootOrder; // first-seen order, for stable naming/output.
+    std::unordered_map<int, std::vector<int>> nodesByRoot;
     for (const int nodeIndex : meshNodeIndices) {
-        // Walk this node's parent chain up to the file's own root, then
-        // compose top-down -- meshLocalTransform ends up relative to the
-        // file's root, matching what instantiateDefinition composes it
-        // against (the definition root entity's own transform).
-        std::vector<int> chain;
-        for (int idx = nodeIndex; idx != -1; idx = model.nodes[static_cast<std::size_t>(idx)].parentIndex) {
-            chain.push_back(idx);
+        const int root = ultimateRoot(nodeIndex);
+        if (nodesByRoot.find(root) == nodesByRoot.end()) rootOrder.push_back(root);
+        nodesByRoot[root].push_back(nodeIndex);
+    }
+    const bool singleGroup = rootOrder.size() == 1;
+
+    juce::String combinedNote;
+    for (std::size_t groupIndex = 0; groupIndex < rootOrder.size(); ++groupIndex) {
+        const int rootNodeIndex = rootOrder[groupIndex];
+        const auto& groupNodeIndices = nodesByRoot[rootNodeIndex];
+
+        // The common case (one connected group spanning the whole file --
+        // the only shape this function used to support) keeps today's
+        // exact naming/reimport-identity behavior. Only a file with
+        // genuinely multiple independent top-level nodes uses a per-root
+        // name: the source node's own authored name (a Blender object's
+        // real name), falling back to displayName + a 1-based index if
+        // the file left that node unnamed.
+        const juce::String groupDisplayName = singleGroup
+            ? displayName
+            : (model.nodes[static_cast<std::size_t>(rootNodeIndex)].name.isNotEmpty()
+                   ? model.nodes[static_cast<std::size_t>(rootNodeIndex)].name
+                   : displayName + " " + juce::String(static_cast<int>(groupIndex) + 1));
+
+        scene::ObjectDefinition definition;
+        // NOTE: FindWrapperDefinitionForRenderAsset matches by meshAssetId
+        // alone, not by which specific nodes a definition contains -- exact
+        // for the single-group case (only one candidate can ever exist),
+        // but can't yet distinguish between several existing per-root
+        // definitions for the same multi-root file on reimport. Falls back
+        // to creating a fresh definition; GenerateWrapperDefinitionName's
+        // own dedup-by-name still prevents an outright duplicate under the
+        // exact same name. Real per-root reimport identity is real, but
+        // separate, follow-on scope -- not something the multi-root case
+        // needs to get exactly right on its very first pass.
+        const auto existingId = scene::FindWrapperDefinitionForRenderAsset(catalog, meshAssetId);
+        definition.id = (singleGroup && existingId.isNotEmpty())
+            ? existingId : scene::GenerateWrapperDefinitionName(catalog, groupDisplayName);
+        definition.displayName = groupDisplayName;
+
+        for (const int nodeIndex : groupNodeIndices) {
+            // Walk up to (but NOT including) this group's own root, then
+            // compose top-down -- meshLocalTransform ends up relative to
+            // the root's own space, matching what instantiateDefinition
+            // composes it against (the definition root entity's own
+            // transform). The root's own authored transform is
+            // deliberately excluded (see this function's header comment)
+            // -- for nodeIndex == rootNodeIndex, chain is empty and
+            // composed stays identity.
+            std::vector<int> chain;
+            for (int idx = nodeIndex; idx != rootNodeIndex; idx = model.nodes[static_cast<std::size_t>(idx)].parentIndex) {
+                chain.push_back(idx);
+            }
+            std::reverse(chain.begin(), chain.end());
+
+            engine::Transform composed;
+            for (const int idx : chain) {
+                const auto& node = model.nodes[static_cast<std::size_t>(idx)];
+                engine::Transform local;
+                local.position = { node.localTranslation.x, node.localTranslation.y, node.localTranslation.z };
+                local.eulerRotationRadians = { node.localEulerRotationRadians.x, node.localEulerRotationRadians.y,
+                                               node.localEulerRotationRadians.z };
+                local.scale = { node.localScale.x, node.localScale.y, node.localScale.z };
+                composed = scene::composeTransform(composed, local);
+            }
+
+            scene::ObjectComponentEntry component;
+            component.kind = scene::ObjectComponentKind::Mesh;
+            component.meshAssetId = meshAssetId;
+            component.meshAssetVersionId = meshAssetVersionId;
+            component.meshNodeIndex = nodeIndex;
+            component.meshNodeName = model.nodes[static_cast<std::size_t>(nodeIndex)].name;
+            component.meshLocalTransform = composed;
+            definition.components.push_back(std::move(component));
         }
-        std::reverse(chain.begin(), chain.end());
 
-        engine::Transform composed;
-        for (const int idx : chain) {
-            const auto& node = model.nodes[static_cast<std::size_t>(idx)];
-            engine::Transform local;
-            local.position = { node.localTranslation.x, node.localTranslation.y, node.localTranslation.z };
-            local.eulerRotationRadians = { node.localEulerRotationRadians.x, node.localEulerRotationRadians.y,
-                                           node.localEulerRotationRadians.z };
-            local.scale = { node.localScale.x, node.localScale.y, node.localScale.z };
-            composed = scene::composeTransform(composed, local);
+        juce::String upsertError;
+        if (!catalog.upsert(definition, upsertError)) {
+            diagnostics::EngineLog::Error("Import", "Could not build Object Definition for " + groupDisplayName + ": " + upsertError);
+            combinedNote += " Could not build Object Definition \"" + groupDisplayName + "\": " + upsertError;
+            continue;
         }
-
-        scene::ObjectComponentEntry component;
-        component.kind = scene::ObjectComponentKind::Mesh;
-        component.meshAssetId = meshAssetId;
-        component.meshAssetVersionId = meshAssetVersionId;
-        component.meshNodeIndex = nodeIndex;
-        component.meshNodeName = model.nodes[static_cast<std::size_t>(nodeIndex)].name;
-        component.meshLocalTransform = composed;
-        definition.components.push_back(std::move(component));
+        juce::String saveError;
+        if (!catalog.Save(session, definition.id, saveError)) {
+            diagnostics::EngineLog::Error("Import", "Built Object Definition \"" + definition.id + "\" for " + groupDisplayName +
+                                                         " but could not save it: " + saveError);
+            combinedNote += " Built Object Definition \"" + definition.id + "\" but could not save it: " + saveError;
+            continue;
+        }
+        diagnostics::EngineLog::Info("Import", "Created Object Definition \"" + definition.id + "\" (" +
+                                                    juce::String(static_cast<int>(groupNodeIndices.size())) + " parts) for " +
+                                                    groupDisplayName + ".");
+        combinedNote += " Also created Object Definition \"" + definition.id + "\" (" +
+               juce::String(static_cast<int>(groupNodeIndices.size())) + " parts).";
     }
-
-    juce::String upsertError;
-    if (!catalog.upsert(definition, upsertError)) {
-        diagnostics::EngineLog::Error("Import", "Could not build Object Definition for " + displayName + ": " + upsertError);
-        return " Could not build its Object Definition: " + upsertError;
-    }
-    juce::String saveError;
-    if (!catalog.Save(session, definition.id, saveError)) {
-        diagnostics::EngineLog::Error("Import", "Built Object Definition \"" + definition.id + "\" for " + displayName +
-                                                     " but could not save it: " + saveError);
-        return " Built Object Definition \"" + definition.id + "\" but could not save it: " + saveError;
-    }
-    diagnostics::EngineLog::Info("Import", "Created Object Definition \"" + definition.id + "\" (" +
-                                                juce::String(static_cast<int>(meshNodeIndices.size())) + " parts) for " +
-                                                displayName + ".");
-    return " Also created Object Definition \"" + definition.id + "\" (" +
-           juce::String(static_cast<int>(meshNodeIndices.size())) + " parts).";
+    return combinedNote;
 }
 
 } // namespace
@@ -200,7 +275,7 @@ ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportConte
 
     juce::String objectDefinitionNote;
     if (context.objectDefinitions != nullptr) {
-        objectDefinitionNote = BuildNodeDecomposedDefinition(*context.objectDefinitions, *context.projectSession, model,
+        objectDefinitionNote = BuildNodeDecomposedDefinitions(*context.objectDefinitions, *context.projectSession, model,
                                                              sourceDescriptor.id, sourceDescriptor.versionId, assetName);
     }
 
@@ -251,7 +326,7 @@ ImportResult GltfAssetImporter::Reimport(const juce::File& sourceFile,
 
     juce::String objectDefinitionNote;
     if (context.objectDefinitions != nullptr) {
-        objectDefinitionNote = BuildNodeDecomposedDefinition(*context.objectDefinitions, *context.projectSession, model,
+        objectDefinitionNote = BuildNodeDecomposedDefinitions(*context.objectDefinitions, *context.projectSession, model,
                                                              newDescriptor.id, newDescriptor.versionId, existingAsset.displayName);
     }
 
