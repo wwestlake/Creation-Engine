@@ -45,7 +45,9 @@ public:
     void resized() override;
     void paint(juce::Graphics& g) override;
 
-    static constexpr int kPreferredHeight = 218;
+    // Computed, not fixed -- "no entity selected" only ever shows title +
+    // noSelectionLabel_, not the full albedo/metallic/roughness block.
+    int PreferredHeight() const;
 
 private:
     void PushToRegistry();
@@ -55,6 +57,7 @@ private:
     engine::World& world_;
     entt::entity selectedEntity_ = entt::null;
     bool locked_ = false;
+    bool hasSelection_ = false; // set in SetEditorsVisible -- resized()/PreferredHeight() both consult this.
 
     juce::Label titleLabel_{ {}, "Material" };
     juce::Label noSelectionLabel_{ {}, "No entity selected" };

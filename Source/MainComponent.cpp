@@ -526,6 +526,7 @@ void MainComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             // on first open, same shape as OpenPodEditor().
             if (id == "input-bindings") EnsureInputBindingsPanelOpen();
             else if (id == "lighting") EnsureLightPanelOpen();
+            else if (id == "materials") EnsureMaterialsPanelOpen();
             else dockManager_->activatePanel(id);
         }
         return;
@@ -626,14 +627,18 @@ void MainComponent::initialiseDockingWorkspace()
     dockManager_->registerPanel("properties", "Properties", std::make_unique<NonOwningPanelHost>(propertiesPanel_), CreationDock::DockTargetZone::Right);
     // "pods"/"pod-info" deliberately NOT registered here -- they exist only
     // while a Pod is open, via OpenPodEditor(), one pair per open Pod
-    // (Editor UI/Workflow Overhaul plan, Phase 5). "input-bindings"/"lighting"
-    // are the same lazy shape
-    // (EnsureInputBindingsPanelOpen()/EnsureLightPanelOpen(), called from
-    // the View menu instead of Content Browser) -- unlike Pods they ARE
-    // listed in kDockPanelMenuEntries/the View menu (there's exactly one of
-    // each, not one per opened asset), they just aren't part of the default
-    // eager-docked layout the panels above are.
-    dockManager_->registerPanel("materials", "Materials", std::make_unique<NonOwningPanelHost>(materialsPanel_), CreationDock::DockTargetZone::CenterTab);
+    // (Editor UI/Workflow Overhaul plan, Phase 5). "input-bindings"/
+    // "lighting"/"materials" are the same lazy shape
+    // (EnsureInputBindingsPanelOpen()/EnsureLightPanelOpen()/
+    // EnsureMaterialsPanelOpen(), called from the View menu instead of
+    // Content Browser) -- unlike Pods they ARE listed in
+    // kDockPanelMenuEntries/the View menu (there's exactly one of each,
+    // not one per opened asset), they just aren't part of the default
+    // eager-docked layout the panels above are. Materials specifically
+    // was missed when this lazy pattern was first applied to Input
+    // Bindings/Lighting -- a real bug (an editor for a specific Material
+    // asset has no reason to be open before any Material is being edited,
+    // same reasoning as every other on-demand editor here).
     // "assets" (the old standalone Import screen) is gone -- import/export/
     // browse/place all live in Content Browser now. importPanel_ itself
     // stays alive as backing logic (importer registry, audio catalog) that
@@ -710,6 +715,24 @@ void MainComponent::EnsureLightPanelOpen() {
         };
     }
     dockManager_->activatePanel("lighting");
+}
+
+void MainComponent::EnsureMaterialsPanelOpen() {
+    if (dockManager_ == nullptr) return;
+
+    if (!dockManager_->isRegistered("materials")) {
+        auto* panel = dockManager_->registerPanel("materials", "Materials",
+                                                   std::make_unique<NonOwningPanelHost>(materialsPanel_),
+                                                   CreationDock::DockTargetZone::CenterTab);
+        // Deferred via callAsync -- same reason as EnsureInputBindingsPanelOpen/
+        // EnsureLightPanelOpen above.
+        panel->onCloseRequested = [this](CreationDock::DockPanel*) {
+            juce::MessageManager::callAsync([this] {
+                if (dockManager_ != nullptr) dockManager_->unregisterPanel("materials");
+            });
+        };
+    }
+    dockManager_->activatePanel("materials");
 }
 
 void MainComponent::ClosePodEditor(const juce::String& podName) {

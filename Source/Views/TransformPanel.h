@@ -35,7 +35,14 @@ public:
     void resized() override;
     void paint(juce::Graphics& g) override;
 
-    static constexpr int kPreferredHeight = 392;
+    // Computed, not fixed -- a selected entity without an Animator (no
+    // Skeleton/clips) or without any attached Pods genuinely has nothing
+    // to show in those rows, so they take zero space rather than a
+    // reserved blank gap. Mirrors PhysicsPropertiesPanel::PreferredHeight's
+    // existing pattern; matches whatever resized() actually lays out
+    // (both consult the same hasAnimator_/hasBehaviors_/hasSelection_
+    // members, set together in Refresh()).
+    int PreferredHeight() const;
 
 private:
     void PushToRegistry();
@@ -64,6 +71,15 @@ private:
     interaction::EditorInteraction& interactions_;
     entt::entity selectedEntity_ = entt::null;
     bool locked_ = false;
+    // Set together in Refresh() (and cleared together whenever there's no
+    // selection) -- PreferredHeight() and resized() both consult these
+    // instead of each independently re-deriving "does this row apply,"
+    // which is what let them silently disagree before (resized() skipped
+    // painting a hidden row's content but still reserved its space,
+    // because kPreferredHeight was a fixed constant that never asked).
+    bool hasSelection_ = false;
+    bool hasAnimator_ = false;
+    bool hasBehaviors_ = false;
 
     juce::Label titleLabel_{ {}, "Transform" };
     juce::Label noSelectionLabel_{ {}, "No entity selected" };

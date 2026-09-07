@@ -21,7 +21,7 @@ public:
     }
 
     void UpdateLayout(int width) {
-        const int totalHeight = TransformPanel::kPreferredHeight + kSectionGap + MaterialsPanel::kPreferredHeight +
+        const int totalHeight = transformPanel_.PreferredHeight() + kSectionGap + materialsPanel_.PreferredHeight() +
                                  kSectionGap + physicsPanel_.PreferredHeight() + kSectionGap +
                                  behaviorAttachmentPanel_.PreferredHeight();
         setSize(width, totalHeight);
@@ -30,9 +30,9 @@ public:
 
     void resized() override {
         auto bounds = getLocalBounds();
-        transformPanel_.setBounds(bounds.removeFromTop(TransformPanel::kPreferredHeight));
+        transformPanel_.setBounds(bounds.removeFromTop(transformPanel_.PreferredHeight()));
         bounds.removeFromTop(kSectionGap);
-        materialsPanel_.setBounds(bounds.removeFromTop(MaterialsPanel::kPreferredHeight));
+        materialsPanel_.setBounds(bounds.removeFromTop(materialsPanel_.PreferredHeight()));
         bounds.removeFromTop(kSectionGap);
         physicsPanel_.setBounds(bounds.removeFromTop(physicsPanel_.PreferredHeight()));
         bounds.removeFromTop(kSectionGap);
