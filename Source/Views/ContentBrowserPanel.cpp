@@ -76,10 +76,18 @@ juce::String GenerateDefaultObjectDefinitionName(scene::ObjectDefinitionCatalog&
 // Export/Reimport buttons -- those are right-click actions now
 // (ShowContextMenu below), since a per-row button strip was confirmed as
 // a real complaint ("that is not how it is supposed to work... an old
-// web-days pattern"). kindLabel_ takes the slot the old categoryLabel_
-// had -- with no per-kind section header anymore, SOME per-row kind
-// indication is still needed so Pods/Object Definitions/Games/Scenes
-// don't all visually blend together in one flat list.
+// web-days pattern"). categoryLabel_ takes the old per-section-header's
+// slot -- with no per-kind section header anymore, SOME per-row grouping
+// indicator is still needed so Pods/Object Definitions/Games/Scenes don't
+// all visually blend together in one flat list.
+//
+// Phase 6: shows AssetDescriptor::category (a real field that already
+// existed, previously unused/unset in practice) once the designer has set
+// one via the row's right-click "Set Category..." -- a free-text, game-
+// meaningful label (Players, NPCs, Props, whatever a given game needs),
+// deliberately NOT AssetKind (the engine-internal plumbing that caused
+// the original Content Browser complaint). Falls back to the AssetKind
+// display name until a category is set, so nothing shows blank.
 class ContentBrowserPanel::AssetRow final : public juce::Component,
                                             public juce::SettableTooltipClient {
 public:
@@ -97,10 +105,12 @@ public:
         nameLabel_.setColour(juce::Label::textColourId, juce::Colours::white);
         addAndMakeVisible(nameLabel_);
 
-        kindLabel_.setInterceptsMouseClicks(false, false);
-        kindLabel_.setText(creation::assets::toDisplayName(descriptor_.kind), juce::dontSendNotification);
-        kindLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
-        addAndMakeVisible(kindLabel_);
+        categoryLabel_.setInterceptsMouseClicks(false, false);
+        categoryLabel_.setText(descriptor_.category.isNotEmpty() ? descriptor_.category
+                                                                  : creation::assets::toDisplayName(descriptor_.kind),
+                               juce::dontSendNotification);
+        categoryLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8ea0b7));
+        addAndMakeVisible(categoryLabel_);
 
         sizeLabel_.setInterceptsMouseClicks(false, false);
         sizeLabel_.setText(FormatFileSize(descriptor_.fileSizeBytes), juce::dontSendNotification);
@@ -125,7 +135,7 @@ public:
         auto bounds = getLocalBounds();
         modifiedLabel_.setBounds(bounds.removeFromRight(120));
         sizeLabel_.setBounds(bounds.removeFromRight(64));
-        kindLabel_.setBounds(bounds.removeFromRight(140));
+        categoryLabel_.setBounds(bounds.removeFromRight(140));
         nameLabel_.setBounds(bounds);
     }
 
@@ -166,7 +176,7 @@ private:
     bool placeable_;
     bool draggedThisGesture_ = false;
     juce::Label nameLabel_;
-    juce::Label kindLabel_;
+    juce::Label categoryLabel_;
     juce::Label sizeLabel_;
     juce::Label modifiedLabel_;
 };
@@ -232,17 +242,20 @@ void ContentBrowserPanel::ShowRowContextMenu(const creation::assets::AssetDescri
     juce::PopupMenu menu;
     int nextId = 1;
     const int renameId = renameable ? nextId++ : -1;
+    const int categoryId = nextId++;
     const int exportId = nextId++;
     const int reimportId = nextId++;
     const int deleteId = nextId++;
     if (renameable) menu.addItem(renameId, "Rename...");
+    menu.addItem(categoryId, "Set Category...");
     menu.addItem(exportId, "Export...");
     menu.addItem(reimportId, "Reimport...");
     menu.addSeparator();
     menu.addItem(deleteId, "Delete...");
 
-    menu.showMenuAsync(juce::PopupMenu::Options(), [this, descriptor, renameId, exportId, reimportId, deleteId](int result) {
+    menu.showMenuAsync(juce::PopupMenu::Options(), [this, descriptor, renameId, categoryId, exportId, reimportId, deleteId](int result) {
         if (result == renameId) RenameAsset(descriptor);
+        else if (result == categoryId) SetCategory(descriptor);
         else if (result == exportId) ExportAsset(descriptor);
         else if (result == reimportId) ReimportAsset(descriptor);
         else if (result == deleteId) DeleteAsset(descriptor);
@@ -255,6 +268,39 @@ void ContentBrowserPanel::RenameAsset(const creation::assets::AssetDescriptor& d
     } else if (descriptor.kind == creation::assets::AssetKind::scene) {
         if (onSceneRenameRequested) onSceneRenameRequested(descriptor.id);
     }
+}
+
+// Editor UI/Workflow Overhaul plan, Phase 6: a designer-set, free-text
+// Category (Players, NPCs, Props, whatever a given game needs) -- NOT
+// AssetKind, the engine-internal plumbing that caused the original
+// complaint this whole plan started from. Scoped small per Decision 5:
+// just this field + a plain text dialog, not a managed taxonomy/tree.
+// AssetDescriptor::category already existed (shared/AssetSystem) --
+// nothing to add there, this just makes it designer-editable for the
+// first time.
+void ContentBrowserPanel::SetCategory(const creation::assets::AssetDescriptor& descriptor) {
+    if (projectSession_ == nullptr) return;
+
+    auto* dialog = new juce::AlertWindow("Set Category", "Category for \"" + descriptor.displayName + "\":",
+                                         juce::MessageBoxIconType::QuestionIcon);
+    dialog->addTextEditor("category", descriptor.category);
+    dialog->addButton("Set", 1);
+    dialog->addButton("Cancel", 0);
+    dialog->enterModalState(true, juce::ModalCallbackFunction::create([this, dialog, descriptor](int result) {
+        std::unique_ptr<juce::AlertWindow> owned(dialog);
+        if (result != 1 || projectSession_ == nullptr) return;
+
+        auto updated = descriptor;
+        updated.category = owned->getTextEditorContents("category").trim();
+        projectSession_->upsertAssetDescriptor(updated);
+
+        juce::String error;
+        if (!projectSession_->commit(error)) {
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Set Category Failed", error);
+            return;
+        }
+        Refresh();
+    }), true);
 }
 
 void ContentBrowserPanel::SetProjectContent(creation::assets::ProjectSession* session) {
