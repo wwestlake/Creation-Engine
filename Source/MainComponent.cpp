@@ -11,6 +11,7 @@
 #include "Assets/EngineAssetPack.h"
 #include "Diagnostics/EngineLog.h"
 #include "Import/Importers/GltfAssetImporter.h"
+#include "Scene/AssetPlacement.h"
 #include "Scene/Components.h"
 #include "Scene/EngineSceneSerializer.h"
 #include "Scene/ObjectDefinitionNaming.h"
@@ -569,13 +570,28 @@ void MainComponent::possessDesignerCharacter()
     // this (message) thread.
     const auto spawnPos = viewport_.SpawnPosition(0.0f);
 
+    // "Humanoid_Robot" (assets/EnginePack/pack.json, EngineAssetPack
+    // version 1.0.4) is the editor's default player character -- a real,
+    // visible, skinned model with a Skeleton/Animator instead of the bare
+    // invisible Transform-only entity this used to spawn. Its animation
+    // clips are already named Idle/Walk/Run, exactly matching
+    // PossessedCharacter::Update's crossfade targets, so movement drives
+    // real animation with no further wiring needed. Falls back to the old
+    // bare-entity behavior if the asset can't be found for some reason
+    // (a stale/uninstalled pack), so possession still works either way.
+    const auto characterAsset = viewport_.Catalog().Find("Humanoid_Robot");
     entt::entity entity;
     {
         std::lock_guard<std::mutex> lock(world_.RegistryMutex());
-        auto& registry = world_.Registry();
-        entity = registry.create();
-        auto& transform = registry.emplace<ce::engine::Transform>(entity);
-        transform.position = { spawnPos.x, spawnPos.y, spawnPos.z };
+        if (characterAsset.mesh != nullptr) {
+            entity = ce::scene::PlaceAssetEntity(world_, characterAsset, "Designer Character",
+                                                 { spawnPos.x, spawnPos.y, spawnPos.z });
+        } else {
+            auto& registry = world_.Registry();
+            entity = registry.create();
+            auto& transform = registry.emplace<ce::engine::Transform>(entity);
+            transform.position = { spawnPos.x, spawnPos.y, spawnPos.z };
+        }
     }
     const auto entityId = static_cast<std::int64_t>(entt::to_integral(entity));
 

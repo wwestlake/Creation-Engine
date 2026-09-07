@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
   "id": "com.lagdaemon.creation-engine",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "title": "Creation Engine Pack",
   "defaultScene": "scenes/DefaultScene.xml",
   "assets": [
@@ -9,6 +9,7 @@
     { "id": "Sphere", "kind": "procedural-mesh", "generator": "uv-sphere", "title": "Sphere" },
     { "id": "BoxTextured", "kind": "model", "title": "Textured Box", "payload": "models/BoxTextured/BoxTextured.gltf" },
     { "id": "SimpleSkin", "kind": "model", "title": "Simple Skin", "payload": "models/SimpleSkin/SimpleSkin.gltf" },
+    { "id": "Humanoid_Robot", "kind": "model", "title": "Humanoid Robot", "payload": "models/Humanoid_Robot/Humanoid_Robot.gltf" },
     { "id": "DefaultScene", "kind": "scene", "title": "Default Scene" },
     { "id": "01_Welcome_Yard", "kind": "model", "title": "Welcome Yard", "payload": "models/StarterScenes/01_Welcome_Yard/01_Welcome_Yard.gltf" },
     { "id": "02_Material_Lab", "kind": "model", "title": "Material Lab", "payload": "models/StarterScenes/02_Material_Lab/02_Material_Lab.gltf" },
