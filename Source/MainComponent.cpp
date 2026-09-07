@@ -40,8 +40,6 @@ constexpr int kHelpAboutItemId = 8998;
 
 struct DockPanelMenuEntry { const char* id; const char* label; };
 constexpr DockPanelMenuEntry kDockPanelMenuEntries[] = {
-    { "explorer", "Explorer" },
-    { "hierarchy", "Hierarchy" },
     { "viewport", "Scene Viewport" },
     { "properties", "Properties" },
     { "input-bindings", "Input Bindings" },
@@ -77,7 +75,6 @@ private:
 
 MainComponent::MainComponent()
     : viewport_(world_, interactions_, viewportRenderHost_),
-      hierarchyPanel_(world_, viewport_),
       importPanel_(world_, viewport_, projectSession_),
       djehutiImportWatcher_(world_, viewport_, objectDefinitions_),
       lightPanel_(viewport_),
@@ -136,9 +133,8 @@ MainComponent::MainComponent()
                                                                podEditorPanel_->Registry());
     objectDefinitionEditorPanel_ =
         std::make_unique<ce::views::ObjectDefinitionEditorPanel>(objectDefinitions_, podCatalog_, projectSession_);
-    // Same fan-out-from-a-callback shape as hierarchyPanel_.onSelectionChanged
-    // below -- PodEditorPanel no longer owns the Pod's identity/interface UI
-    // or the node inspector itself, PodInfoPanel does.
+    // PodEditorPanel no longer owns the Pod's identity/interface UI or the
+    // node inspector itself, PodInfoPanel does.
     podEditorPanel_->onOpenPodChanged = [this](const juce::String& name) { podInfoPanel_->SetOpenPod(name); };
     podEditorPanel_->onSelectedNodeChanged = [this](ce::node_system::NodeId id) { podInfoPanel_->SetSelectedNode(id); };
     contentBrowserPanel_.onAssetOpened = [this](const creation::assets::AssetDescriptor& descriptor) {
@@ -188,7 +184,6 @@ MainComponent::MainComponent()
         }
         contentBrowserPanel_.Refresh();
         if (wasActive && !games_.isEmpty()) selectGame(games_.getFirst().id);
-        else refreshExplorerPanel();
     };
     contentBrowserPanel_.onSceneDeleteRequested = [this](const juce::String& catalogAssetId) {
         for (auto& game : games_) {
@@ -206,7 +201,6 @@ MainComponent::MainComponent()
             if (game.id == activeGame_.id) activeGame_ = game;
             contentBrowserPanel_.Refresh();
             if (wasActive) selectScene(game.entrySceneId);
-            else refreshExplorerPanel();
             return;
         }
     };
@@ -308,25 +302,9 @@ MainComponent::MainComponent()
     possessCharacterButton_.setTooltip("Possess a walking character at the free-fly camera's current position and enter Play in place.");
     addAndMakeVisible(possessCharacterButton_);
 
-    hierarchyPanel_.onSelectionChanged = [this](entt::entity entity) {
-        interactions_.select(entity);
-        propertiesPanel_.SetSelectedEntity(entity);
-    };
-    explorerPanel_.onGameSelected = [this](const juce::String& gameId) { selectGame(gameId); };
-    explorerPanel_.onSceneSelected = [this](const juce::String& sceneId) { selectScene(sceneId); };
-    explorerPanel_.onCreateGameRequested = [this] { createGame(); };
-    explorerPanel_.onCreateSceneRequested = [this] { createScene(); };
-    explorerPanel_.onSaveRequested = [this] { saveSessionToDisk(true); };
-    explorerPanel_.onGameRenameRequested = [this](const juce::String& gameId) { RenameGame(gameId); };
-    explorerPanel_.onSceneRenameRequested = [this](const juce::String& gameId, const juce::String& sceneId) {
-        RenameScene(gameId, sceneId);
-    };
-    hierarchyPanel_.onEntityDestroying = [this](entt::entity entity) {
+    propertiesPanel_.onEntityDestroying = [this](entt::entity entity) {
         frustHost_.notifyObjectDestroyed(entity, static_cast<std::int64_t>(world_.CurrentTick()));
     };
-    inspectorTitle_.setFont(juce::Font(juce::FontOptions(18.0f)).boldened());
-    inspectorTitle_.setColour(juce::Label::textColourId, juce::Colours::white);
-
     initialiseDockingWorkspace();
 
     dockManager_->activatePanel("viewport");
@@ -611,8 +589,6 @@ void MainComponent::initialiseDockingWorkspace()
 {
     dockManager_ = std::make_unique<CreationDock::DockManager>(*this);
     addAndMakeVisible(*dockManager_);
-    dockManager_->registerPanel("hierarchy", "Hierarchy", std::make_unique<NonOwningPanelHost>(hierarchyPanel_), CreationDock::DockTargetZone::Left);
-    dockManager_->registerPanel("explorer", "Explorer", std::make_unique<NonOwningPanelHost>(explorerPanel_), CreationDock::DockTargetZone::Left);
     dockManager_->registerPanel("viewport", "Scene Viewport", std::make_unique<NonOwningPanelHost>(viewport_), CreationDock::DockTargetZone::CenterTab);
     dockManager_->registerPanel("properties", "Properties", std::make_unique<NonOwningPanelHost>(propertiesPanel_), CreationDock::DockTargetZone::Right);
     // "pods"/"pod-info" deliberately NOT registered here -- they exist only
@@ -733,8 +709,11 @@ void MainComponent::timerCallback() {
     // ordinarily, a no-op setBounds once already in sync.
     syncViewportRenderHost();
 
+    // Editor UI/Workflow Overhaul plan, Phase 3: Properties is now driven
+    // directly by whatever ViewportComponent::desktopPick selects (via
+    // EditorInteraction), independent of Hierarchy (removed) ever existing.
     if (const auto selection = interactions_.takeSelectionChange())
-        hierarchyPanel_.SelectEntity(*selection);
+        propertiesPanel_.SetSelectedEntity(*selection);
     if (pendingSceneTransitionId_.isNotEmpty()) {
         const auto requestedScene = pendingSceneTransitionId_;
         pendingSceneTransitionId_.clear();
@@ -800,7 +779,6 @@ void MainComponent::timerCallback() {
         }
         frustHost_.tick(static_cast<std::int64_t>(world_.CurrentTick()));
     }
-    hierarchyPanel_.Refresh();
     propertiesPanel_.Refresh();
 }
 
@@ -934,19 +912,11 @@ bool MainComponent::openActiveGame(juce::String& errorMessage)
     if (!ce::project::EngineGameDocumentStore::loadScene(projectSession_, activeGame_, activeScene_, world_, errorMessage)) return false;
     viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
     frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
-    hierarchyPanel_.Refresh();
     propertiesPanel_.Refresh();
     games_ = games;
-    refreshExplorerPanel();
     headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName + " | " + activeGame_.name + " / " + activeScene_.name);
     saveAppSettings();
     return true;
-}
-
-void MainComponent::refreshExplorerPanel()
-{
-    explorerPanel_.setDocuments(games_, activeGame_.id, activeScene_.id);
-    explorerPanel_.setStatus(activeGame_.id.isEmpty() ? "No active game" : activeGame_.name + " / " + activeScene_.name);
 }
 
 void MainComponent::RefreshComboEventNodes()
@@ -1023,7 +993,6 @@ void MainComponent::HandleAssetDropped(const juce::String& description, juce::Po
     const auto result = ce::scene::ObjectFactory::instantiate(world_, objectDefinitions_, definitionId, dropPosition, error);
     if (result.root == entt::null) {
         headerBar_.setStatusText("Could not place \"" + displayName + "\": " + error);
-        refreshExplorerPanel();
         return;
     }
 
@@ -1057,7 +1026,6 @@ void MainComponent::HandleAssetDropped(const juce::String& description, juce::Po
             headerBar_.setStatusText("Placed \"" + displayName + "\", but its mesh hasn't loaded yet.");
         }
     }
-    refreshExplorerPanel();
 }
 
 void MainComponent::selectGame(const juce::String& gameId)
@@ -1083,7 +1051,6 @@ void MainComponent::selectGame(const juce::String& gameId)
         else {
             viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
             frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
-            refreshExplorerPanel();
             saveAppSettings();
         }
         return;
@@ -1102,7 +1069,6 @@ void MainComponent::selectScene(const juce::String& sceneId)
             activeScene_ = scene;
             viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
             frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
-            refreshExplorerPanel();
             saveAppSettings();
         }
         return;
@@ -1146,7 +1112,6 @@ void MainComponent::createGame()
         safeThis->PlaceStarterContent(chosenTemplate);
 
         safeThis->frustHost_.prepareLevel(static_cast<std::int64_t>(safeThis->world_.CurrentTick()));
-        safeThis->refreshExplorerPanel();
         safeThis->saveAppSettings();
         safeThis->headerBar_.setStatusText("Created " + game.name + " / " + scene.name);
     });
@@ -1262,12 +1227,16 @@ void MainComponent::createScene()
         safeThis->PlaceStarterContent(chosenTemplate);
 
         safeThis->frustHost_.prepareLevel(static_cast<std::int64_t>(safeThis->world_.CurrentTick()));
-        safeThis->refreshExplorerPanel();
         safeThis->saveAppSettings();
         safeThis->headerBar_.setStatusText("Created scene: " + scene.name);
     });
 }
 
+// Editor UI/Workflow Overhaul plan, Phase 3: temporarily uncalled -- their
+// only caller (ExplorerPanel's right-click "Rename...") is gone along with
+// Explorer itself. Kept, not deleted: Phase 4's Content Browser redesign
+// adds a right-click "Rename" action on Game/Scene rows that reuses this
+// exact dialog + EngineGameDocumentStore::renameGame/renameScene logic.
 void MainComponent::RenameGame(const juce::String& gameId)
 {
     const auto* found = std::find_if(games_.begin(), games_.end(), [&](const auto& g) { return g.id == gameId; });
@@ -1291,7 +1260,6 @@ void MainComponent::RenameGame(const juce::String& gameId)
             for (const auto& game : safeThis->games_)
                 if (game.id == gameId) safeThis->activeGame_ = game;
         safeThis->contentBrowserPanel_.Refresh();
-        safeThis->refreshExplorerPanel();
     }), true);
 }
 
@@ -1325,7 +1293,6 @@ void MainComponent::RenameScene(const juce::String& gameId, const juce::String& 
             for (const auto& s : targetGame->scenes)
                 if (s.id == sceneId) safeThis->activeScene_ = s;
         safeThis->contentBrowserPanel_.Refresh();
-        safeThis->refreshExplorerPanel();
     }), true);
 }
 

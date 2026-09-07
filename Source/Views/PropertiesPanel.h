@@ -42,12 +42,26 @@ public:
     void SetSelectedEntity(entt::entity entity);
     void Refresh();
 
+    // Editor UI/Workflow Overhaul plan, Phase 3: replaces HierarchyPanel's
+    // old Delete button (removed along with Hierarchy itself) -- fired
+    // right before the entity is actually destroyed, same timing
+    // HierarchyPanel::onEntityDestroying used to provide, so
+    // frustHost_.notifyObjectDestroyed still gets called with a still-valid
+    // entity.
+    std::function<void(entt::entity)> onEntityDestroying;
+
     void resized() override;
     void paint(juce::Graphics& g) override;
 
 private:
     class ContentHost;
 
+    void DeleteSelectedEntity();
+
+    engine::World& world_;
+    entt::entity selectedEntity_ = entt::null;
+
+    juce::TextButton deleteObjectButton_{ "Delete Object" };
     juce::Viewport scrollView_;
     std::unique_ptr<ContentHost> content_;
 
