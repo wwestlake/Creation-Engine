@@ -160,9 +160,9 @@ bool EngineFrustHost::loadObjectBehavior(const std::string& podId, const std::st
     return false;
 }
 
-void EngineFrustHost::dispatch(EngineFrustEvent event, std::int64_t argument)
+std::int64_t EngineFrustHost::dispatch(EngineFrustEvent event, std::int64_t argument)
 {
-    (void)runtime.callEvent(static_cast<std::int64_t>(event), argument);
+    return runtime.callEvent(static_cast<std::int64_t>(event), argument);
 }
 
 void EngineFrustHost::prepareLevel(std::int64_t tick)
