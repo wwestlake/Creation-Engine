@@ -250,6 +250,76 @@ juce::String BuildNodeDecomposedDefinitions(scene::ObjectDefinitionCatalog& cata
     return combinedNote;
 }
 
+// Builds the same "CreationEngineScene" ValueTree shape
+// EngineSceneSerializer::serializeScene produces from a live World -- one
+// Entity per independent part, referencing its Object Definition (matching
+// how EngineSceneSerializer::restoreScene already reads an
+// "objectDefinitionId" entity back in, the same shape any hand-authored
+// scene entity placed from Content Browser uses) at its recovered
+// transform. No live World needed here at all: this is assembled directly
+// from BuildNodeDecomposedDefinitions's own recovered data.
+juce::ValueTree BuildSceneValueTreeFromParts(const std::vector<ImportResult::PlacedPart>& parts) {
+    juce::ValueTree root("CreationEngineScene");
+    juce::ValueTree entitiesNode("Entities");
+    int64_t nextId = 1;
+    for (const auto& part : parts) {
+        juce::ValueTree entityNode("Entity");
+        entityNode.setProperty("id", nextId++, nullptr);
+        entityNode.setProperty("name", part.displayName, nullptr);
+        entityNode.setProperty("objectDefinitionId", part.objectDefinitionId, nullptr);
+
+        juce::ValueTree transformNode("Transform");
+        transformNode.setProperty("posX", part.posX, nullptr);
+        transformNode.setProperty("posY", part.posY, nullptr);
+        transformNode.setProperty("posZ", part.posZ, nullptr);
+        transformNode.setProperty("rotX", part.rotX, nullptr);
+        transformNode.setProperty("rotY", part.rotY, nullptr);
+        transformNode.setProperty("rotZ", part.rotZ, nullptr);
+        transformNode.setProperty("scaleX", part.scaleX, nullptr);
+        transformNode.setProperty("scaleY", part.scaleY, nullptr);
+        transformNode.setProperty("scaleZ", part.scaleZ, nullptr);
+        entityNode.addChild(transformNode, -1, nullptr);
+
+        entitiesNode.addChild(entityNode, -1, nullptr);
+    }
+    root.addChild(entitiesNode, -1, nullptr);
+    return root;
+}
+
+// Saves a generated Scene as a real, independent AssetKind::scene asset --
+// the exact envelope/save pattern EngineGameDocumentStore's own
+// CopyStarterScene (Project/EngineGameDocument.cpp) already uses for a
+// hand-authored pack scene, applied here to an import-generated one
+// instead. Deliberately NOT nested under any Game's own VFS path (unlike
+// CopyStarterScene's game.scenePath()) -- this Scene doesn't belong to a
+// specific Game at creation time, matching the "a Scene is a Project
+// asset, referenced by whichever Game wants it" model
+// (docs/ENGINE_ASSET_MANAGEMENT_PLAN.md).
+juce::String SaveGeneratedScene(creation::assets::ProjectSession& session, const juce::String& displayName,
+                                const std::vector<ImportResult::PlacedPart>& parts, juce::String& error) {
+    const auto sceneTree = BuildSceneValueTreeFromParts(parts);
+
+    juce::ValueTree document("CreationEngineSceneDocument");
+    document.setProperty("sceneName", displayName, nullptr);
+    document.addChild(sceneTree, -1, nullptr);
+
+    const auto xml = document.createXml();
+    const auto text = xml != nullptr ? xml->toString() : juce::String{};
+    const juce::MemoryBlock data(text.toRawUTF8(), static_cast<std::size_t>(text.getNumBytesAsUTF8()));
+
+    creation::assets::ProjectAssetService::ImportOptions options;
+    options.kind = creation::assets::AssetKind::scene;
+    options.displayName = displayName;
+    options.logicalPath = "scenes/" + displayName + ".xml";
+    options.mediaType = "application/x-creation-engine-scene";
+    options.sourceApp = "Creation Engine";
+    options.description = "Scene generated from import";
+    creation::assets::AssetDescriptor savedAsset;
+    if (! creation::assets::ProjectAssetService::saveGeneratedAsset(session, data, options, savedAsset, error))
+        return {};
+    return savedAsset.id;
+}
+
 } // namespace
 
 ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportContext& context) {
@@ -306,6 +376,22 @@ ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportConte
     // place-from-catalog treatment as Pods/Object Definitions).
     auto result = ImportResult::Ok(assetName + " stored in project content." + animationNote + objectDefinitionNote);
     result.createdAssetId = sourceDescriptor.id;
+
+    // "Mark as scene" (Import Hub metadata popup): the file represents a
+    // whole layout, not just a reusable asset -- generate a real,
+    // independent Scene asset from the recovered parts, on top of (not
+    // instead of) the Object Definitions already built above.
+    if (context.pendingIsSceneFile && !sceneParts.empty()) {
+        juce::String sceneError;
+        const auto sceneAssetId = SaveGeneratedScene(*context.projectSession, assetName, sceneParts, sceneError);
+        if (sceneAssetId.isNotEmpty()) {
+            result.createdSceneAssetId = sceneAssetId;
+            result.message += " Scene \"" + assetName + "\" created.";
+        } else {
+            result.message += " Could not create a Scene from this import: " + sceneError;
+        }
+    }
+
     result.sceneParts = std::move(sceneParts);
     return result;
 }
