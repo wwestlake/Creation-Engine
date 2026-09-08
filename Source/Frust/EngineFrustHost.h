@@ -50,7 +50,7 @@ public:
     bool load(const std::string& pluginPath, std::string& error);
     bool loadBundled(std::string& error);
     bool loadObjectBehavior(const std::string& podId, const std::string& pluginPath, std::string& error);
-    void dispatch(EngineFrustEvent event, std::int64_t argument = 0);
+    std::int64_t dispatch(EngineFrustEvent event, std::int64_t argument = 0);
     void prepareLevel(std::int64_t tick);
     void beginPlay(std::int64_t tick);
     void tick(std::int64_t tick);

@@ -12,19 +12,17 @@ pub fn on_init() -> i64 = {
     engine_current_tick()
 }
 
+// on_event ran a one-time proof (a deliberate sawtooth: engine_set_position_x
+// driven straight off argument%8, wrapping 0->7->0 every 8 ticks) that the
+// transform/tick/material-parameter host-function plumbing actually works
+// end to end. It proved out -- and also turned out to be exactly the
+// "world slides then snaps back" symptom reported over this session,
+// because this plugin auto-loads under the engine's own default plugin
+// slot and receives every simulationTick dispatch in every real session,
+// not just a deliberate stress-test run. The proof is done; on_event is a
+// no-op now so this stress test never runs unless someone puts the two
+// engine_set_* calls back deliberately for another one.
 pub fn on_event(id: i64, argument: i64) -> i64 = {
-    let entity = engine_first_transform_entity();
-    engine_set_position_x(entity, argument % 8);
-    // Proof that a Vector Parameter node compiled into an entity's
-    // material (Materials panel -> "TintColor") can be driven live from
-    // FRust: red at argument%8==0, green at argument%8==4, a straight
-    // lerp between at every step in between. A no-op if the entity's
-    // material has no parameter named "TintColor" -- the override just
-    // sits unused until one does.
-    let phase = argument % 8;
-    let red = 255 - (phase * 255 / 8);
-    let green = phase * 255 / 8;
-    engine_set_material_color_parameter(entity, "TintColor", red, green, 0);
     engine_current_tick() + id + argument
 }
 
