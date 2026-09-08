@@ -98,6 +98,17 @@ struct ImportResult {
     // harmless default for every importer that doesn't set it.
     juce::String createdAssetId;
 
+    // The durable AssetKind::scene id of a real, independently-saved Scene
+    // asset the import produced -- set only when ImportContext::pendingIsSceneFile
+    // was true and the file actually decomposed into placeable parts (see
+    // GltfAssetImporter::Import). Empty when no scene was generated (the
+    // toggle was off, or the file had no mesh-bearing content to place).
+    // The generated Scene is a real, independent, listable/openable Thing
+    // in Content Browser, same as any hand-authored scene -- not a
+    // transient in-memory layout tied to whatever caller happened to
+    // trigger the import.
+    juce::String createdSceneAssetId;
+
     // One entry per independent top-level Object Definition the import
     // produced (see docs/OBJECT_MODEL.md's "Multi-part import decomposes
     // into components" and GltfAssetImporter's own BuildNodeDecomposedDefinitions
