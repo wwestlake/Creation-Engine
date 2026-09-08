@@ -242,7 +242,17 @@ void ExtractNodes(const cgltf_data& data, LoadedModel& outModel) {
     }
 }
 
-// Extracts materials (with baseColorTextureUri left for the caller to
+// One material's texture URIs, left for the caller to resolve into a disk
+// or virtual path (LoadGltf/LoadGltfFromVfs) -- mirrors LoadedMaterial's
+// own three texture slots exactly, just as bare strings before either
+// resolution mode applies its own base-path join.
+struct MaterialTextureUris {
+    juce::String baseColor;
+    juce::String metallicRoughness;
+    juce::String normal;
+};
+
+// Extracts materials (with each texture URI left for the caller to
 // resolve into a disk or virtual path) and triangle-list primitives from
 // an already-parsed+buffer-loaded cgltf_data. Shared by both LoadGltf
 // and LoadGltfFromVfs — everything past "how were the bytes read" is
@@ -259,7 +269,24 @@ juce::String ExtractDjehutiAssetId(const cgltf_asset& asset) {
     return {};
 }
 
-void ExtractModel(const cgltf_data& data, LoadedModel& outModel, std::vector<juce::String>& outMaterialTextureUris) {
+// Reads one cgltf_texture's image URI, warning (and returning empty) for
+// an embedded/base64 image the same way the base-color extraction always
+// has -- shared so metallic-roughness/normal get the identical treatment
+// rather than a second, slightly-different copy of this check.
+juce::String ExtractTextureUri(const cgltf_texture* texture, int materialIndex, const char* slotName) {
+    if (texture == nullptr || texture->image == nullptr) return {};
+    const cgltf_image& image = *texture->image;
+    const juce::String uri = image.uri != nullptr ? juce::String(image.uri) : juce::String();
+    if (uri.isNotEmpty() && !uri.startsWith("data:")) return uri;
+    // Embedded (buffer_view) or base64 data-URI images aren't decoded yet
+    // -- Texture2D only reads named files/entries today.
+    ce::diagnostics::EngineLog::Warning(
+        "GLTF", "Material " + juce::String(materialIndex) + " has an embedded/data-URI " + juce::String(slotName) +
+                     " image; not yet supported, skipping texture.");
+    return {};
+}
+
+void ExtractModel(const cgltf_data& data, LoadedModel& outModel, std::vector<MaterialTextureUris>& outMaterialTextureUris) {
     outModel.djehutiAssetId = ExtractDjehutiAssetId(data.asset);
     outModel.materials.reserve(data.materials_count);
     outMaterialTextureUris.reserve(data.materials_count);
@@ -267,7 +294,7 @@ void ExtractModel(const cgltf_data& data, LoadedModel& outModel, std::vector<juc
     for (cgltf_size m = 0; m < data.materials_count; ++m) {
         const cgltf_material& src = data.materials[m];
         LoadedMaterial material;
-        juce::String textureUri;
+        MaterialTextureUris textureUris;
 
         if (src.has_pbr_metallic_roughness) {
             const auto& pbr = src.pbr_metallic_roughness;
@@ -276,25 +303,14 @@ void ExtractModel(const cgltf_data& data, LoadedModel& outModel, std::vector<juc
             material.metallicFactor = pbr.metallic_factor;
             material.roughnessFactor = pbr.roughness_factor;
 
-            const cgltf_texture* baseColorTexture = pbr.base_color_texture.texture;
-            if (baseColorTexture != nullptr && baseColorTexture->image != nullptr) {
-                const cgltf_image& image = *baseColorTexture->image;
-                const juce::String uri = image.uri != nullptr ? juce::String(image.uri) : juce::String();
-
-                if (uri.isNotEmpty() && !uri.startsWith("data:")) {
-                    textureUri = uri;
-                } else {
-                    // Embedded (buffer_view) or base64 data-URI images aren't
-                    // decoded yet — Texture2D only reads named files/entries today.
-                    ce::diagnostics::EngineLog::Warning(
-                        "GLTF", "Material " + juce::String(static_cast<int>(m)) +
-                                     " has an embedded/data-URI base color image; not yet supported, skipping texture.");
-                }
-            }
+            textureUris.baseColor = ExtractTextureUri(pbr.base_color_texture.texture, static_cast<int>(m), "base color");
+            textureUris.metallicRoughness =
+                ExtractTextureUri(pbr.metallic_roughness_texture.texture, static_cast<int>(m), "metallic-roughness");
         }
+        textureUris.normal = ExtractTextureUri(src.normal_texture.texture, static_cast<int>(m), "normal");
 
         outModel.materials.push_back(material);
-        outMaterialTextureUris.push_back(textureUri);
+        outMaterialTextureUris.push_back(textureUris);
     }
 
     outModel.meshPrimitiveRanges.resize(data.meshes_count);
@@ -488,13 +504,19 @@ bool LoadGltf(const juce::File& gltfFile, LoadedModel& outModel) {
         return false;
     }
 
-    std::vector<juce::String> textureUris;
+    std::vector<MaterialTextureUris> textureUris;
     ExtractModel(*data, outModel, textureUris);
 
     const juce::File baseDir = gltfFile.getParentDirectory();
     for (std::size_t i = 0; i < outModel.materials.size(); ++i) {
-        if (textureUris[i].isNotEmpty()) {
-            outModel.materials[i].baseColorTexturePath = baseDir.getChildFile(textureUris[i]);
+        if (textureUris[i].baseColor.isNotEmpty()) {
+            outModel.materials[i].baseColorTexturePath = baseDir.getChildFile(textureUris[i].baseColor);
+        }
+        if (textureUris[i].metallicRoughness.isNotEmpty()) {
+            outModel.materials[i].metallicRoughnessTexturePath = baseDir.getChildFile(textureUris[i].metallicRoughness);
+        }
+        if (textureUris[i].normal.isNotEmpty()) {
+            outModel.materials[i].normalTexturePath = baseDir.getChildFile(textureUris[i].normal);
         }
     }
 
@@ -541,7 +563,7 @@ bool LoadGltfFromVfs(creation::assets::VirtualFileSystem& vfs, const juce::Strin
         return false;
     }
 
-    std::vector<juce::String> textureUris;
+    std::vector<MaterialTextureUris> textureUris;
     ExtractModel(*data, outModel, textureUris);
 
     // upToLastOccurrenceOf returns the whole input unchanged when the
@@ -551,8 +573,14 @@ bool LoadGltfFromVfs(creation::assets::VirtualFileSystem& vfs, const juce::Strin
     const juce::String virtualBaseDir =
         lastSlash >= 0 ? virtualGltfPath.substring(0, lastSlash + 1) : juce::String();
     for (std::size_t i = 0; i < outModel.materials.size(); ++i) {
-        if (textureUris[i].isNotEmpty()) {
-            outModel.materials[i].baseColorTextureVirtualPath = virtualBaseDir + textureUris[i];
+        if (textureUris[i].baseColor.isNotEmpty()) {
+            outModel.materials[i].baseColorTextureVirtualPath = virtualBaseDir + textureUris[i].baseColor;
+        }
+        if (textureUris[i].metallicRoughness.isNotEmpty()) {
+            outModel.materials[i].metallicRoughnessTextureVirtualPath = virtualBaseDir + textureUris[i].metallicRoughness;
+        }
+        if (textureUris[i].normal.isNotEmpty()) {
+            outModel.materials[i].normalTextureVirtualPath = virtualBaseDir + textureUris[i].normal;
         }
     }
 

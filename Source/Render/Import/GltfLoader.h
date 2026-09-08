@@ -76,6 +76,27 @@ struct LoadedMaterial {
     float roughnessFactor = 1.0f;
     juce::File baseColorTexturePath;          // set by LoadGltf (disk mode); invalid if unset.
     juce::String baseColorTextureVirtualPath; // set by LoadGltfFromVfs (VFS mode); empty if unset.
+
+    // glTF's metallicRoughnessTexture: G channel = roughness, B channel =
+    // metallic (glTF spec, "Metal-Roughness Material") -- the same texture
+    // slot the Blender/Substance/etc. "ORM" export convention packs both
+    // into. Same disk-vs-VFS duality as baseColorTexturePath above.
+    juce::File metallicRoughnessTexturePath;
+    juce::String metallicRoughnessTextureVirtualPath;
+
+    // glTF's normalTexture -- a tangent-space normal map. Extracted so the
+    // importer's generated Material Graph can at least present a Texture
+    // Sample node for it, but NOT yet wired to Material Output's normal
+    // input anywhere: the compiled-graph pipeline (material_compiler.cpp)
+    // has no tangent basis to decode a tangent-space sample into a valid
+    // world-space normal, so wiring it directly would render worse than
+    // leaving it unconnected (a warped, upside-down-looking surface, not
+    // just a subtle inaccuracy). Real tangent-space normal mapping needs
+    // its own follow-on work (a tangent vertex attribute + TBN
+    // construction in the material host shaders), not something this
+    // field's presence implies is already solved.
+    juce::File normalTexturePath;
+    juce::String normalTextureVirtualPath;
 };
 
 // One node in the glTF file's scene graph, flattened the same way
