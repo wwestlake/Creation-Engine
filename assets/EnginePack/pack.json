@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
   "id": "com.lagdaemon.creation-engine",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "title": "Creation Engine Pack",
   "defaultScene": "scenes/DefaultScene.xml",
   "assets": [

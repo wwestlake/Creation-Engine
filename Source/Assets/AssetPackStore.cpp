@@ -155,8 +155,18 @@ bool AssetPackStore::materializePack(const juce::String& id, const juce::String&
         error = "Could not create the temporary Asset Pack decoder cache.";
         return false;
     }
-    for (const auto& fullPath : paths)
+    for (const auto& rawPath : paths)
     {
+        // listEntries() returns each entry's raw storage key, which carries
+        // a "suite/" segment readEntry()'s own logicalPath parameter never
+        // expects (readManifest/readScene above call readEntry with bare
+        // vfsRoot()-relative paths, and that already works correctly) --
+        // strip it back off before comparing against `root` or reading.
+        // Without this, fullPath.startsWith(root) never matched anything
+        // (every entry starts with "suite/asset-packs/...", root is bare
+        // "asset-packs/..."), so materializePack silently produced an
+        // empty cache directory for every Asset Pack version, always.
+        const auto fullPath = rawPath.startsWith("suite/") ? rawPath.substring(6) : rawPath;
         if (! fullPath.startsWith(root)) continue;
         const auto relative = fullPath.substring(root.length());
         juce::MemoryBlock data;
