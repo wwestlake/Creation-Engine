@@ -8,7 +8,15 @@ class CreationEngineApplication final : public juce::JUCEApplication {
 public:
     const juce::String getApplicationName() override { return "Creation Engine"; }
     const juce::String getApplicationVersion() override { return "0.0.1"; }
-    bool moreThanOneInstanceAllowed() override { return true; }
+
+    // Single-instance: launching the exe again (a shortcut double-click, a
+    // tool relaunching it to "make sure it's running") must focus the
+    // already-open window, not start a second process pointed at the same
+    // project/VFS. JUCE's START_JUCE_APPLICATION macro handles the actual
+    // IPC handshake -- with this false, a second launch attempt sends its
+    // command line to the first instance's anotherInstanceStarted() below
+    // and quits immediately, never reaching initialise() itself.
+    bool moreThanOneInstanceAllowed() override { return false; }
 
     void initialise(const juce::String&) override {
         // Installed before anything else runs so every juce::Logger::
@@ -17,6 +25,12 @@ public:
         // JuceLoggerBridge's header comment.
         juce::Logger::setCurrentLogger(&loggerBridge_);
         mainWindow_.reset(new MainWindow(getApplicationName()));
+    }
+
+    void anotherInstanceStarted(const juce::String&) override {
+        if (mainWindow_ == nullptr) return;
+        if (auto* peer = mainWindow_->getPeer(); peer != nullptr && peer->isMinimised()) peer->setMinimised(false);
+        mainWindow_->toFront(true);
     }
 
     void shutdown() override {
