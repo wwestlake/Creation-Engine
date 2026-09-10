@@ -16,7 +16,7 @@ public:
     };
 
     static constexpr const char* packId = "com.lagdaemon.creation-engine";
-    static constexpr const char* version = "1.0.8";
+    static constexpr const char* version = "1.0.9";
 
     static bool ensureInstalled(juce::String& errorMessage);
     static bool readDefaultScene(juce::MemoryBlock& sceneData, juce::String& errorMessage);

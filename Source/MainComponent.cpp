@@ -68,6 +68,11 @@ constexpr DockPanelMenuEntry kDockPanelMenuEntries[] = {
     // Pod/Asset Workflow plan Phase 5.
 };
 
+void showOperationError(const juce::String& title, const juce::String& detail)
+{
+    juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, title, detail);
+}
+
 class NonOwningPanelHost final : public juce::Component
 {
 public:
@@ -112,10 +117,9 @@ MainComponent::MainComponent()
     commandManager_.getKeyMappings()->addKeyPress(kRedoInteractionCommand, juce::KeyPress('Y', juce::ModifierKeys::ctrlModifier, 0));
     addKeyListener(commandManager_.getKeyMappings());
 
-    // See viewportRenderHost_'s header comment: an always-alive host for
-    // the 3D viewport's GL context, outside the dock tree, kept behind
-    // everything and never hidden. Its bounds are synced to viewport_'s
-    // own bounds by componentMovedOrResized() below.
+    // Keep the GL host outside the dock tree so switching tabs never tears
+    // down its context. It must sit above the dock manager within the Scene
+    // Viewport rectangle, however: the dock manager paints an opaque canvas.
     // A real nonzero starting size, not (0,0,0,0) -- JUCE never actually
     // creates the attached OpenGLContext against a component that starts
     // out zero-sized (confirmed by testing: newOpenGLContextCreated()
@@ -125,7 +129,6 @@ MainComponent::MainComponent()
     viewportRenderHost_.setBounds(0, 0, 1280, 720);
     addAndMakeVisible(viewportRenderHost_);
     viewportRenderHost_.setInterceptsMouseClicks(false, false);
-    viewportRenderHost_.toBack();
     viewport_.addComponentListener(this);
 
     juce::String suiteErr;
@@ -357,8 +360,11 @@ MainComponent::MainComponent()
     startTimerHz(30);
 
     juce::String projectError;
-    if (!ensureProjectSessionActive(projectError) && projectError.isNotEmpty())
+    if (!ensureProjectSessionActive(projectError)) {
         headerBar_.setStatusText("Project setup: " + projectError);
+        startupProjectRetryPending_ = true;
+        nextStartupProjectRetrySeconds_ = juce::Time::getMillisecondCounterHiRes() / 1000.0 + 0.75;
+    }
 }
 
 MainComponent::~MainComponent() {
@@ -574,6 +580,10 @@ void MainComponent::syncViewportRenderHost()
 {
     if (viewport_.isShowing()) {
         viewportRenderHost_.setBounds(getLocalArea(&viewport_, viewport_.getLocalBounds()));
+        // The viewport component is an input proxy inside the dock panel;
+        // its actual OpenGL pixels are rendered by this sibling host. Bring
+        // the host forward after docking has laid out its opaque background.
+        viewportRenderHost_.toFront(false);
     } else {
         // Parked off-canvas, not hidden -- see viewportRenderHost_'s
         // header comment for why setVisible(false) is off the table here.
@@ -941,6 +951,25 @@ void MainComponent::SetPlaying(bool playing) {
 }
 
 void MainComponent::timerCallback() {
+    if (startupProjectRetryPending_ && !projectSession_.isValid()) {
+        const double nowSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+        if (nowSeconds >= nextStartupProjectRetrySeconds_) {
+            juce::String projectError;
+            if (ensureProjectSessionActive(projectError)) {
+                startupProjectRetryPending_ = false;
+                saveAppSettings();
+            } else if (++startupProjectRetryAttempts_ >= 5) {
+                startupProjectRetryPending_ = false;
+                juce::AlertWindow::showMessageBoxAsync(
+                    juce::MessageBoxIconType::WarningIcon,
+                    "Project Setup Failed",
+                    "Djehuti Engine could not open a suite project after the VFS service became available.\n\n" + projectError);
+            } else {
+                nextStartupProjectRetrySeconds_ = nowSeconds + 0.75;
+            }
+        }
+    }
+
     // Catch-all for viewportRenderHost_ sync (see its own comment):
     // viewport_'s bounds/visible flag can already be in their final state
     // before the top-level window itself actually becomes visible, so
@@ -1199,13 +1228,23 @@ bool MainComponent::openActiveGame(juce::String& errorMessage)
         errorMessage = "No Suite project is open.";
         return false;
     }
-    // ensureInitialGame's auto-creation stays unconditional here -- a
-    // project's first Game still gets a real starter Scene the moment it's
-    // created ("a blank game has a starter scene"), independent of whether
-    // anything was ever remembered as last-opened.
+    // A project with no game catalog is a known first-open state. Its
+    // generated Game and entry Scene must become active immediately; this is
+    // explicit first-project initialization, not a fallback for an existing
+    // project's intentionally empty selection.
+    const bool creatingInitialGame = !projectSession_.containsEntry(ce::project::EngineGameDocumentStore::catalogPath);
     juce::Array<ce::project::GameDocumentInfo> games;
     if (!ce::project::EngineGameDocumentStore::ensureInitialGame(projectSession_, games, errorMessage)) return false;
     games_ = games;
+    if (creatingInitialGame && !games_.isEmpty()) {
+        const auto& initialGame = games_.getFirst();
+        ce::project::SceneDocumentInfo initialScene;
+        for (const auto& scene : initialGame.scenes)
+            if (scene.id == initialGame.entrySceneId) { initialScene = scene; break; }
+        if (initialScene.id.isEmpty() && !initialGame.scenes.isEmpty())
+            initialScene = initialGame.scenes.getFirst();
+        return LoadGameAndScene(initialGame, initialScene, errorMessage);
+    }
     return LoadLastOpenedGameAndScene(errorMessage);
 }
 
@@ -1511,7 +1550,7 @@ void MainComponent::selectGame(const juce::String& gameId)
         if (entryScene.id.isEmpty() && !game.scenes.isEmpty()) entryScene = game.scenes.getFirst();
         juce::String error;
         if (!LoadGameAndScene(game, entryScene, error))
-            headerBar_.setStatusText("Could not open game: " + error);
+            showOperationError("Could Not Open Game", error);
         return;
     }
 }
@@ -1524,7 +1563,7 @@ void MainComponent::selectScene(const juce::String& sceneId)
         saveSessionToDisk(false);
         juce::String error;
         if (!LoadGameAndScene(activeGame_, scene, error))
-            headerBar_.setStatusText("Could not open scene: " + error);
+            showOperationError("Could Not Open Scene", error);
         return;
     }
 }
@@ -1541,7 +1580,7 @@ void MainComponent::createGame()
         const auto templateSceneId = chosenTemplate.starterSceneTemplateId.isEmpty() ? "DefaultScene" : chosenTemplate.starterSceneTemplateId;
         if (!ce::project::EngineGameDocumentStore::createGame(safeThis->projectSession_, name, game, scene, error, templateSceneId) ||
             !safeThis->projectSession_.commit(error)) {
-            safeThis->headerBar_.setStatusText("Could not create game: " + error);
+            showOperationError("Could Not Create Game", error);
             return;
         }
         safeThis->games_.add(game);
@@ -1664,14 +1703,14 @@ void MainComponent::createScene()
         if (!ce::project::EngineGameDocumentStore::createScene(safeThis->projectSession_, safeThis->activeGame_, name, scene,
                                                                 error, templateSceneId) ||
             !safeThis->projectSession_.commit(error)) {
-            safeThis->headerBar_.setStatusText("Could not create scene: " + error);
+            showOperationError("Could Not Create Scene", error);
             return;
         }
         for (auto& game : safeThis->games_)
             if (game.id == safeThis->activeGame_.id) game = safeThis->activeGame_;
 
         if (!safeThis->LoadGameAndScene(safeThis->activeGame_, scene, error)) {
-            safeThis->headerBar_.setStatusText("Created scene, but could not load it: " + error);
+            showOperationError("Created Scene Could Not Be Loaded", error);
             return;
         }
 
