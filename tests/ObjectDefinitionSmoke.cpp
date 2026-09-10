@@ -47,6 +47,19 @@ int main()
         return 1;
     }
 
+    // glTF exporters can use a non-mesh source root to convert source axes
+    // and units. That transform belongs to the assembled definition and
+    // must survive instantiation instead of being silently discarded.
+    ce::scene::ObjectDefinition sourceSpaceAssembly;
+    sourceSpaceAssembly.id = "source_space_assembly";
+    sourceSpaceAssembly.displayName = "Source Space Assembly";
+    sourceSpaceAssembly.initialTransform.eulerRotationRadians.x = juce::MathConstants<float>::halfPi;
+    sourceSpaceAssembly.initialTransform.scale = { 0.1f, 0.1f, 0.1f };
+    if (!catalog.upsert(std::move(sourceSpaceAssembly), error)) {
+        std::cerr << error << '\n';
+        return 1;
+    }
+
     ce::scene::ObjectDefinition invalidAssembly;
     invalidAssembly.id = "invalid-assembly";
     invalidAssembly.components.push_back({ "known-component" });
@@ -71,6 +84,19 @@ int main()
     }
 
     ce::engine::World world;
+    const auto sourceSpaceInstance = ce::scene::ObjectFactory::instantiate(world, catalog, "source_space_assembly", {}, error);
+    if (sourceSpaceInstance.root == entt::null) {
+        std::cerr << "Source-space definition did not instantiate: " << error << '\n';
+        return 1;
+    }
+    const auto& sourceSpaceTransform = world.Registry().get<ce::scene::Transform>(sourceSpaceInstance.root);
+    if (sourceSpaceTransform.eulerRotationRadians.x != juce::MathConstants<float>::halfPi ||
+        sourceSpaceTransform.scale.x != 0.1f || sourceSpaceTransform.scale.y != 0.1f ||
+        sourceSpaceTransform.scale.z != 0.1f) {
+        std::cerr << "Source-root transform was lost during object definition instantiation." << '\n';
+        return 1;
+    }
+
     const auto instance = ce::scene::ObjectFactory::instantiate(world, restored, "assembly_alpha", { 10.0f, 0.0f, 0.0f }, error);
     // 3 entities now, not 2: the assembly root, its Mesh entry's child
     // entity (every Mesh entry is always its own child -- see
@@ -118,7 +144,7 @@ int main()
         // double-transform bug: WorldModelMatrix already composes this
         // child against the root's own (10,0,0) at query time, so baking
         // it in here too would double-count it.
-        meshTransform.position.x != 0.0f || handleParent.value != instance.root ||
+        meshTransform.position.x != 0.0f || meshParent.value != instance.root ||
         // Same check for the nested Child entry: its own Transform stores
         // only its LOCAL offset (1.0, the child assembly's initialTransform),
         // not the drop position added in -- but the WORLD-composed value

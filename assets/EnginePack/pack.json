@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
   "id": "com.lagdaemon.creation-engine",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "title": "Djehuti Engine Pack",
   "defaultScene": "scenes/DefaultScene.xml",
   "defaultInputMapping": "input-mappings/standard-desktop-controls.json",

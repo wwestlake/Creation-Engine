@@ -674,6 +674,17 @@ target_include_directories(CreationEngineCharacterControllerSmoke PRIVATE Source
 target_link_libraries(CreationEngineCharacterControllerSmoke PRIVATE Jolt::Jolt engine_core)
 add_test(NAME creation_engine_character_controller_smoke COMMAND CreationEngineCharacterControllerSmoke)
 
+# DefaultScene is authored starter content, not a runtime auto-collider
+# exception. Keep its visible geometry and explicit static collision setup in
+# lockstep so a newly created Game always gives a possessed character ground.
+add_executable(CreationEngineDefaultScenePhysicsSmoke
+    tests/DefaultScenePhysicsSmoke.cpp
+)
+target_compile_definitions(CreationEngineDefaultScenePhysicsSmoke PRIVATE
+    CE_DEFAULT_SCENE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/EnginePack/scenes/DefaultScene.xml"
+)
+add_test(NAME creation_engine_default_scene_physics_smoke COMMAND CreationEngineDefaultScenePhysicsSmoke)
+
 # --- Dedicated server executable ------------------------------------------
 # Headless build: no rendering or client-only assets. Only juce_core and
 # juce_events provide cross-platform utilities for the server shell.

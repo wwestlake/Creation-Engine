@@ -221,6 +221,13 @@ private:
     creation::suite::SuiteSettingsStore suiteSettingsStore_;
     creation::assets::ProjectSession projectSession_;
 
+    // The VFS service is launched on demand. At cold startup it can register
+    // just after this component's first project-open attempt, so retry a
+    // bounded number of times instead of leaving the editor in a dead shell.
+    bool startupProjectRetryPending_ = false;
+    int startupProjectRetryAttempts_ = 0;
+    double nextStartupProjectRetrySeconds_ = 0.0;
+
     // Makes this process discoverable to CreationSuiteVfsService's idle
     // check (suiteHasAnyOtherLiveApp() in the service's Main.cpp) --
     // without this, the service can never see a live suite app and

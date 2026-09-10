@@ -83,14 +83,12 @@ void ApplyAnimationImportOptions(LoadedModel& model, const AnimationImportOption
 // node's own file-space offset as if they were meaningfully related,
 // which they weren't).
 //
-// A node with no parent (the ultimate root of its own group) gets
-// meshLocalTransform == identity, not its own authored local transform --
-// that transform only ever meant "this object's position relative to
-// its sibling objects in the file's own arbitrary space," which stops
-// meaning anything once it's split out into its own independent
-// definition. A node WITH a real parent keeps its transform relative to
-// that parent exactly as authored -- genuine, meaningful relationship
-// data, composed the same way as before.
+// A node with no parent is still authored data. In particular, glTF
+// exporters use a wrapper root for coordinate-system and unit conversion
+// (MakeHuman exports +90 degrees on X and a 0.1 scale here). Keep that
+// transform on ObjectDefinition::initialTransform. Mesh components remain
+// local to the definition root, so the source-root conversion is applied
+// exactly once for every instance.
 //
 // There is deliberately no special case for exactly one mesh-bearing
 // node: a node's own local transform (relative to its REAL parent, if it
@@ -174,15 +172,25 @@ juce::String BuildNodeDecomposedDefinitions(scene::ObjectDefinitionCatalog& cata
             ? existingId : scene::GenerateWrapperDefinitionName(catalog, groupDisplayName);
         definition.displayName = groupDisplayName;
 
+        // Preserve the true root's coordinate and unit conversion. This is
+        // not scene placement: it defines the local space of the reusable
+        // assembled object itself.
+        const auto& rootNode = model.nodes[static_cast<std::size_t>(rootNodeIndex)];
+        definition.initialTransform.position = { rootNode.localTranslation.x, rootNode.localTranslation.y,
+                                                 rootNode.localTranslation.z };
+        definition.initialTransform.eulerRotationRadians = { rootNode.localEulerRotationRadians.x,
+                                                               rootNode.localEulerRotationRadians.y,
+                                                               rootNode.localEulerRotationRadians.z };
+        definition.initialTransform.scale = { rootNode.localScale.x, rootNode.localScale.y, rootNode.localScale.z };
+
         for (const int nodeIndex : groupNodeIndices) {
             // Walk up to (but NOT including) this group's own root, then
             // compose top-down -- meshLocalTransform ends up relative to
             // the root's own space, matching what instantiateDefinition
             // composes it against (the definition root entity's own
-            // transform). The root's own authored transform is
-            // deliberately excluded (see this function's header comment)
-            // -- for nodeIndex == rootNodeIndex, chain is empty and
-            // composed stays identity.
+            // transform). The root's own authored transform is carried by
+            // definition.initialTransform, so this child-local chain
+            // deliberately starts below that root.
             std::vector<int> chain;
             for (int idx = nodeIndex; idx != rootNodeIndex; idx = model.nodes[static_cast<std::size_t>(idx)].parentIndex) {
                 chain.push_back(idx);
@@ -234,22 +242,12 @@ juce::String BuildNodeDecomposedDefinitions(scene::ObjectDefinitionCatalog& cata
         combinedNote += " Also created Object Definition \"" + definition.id + "\" (" +
                juce::String(static_cast<int>(groupNodeIndices.size())) + " parts).";
 
-        // The root's own authored local transform IS its position in the
-        // overall file's coordinate space -- it has no parent (that's the
-        // definition of "root" here), so unlike every other node's local
-        // transform (relative to a real parent, composed above), this one
-        // was never included in meshLocalTransform on purpose. For a
-        // single-group file this is always identity (no real siblings to
-        // be relative to); for a multi-root file this is exactly the
-        // "where this object sat relative to the rest of the layout" data
-        // a scene-style import needs to reconstruct.
-        const auto& rootNode = model.nodes[static_cast<std::size_t>(rootNodeIndex)];
         ImportResult::PlacedPart part;
         part.objectDefinitionId = definition.id;
         part.displayName = groupDisplayName;
-        part.posX = rootNode.localTranslation.x; part.posY = rootNode.localTranslation.y; part.posZ = rootNode.localTranslation.z;
-        part.rotX = rootNode.localEulerRotationRadians.x; part.rotY = rootNode.localEulerRotationRadians.y; part.rotZ = rootNode.localEulerRotationRadians.z;
-        part.scaleX = rootNode.localScale.x; part.scaleY = rootNode.localScale.y; part.scaleZ = rootNode.localScale.z;
+        // The definition already owns the source-root transform above.
+        // Leave an auto-created scene instance at identity so it cannot
+        // apply coordinate conversion and units a second time.
         outSceneParts.push_back(std::move(part));
     }
     return combinedNote;
