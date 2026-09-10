@@ -1,0 +1,41 @@
+{
+  "formatVersion": 1,
+  "kind": "djehuti.input-mapping",
+  "id": "standard-desktop-controls",
+  "title": "Standard Desktop Controls",
+  "contexts": [
+    {
+      "id": "editor-play",
+      "actions": [
+        { "name": "MoveForward", "kind": "digital", "bindings": [ { "source": "keyboard", "code": 87 } ] },
+        { "name": "MoveBackward", "kind": "digital", "bindings": [ { "source": "keyboard", "code": 83 } ] },
+        { "name": "MoveLeft", "kind": "digital", "bindings": [ { "source": "keyboard", "code": 65 } ] },
+        { "name": "MoveRight", "kind": "digital", "bindings": [ { "source": "keyboard", "code": 68 } ] },
+        { "name": "Jump", "kind": "digital", "bindings": [ { "source": "keyboard", "code": 32 } ] },
+        { "name": "Sprint", "kind": "digital", "bindings": [ { "source": "modifier", "code": "shift" } ] },
+        { "name": "Crouch", "kind": "digital", "bindings": [ { "source": "modifier", "code": "control" } ] },
+        { "name": "Interact", "kind": "digital", "bindings": [ { "source": "keyboard", "code": 69 } ] },
+        { "name": "CameraMode", "kind": "digital", "bindings": [ { "source": "keyboard", "code": 86 } ] }
+      ],
+      "combos": []
+    },
+    {
+      "id": "gameplay",
+      "actions": [
+        { "name": "MoveForward", "kind": "digital", "bindings": [ { "source": "keyboard", "code": 87 } ] },
+        { "name": "MoveBackward", "kind": "digital", "bindings": [ { "source": "keyboard", "code": 83 } ] },
+        { "name": "MoveLeft", "kind": "digital", "bindings": [ { "source": "keyboard", "code": 65 } ] },
+        { "name": "MoveRight", "kind": "digital", "bindings": [ { "source": "keyboard", "code": 68 } ] },
+        { "name": "Jump", "kind": "digital", "bindings": [ { "source": "keyboard", "code": 32 } ] },
+        { "name": "Sprint", "kind": "digital", "bindings": [ { "source": "modifier", "code": "shift" } ] },
+        { "name": "Crouch", "kind": "digital", "bindings": [ { "source": "modifier", "code": "control" } ] },
+        { "name": "Interact", "kind": "digital", "bindings": [ { "source": "keyboard", "code": 69 } ] },
+        { "name": "CameraMode", "kind": "digital", "bindings": [ { "source": "keyboard", "code": 86 } ] }
+      ],
+      "combos": []
+    },
+    { "id": "vr-editor", "actions": [], "combos": [] },
+    { "id": "vr-gameplay", "actions": [], "combos": [] }
+  ],
+  "playerSlotOverrides": {}
+}

@@ -5,6 +5,7 @@
 
 #include <creation/assets/ProjectAssetService.h>
 
+#include "Assets/EngineAssetPack.h"
 #include "Import/AssetImporter.h"
 #include "Import/ImporterRegistry.h"
 #include "Render/ViewportComponent.h"
@@ -109,8 +110,8 @@ juce::String GenerateDefaultObjectDefinitionName(scene::ObjectDefinitionCatalog&
 class ContentBrowserPanel::AssetRow final : public juce::Component,
                                             public juce::SettableTooltipClient {
 public:
-    AssetRow(ContentBrowserPanel& owner, creation::assets::AssetDescriptor descriptor)
-        : owner_(owner), descriptor_(std::move(descriptor)), placeable_(IsPlaceableKind(descriptor_.kind)) {
+    AssetRow(ContentBrowserPanel& owner, creation::assets::AssetDescriptor descriptor, bool readOnly = false)
+        : owner_(owner), descriptor_(std::move(descriptor)), placeable_(IsPlaceableKind(descriptor_.kind)), readOnly_(readOnly) {
         // Every plain label below opts out of its own mouse handling --
         // juce::Label claims clicks for itself by default (it needs to,
         // to detect a double-click into inline-edit mode even when not
@@ -137,19 +138,22 @@ public:
         addAndMakeVisible(categoryLabel_);
 
         sizeLabel_.setInterceptsMouseClicks(false, false);
-        sizeLabel_.setText(FormatFileSize(descriptor_.fileSizeBytes), juce::dontSendNotification);
+        sizeLabel_.setText(readOnly_ ? "Included" : FormatFileSize(descriptor_.fileSizeBytes), juce::dontSendNotification);
         sizeLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6c7a8c));
         sizeLabel_.setJustificationType(juce::Justification::centredRight);
         addAndMakeVisible(sizeLabel_);
 
         modifiedLabel_.setInterceptsMouseClicks(false, false);
-        modifiedLabel_.setText(descriptor_.modifiedAt.formatted("%Y-%m-%d %H:%M"), juce::dontSendNotification);
+        modifiedLabel_.setText(readOnly_ ? "Read-only" : descriptor_.modifiedAt.formatted("%Y-%m-%d %H:%M"),
+                               juce::dontSendNotification);
         modifiedLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6c7a8c));
         modifiedLabel_.setJustificationType(juce::Justification::centredRight);
         addAndMakeVisible(modifiedLabel_);
 
         setMouseCursor(juce::MouseCursor::PointingHandCursor);
-        if (placeable_)
+        if (readOnly_)
+            setTooltip("Application asset from the Djehuti Engine Pack. It is available to this project but is not project-owned.");
+        else if (placeable_)
             setTooltip("Drag into the Scene Viewport to place it. Right-click for more actions.");
         else
             setTooltip("Right-click for more actions.");
@@ -198,7 +202,7 @@ public:
     // asked for. A drag that moves far enough is handled in mouseDrag
     // instead, below.
     void mouseUp(const juce::MouseEvent& event) override {
-        if (event.mods.isPopupMenu()) {
+        if (event.mods.isPopupMenu() && ! readOnly_) {
             owner_.ShowRowContextMenu(descriptor_);
         } else if (!draggedThisGesture_) {
             owner_.SelectRow(this, descriptor_);
@@ -209,7 +213,7 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& event) override {
         if (event.mods.isPopupMenu()) return;
         owner_.SelectRow(this, descriptor_);
-        owner_.OpenAsset(descriptor_);
+        if (! readOnly_) owner_.OpenAsset(descriptor_);
     }
 
     // Only placeable kinds (Render, Object Definition) start a real OS-
@@ -234,6 +238,7 @@ private:
     ContentBrowserPanel& owner_;
     creation::assets::AssetDescriptor descriptor_;
     bool placeable_;
+    bool readOnly_;
     bool draggedThisGesture_ = false;
     bool selected_ = false;
     juce::Label typeLabel_;
@@ -405,20 +410,45 @@ void ContentBrowserPanel::Refresh() {
     }
 
     const auto filterText = searchBox_.getText().trim();
-    std::vector<creation::assets::AssetDescriptor> descriptors;
+    struct BrowserAsset
+    {
+        creation::assets::AssetDescriptor descriptor;
+        bool readOnly = false;
+    };
+    std::vector<BrowserAsset> descriptors;
     for (const auto& [id, descriptor] : latestById) {
         if (filterText.isNotEmpty() && !descriptor.displayName.containsIgnoreCase(filterText)) continue;
-        descriptors.push_back(descriptor);
+        descriptors.push_back({ descriptor, false });
+    }
+
+    // The Engine Pack is an application asset source, not a project asset
+    // source. Show its character definitions alongside project content so a
+    // designer can discover the same choices offered by Player Start, while
+    // keeping all project mutation actions disabled for these rows.
+    for (const auto& character : assets::EngineAssetPack::characterAssets()) {
+        if (filterText.isNotEmpty() && !character.title.containsIgnoreCase(filterText) &&
+            !character.id.containsIgnoreCase(filterText))
+            continue;
+
+        creation::assets::AssetDescriptor descriptor;
+        descriptor.id = character.id;
+        descriptor.versionId = assets::EngineAssetPack::version;
+        descriptor.displayName = character.title;
+        descriptor.kind = creation::assets::AssetKind::character;
+        descriptor.category = "Engine Pack";
+        descriptor.description = "Read-only Djehuti Engine Pack character asset.";
+        descriptor.sourceApp = "Djehuti Engine Pack";
+        descriptors.push_back({ std::move(descriptor), true });
     }
     // Editor UI/Workflow Overhaul plan, Phase 4: one flat, alphabetically-
     // sorted list -- no AssetKind grouping (see the class comment above).
     std::sort(descriptors.begin(), descriptors.end(), [](const auto& a, const auto& b) {
-        return a.displayName.compareIgnoreCase(b.displayName) < 0;
+        return a.descriptor.displayName.compareIgnoreCase(b.descriptor.displayName) < 0;
     });
 
     rows_.clear();
-    for (const auto& descriptor : descriptors) {
-        auto* row = rows_.add(new AssetRow(*this, descriptor));
+    for (const auto& entry : descriptors) {
+        auto* row = rows_.add(new AssetRow(*this, entry.descriptor, entry.readOnly));
         rowsHost_.addAndMakeVisible(row);
     }
 

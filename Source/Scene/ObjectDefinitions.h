@@ -32,6 +32,9 @@ enum class ObjectComponentKind
 
 struct ObjectComponentEntry
 {
+    // Stable identity within this reusable assembly. Future typed pin
+    // connections address this id, never a list index.
+    juce::String componentInstanceId;
     ObjectComponentKind kind = ObjectComponentKind::Mesh;
 
     // kind == Mesh
@@ -62,6 +65,18 @@ struct ObjectComponentEntry
     engine::Transform childLocalTransform;
 };
 
+// A durable connection between two component instances in one reusable
+// assembly. The current ObjectDefinition adapter persists these records but
+// does not execute them yet; that belongs to the typed component-graph
+// resolver rather than this legacy mesh/pod/child instantiator.
+struct ObjectComponentConnection
+{
+    juce::String sourceComponentInstanceId;
+    juce::String sourcePort;
+    juce::String targetComponentInstanceId;
+    juce::String targetPort;
+};
+
 // A reusable, data-first object recipe: a name, a transform, default
 // state, and a uniform list of components. The recipe owns no renderer or
 // runtime object -- meshes and FRust behavior pods are referenced by
@@ -73,6 +88,7 @@ struct ObjectDefinition
     engine::Transform initialTransform;
     juce::NamedValueSet defaultState;
     std::vector<ObjectComponentEntry> components;
+    std::vector<ObjectComponentConnection> connections;
     // Instances of this definition are excluded from Play (hidden, not
     // despawned) -- see scene::SceneFlags::editorOnly. VR Editor Cart
     // plan Phase 2 (the cart is the first thing that sets this true).

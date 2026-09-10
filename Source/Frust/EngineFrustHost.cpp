@@ -185,6 +185,12 @@ void EngineFrustHost::beginPlay(std::int64_t tick)
 
 void EngineFrustHost::tick(std::int64_t tick)
 {
+    prePhysicsTick(tick);
+    postPhysicsTick(tick);
+}
+
+void EngineFrustHost::prePhysicsTick(std::int64_t tick)
+{
     if (!playActive) {
         return;
     }
@@ -197,11 +203,6 @@ void EngineFrustHost::tick(std::int64_t tick)
     // exactly "collected and held until start of the frame, available to
     // everything that runs before OpenGL."
     const auto firedCombos = inputActionSystem_ != nullptr ? inputActionSystem_->FiredCombos() : juce::StringArray{};
-    // Jolt vendoring plan (Decision 5) -- drained once per tick, same
-    // cadence as firedCombos above; dispatched per affected entity in the
-    // loop below, not broadcast to every attached Pod.
-    const auto collisionEvents = physicsWorld_ != nullptr ? physicsWorld_->DrainCollisionEvents()
-                                                          : std::vector<physics::CollisionEvent>{};
     for (const auto& [entityId, podId] : attachedObjectBehaviors())
     {
         ensureObjectLifecycle(entityId, podId, tick);
@@ -229,6 +230,19 @@ void EngineFrustHost::tick(std::int64_t tick)
                 invokeObjectHook(entityId, podId, hookName.c_str(), EngineFrustEvent::simulationTick, tick);
             }
         }
+    }
+}
+
+void EngineFrustHost::postPhysicsTick(std::int64_t tick)
+{
+    if (!playActive || physicsWorld_ == nullptr)
+        return;
+
+    const auto collisionEvents = physicsWorld_->DrainCollisionEvents();
+    for (const auto& [entityId, podId] : attachedObjectBehaviors())
+    {
+        if (!objectLifecycles[entityId].playingPods.contains(podId) || isBehaviorPaused(entityId))
+            continue;
         for (const auto& collisionEvent : collisionEvents) {
             if (collisionEvent.entityA != entityId && collisionEvent.entityB != entityId) {
                 continue;

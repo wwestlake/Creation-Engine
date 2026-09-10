@@ -12,8 +12,8 @@ class AssetPackStore final
 public:
     struct Manifest
     {
-        juce::String id, version, title, defaultScene;
-        struct Asset { juce::String id, kind, payload, generator; };
+        juce::String id, version, title, defaultScene, defaultInputMapping;
+        struct Asset { juce::String id, kind, title, payload, generator; };
         juce::Array<Asset> assets;
     };
 

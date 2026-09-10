@@ -27,7 +27,7 @@ ImportResult FbxAssetImporter::Import(const juce::File& sourceFile, ImportContex
         options.logicalPath = "Assets/Source/Models/" + sourceFile.getFileName();
         options.category = "FBX Source";
         options.mediaType = "model/fbx";
-        options.sourceApp = "Creation Engine";
+        options.sourceApp = "Djehuti Engine";
         options.sourceTool = "ufbx";
         options.importerId = "creation-engine.fbx";
         options.importerVersion = "1";

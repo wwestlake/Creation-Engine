@@ -32,6 +32,14 @@ std::optional<entt::entity> EditorInteraction::takeSelectionChange()
     return change;
 }
 
+std::optional<entt::entity> EditorInteraction::takeTransformChange()
+{
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    auto change = pendingTransformChange_;
+    pendingTransformChange_.reset();
+    return change;
+}
+
 bool EditorInteraction::beginGrab(entt::entity entity, float hitDistance)
 {
     std::lock_guard<std::mutex> stateLock(stateMutex_);
@@ -83,6 +91,7 @@ void EditorInteraction::endGrab()
     if (unchanged) return;
     undoStack_.push_back(edit);
     redoStack_.clear();
+    pendingTransformChange_ = edit.entity;
 }
 
 bool EditorInteraction::beginScale(entt::entity entity, int axisIndex, const engine::Vec3& controllerWorldPosition)
@@ -266,6 +275,7 @@ bool EditorInteraction::undo()
     redoStack_.push_back(edit);
     selected_ = edit.entity;
     pendingSelection_ = edit.entity;
+    pendingTransformChange_ = edit.entity;
     return true;
 }
 
@@ -279,6 +289,7 @@ bool EditorInteraction::redo()
     undoStack_.push_back(edit);
     selected_ = edit.entity;
     pendingSelection_ = edit.entity;
+    pendingTransformChange_ = edit.entity;
     return true;
 }
 

@@ -77,6 +77,7 @@ juce::ValueTree SerializeOne(const ObjectDefinition& definition)
     juce::ValueTree components("Components");
     for (const auto& component : definition.components) {
         juce::ValueTree entry("Component");
+        entry.setProperty("componentInstanceId", component.componentInstanceId, nullptr);
         entry.setProperty("kind", ComponentKindToken(component.kind), nullptr);
         switch (component.kind) {
             case ObjectComponentKind::Mesh:
@@ -99,6 +100,17 @@ juce::ValueTree SerializeOne(const ObjectDefinition& definition)
         components.addChild(entry, -1, nullptr);
     }
     node.addChild(components, -1, nullptr);
+
+    juce::ValueTree connections("Connections");
+    for (const auto& connection : definition.connections) {
+        juce::ValueTree entry("Connection");
+        entry.setProperty("sourceComponentInstanceId", connection.sourceComponentInstanceId, nullptr);
+        entry.setProperty("sourcePort", connection.sourcePort, nullptr);
+        entry.setProperty("targetComponentInstanceId", connection.targetComponentInstanceId, nullptr);
+        entry.setProperty("targetPort", connection.targetPort, nullptr);
+        connections.addChild(entry, -1, nullptr);
+    }
+    node.addChild(connections, -1, nullptr);
     return node;
 }
 
@@ -119,6 +131,7 @@ ObjectDefinition RestoreOne(const juce::ValueTree& node)
         if (!entry.hasType("Component")) continue;
         const auto kindToken = entry.getProperty("kind").toString();
         ObjectComponentEntry component;
+        component.componentInstanceId = entry.getProperty("componentInstanceId").toString();
         if (kindToken == "Mesh") {
             component.kind = ObjectComponentKind::Mesh;
             component.meshAssetId = entry.getProperty("meshAssetId").toString();
@@ -143,6 +156,29 @@ ObjectDefinition RestoreOne(const juce::ValueTree& node)
             continue;
         }
         definition.components.push_back(std::move(component));
+    }
+
+    for (const auto entry : node.getChildWithName("Connections")) {
+        if (!entry.hasType("Connection")) continue;
+        ObjectComponentConnection connection;
+        connection.sourceComponentInstanceId = entry.getProperty("sourceComponentInstanceId").toString();
+        connection.sourcePort = entry.getProperty("sourcePort").toString();
+        connection.targetComponentInstanceId = entry.getProperty("targetComponentInstanceId").toString();
+        connection.targetPort = entry.getProperty("targetPort").toString();
+        definition.connections.push_back(std::move(connection));
+    }
+
+    // Legacy definitions predate component instance ids. Give each loaded
+    // entry one immediately so a later save can publish the upgraded form
+    // without making old project content uninstantiable first.
+    std::unordered_set<std::string> restoredComponentIds;
+    for (auto& component : definition.components) {
+        component.componentInstanceId = component.componentInstanceId.trim();
+        while (component.componentInstanceId.isEmpty() ||
+               restoredComponentIds.contains(component.componentInstanceId.toStdString())) {
+            component.componentInstanceId = juce::Uuid().toString();
+        }
+        restoredComponentIds.insert(component.componentInstanceId.toStdString());
     }
 
     definition.id = definition.id.trim();
@@ -196,7 +232,10 @@ entt::entity instantiateDefinition(engine::World& world, const ObjectDefinitionC
     SceneFlags flags;
     flags.editorOnly = definition.editorOnly;
     registry.emplace<SceneFlags>(entity, flags);
-    registry.emplace<Parent>(entity, Parent{ parent });
+    // An instantiated definition establishes the authoritative hierarchy
+    // relationship. Use replacement semantics so a recycled/stale entity
+    // cannot turn starter-content creation into a debug assertion loop.
+    registry.emplace_or_replace<Parent>(entity, Parent{ parent });
     registry.emplace<ObjectDefinitionRef>(entity, ObjectDefinitionRef{ definition.id });
     registry.emplace<ObjectState>(entity, ObjectState{ definition.defaultState });
 
@@ -236,7 +275,7 @@ entt::entity instantiateDefinition(engine::World& world, const ObjectDefinitionC
                                                                                           : definition.displayName });
             registry.emplace<Transform>(meshEntity, component.meshLocalTransform);
             registry.emplace<SceneFlags>(meshEntity, flags);
-            registry.emplace<Parent>(meshEntity, Parent{ entity });
+            registry.emplace_or_replace<Parent>(meshEntity, Parent{ entity });
             registry.emplace<MeshAssetReference>(meshEntity, MeshAssetReference{
                 component.meshAssetId, component.meshAssetVersionId, component.meshPackId, component.meshPackVersion,
                 component.meshNodeIndex, component.meshNodeName });
@@ -301,6 +340,31 @@ bool ObjectDefinitionCatalog::upsert(ObjectDefinition definition, juce::String& 
     }
     if (definition.displayName.isEmpty()) {
         definition.displayName = definition.id;
+    }
+
+    std::unordered_set<std::string> componentIds;
+    for (auto& component : definition.components) {
+        component.componentInstanceId = component.componentInstanceId.trim();
+        if (component.componentInstanceId.isEmpty()) {
+            component.componentInstanceId = juce::Uuid().toString();
+        }
+        if (!componentIds.insert(component.componentInstanceId.toStdString()).second) {
+            error = "Object Definition contains duplicate component instance id '" + component.componentInstanceId + "'.";
+            return false;
+        }
+    }
+
+    for (const auto& connection : definition.connections) {
+        if (connection.sourceComponentInstanceId.isEmpty() || connection.sourcePort.isEmpty() ||
+            connection.targetComponentInstanceId.isEmpty() || connection.targetPort.isEmpty()) {
+            error = "Object Definition contains an incomplete component connection.";
+            return false;
+        }
+        if (!componentIds.contains(connection.sourceComponentInstanceId.toStdString()) ||
+            !componentIds.contains(connection.targetComponentInstanceId.toStdString())) {
+            error = "Object Definition connection refers to a component that is not part of this definition.";
+            return false;
+        }
     }
     definitions[definition.id.toStdString()] = std::move(definition);
     return true;
@@ -385,9 +449,9 @@ bool ObjectDefinitionCatalog::Save(creation::assets::ProjectSession& session, co
     options.displayName = it->second.displayName.isNotEmpty() ? it->second.displayName : it->second.id;
     options.logicalPath = LogicalPathFor(it->second.id);
     options.mediaType = "application/x-creation-engine-object-definition";
-    options.sourceApp = "Creation Engine";
+    options.sourceApp = "Djehuti Engine";
     options.sourceTool = "Object Definition Editor";
-    options.description = "Creation Suite Object Definition";
+    options.description = "Djehuti Suite Object Definition";
 
     creation::assets::AssetDescriptor savedAsset;
     if (!creation::assets::ProjectAssetService::saveGeneratedAsset(session, data, options, savedAsset, error)) return false;

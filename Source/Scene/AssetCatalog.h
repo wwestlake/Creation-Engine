@@ -47,6 +47,21 @@ namespace ce::scene {
 // concurrent AddFromModel() reallocates names_'s buffer.
 class AssetCatalog final {
 public:
+    // CPU-only description of an imported model's authored hierarchy. The
+    // GPU cache keeps one mesh/material entry per mesh-bearing node; this
+    // description lets a runtime instance recreate the complete object
+    // instead of silently drawing primitive zero only.
+    struct ModelHierarchyNode {
+        int sourceNodeIndex = -1;
+        int parentIndex = -1;
+        engine::Transform localTransform;
+        bool hasMesh = false;
+    };
+
+    struct ModelHierarchy {
+        std::vector<ModelHierarchyNode> nodes;
+    };
+
     struct Asset {
         // Durable source identity. GPU data is a cache; scenes store these
         // values, so a placed item can be resolved after reopening.
@@ -111,6 +126,11 @@ public:
     // whenever nodeIndex >= 0 (see MeshAssetReference::nodeIndex).
     [[nodiscard]] static juce::String NodeAssetKey(const juce::String& assetId, const juce::String& versionId,
                                                     int nodeIndex);
+
+    // Returns the complete source hierarchy for an already-loaded model.
+    // The returned value contains no GPU state and is safe to consume while
+    // the renderer uses the associated mesh cache.
+    [[nodiscard]] std::optional<ModelHierarchy> FindModelHierarchy(const juce::String& name) const;
 
     // Registers an already-built mesh/material pair under `name`,
     // overwriting any existing asset with that name -- the generic
@@ -219,6 +239,7 @@ private:
     // since nothing needed to find one again by name until now.
     std::unordered_map<std::string, std::unique_ptr<gl::Texture2D>> ownedTextures_;
     std::unordered_map<std::string, Asset> assets_;
+    std::unordered_map<std::string, ModelHierarchy> modelHierarchies_;
     std::vector<juce::String> names_;
     std::unordered_map<std::string, std::shared_ptr<Material>> materials_;
     std::unordered_map<std::string, std::shared_ptr<gl::Texture2D>> loadedTextures_;

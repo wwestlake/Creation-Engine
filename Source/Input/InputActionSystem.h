@@ -75,9 +75,10 @@ public:
 
     // Replaces the loaded bindings wholesale -- called from MainComponent
     // whenever activeGame_ changes (openActiveGame, selectGame).
-    void LoadForGame(creation::assets::ProjectSession& session,
+    void LoadForGame(const creation::assets::ProjectSession& session,
                      const project::GameDocumentInfo& game,
-                     juce::String& errorMessage);
+                     juce::String& errorMessage,
+                     const juce::String& contextId = "editor-play");
 
     // Called once per simulation tick (MainComponent::timerCallback, first
     // line inside `if (isPlaying_)`, before Simulation::Step/

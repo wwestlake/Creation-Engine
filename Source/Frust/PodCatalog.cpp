@@ -182,9 +182,9 @@ bool PodCatalog::Save(creation::assets::ProjectSession& session, const juce::Str
     options.logicalPath = LogicalPathFor(name);
     options.category = KindToken(entry.kind);
     options.mediaType = "application/x-creation-engine-pod";
-    options.sourceApp = "Creation Engine";
+    options.sourceApp = "Djehuti Engine";
     options.sourceTool = entry.authoringMode == PodAuthoringMode::Source ? "Pod Editor (Source)" : "Pod Editor (Graph)";
-    options.description = "Creation Suite Pod -- " + KindToken(entry.kind) + " / " + AuthoringModeToken(entry.authoringMode);
+    options.description = "Djehuti Suite Pod -- " + KindToken(entry.kind) + " / " + AuthoringModeToken(entry.authoringMode);
 
     creation::assets::AssetDescriptor savedAsset;
     if (!creation::assets::ProjectAssetService::saveGeneratedAsset(session, data, options, savedAsset, error)) return false;

@@ -59,6 +59,11 @@ public:
     // capsule's base (Jolt's own convention, see PhysicsWorld::UpdateCharacter);
     // kPossessedEyeHeight lifts it to eye height for the camera itself.
     void SetPossessedFeetPosition(juce::Vector3D<float> feetPosition);
+    // CameraDirector supplies an explicit pose for follow/top-down/drone
+    // views. The render thread consumes the newest pose atomically at the
+    // start of Update(), keeping all modes on this one camera object.
+    void SetDirectedPose(juce::Vector3D<float> position, juce::Vector3D<float> target);
+    void ClearDirectedPose() { hasDirectedPose_.store(false, std::memory_order_release); }
 
     juce::Vector3D<float> Position() const { return position_; }
     juce::Vector3D<float> Target() const { return position_ + Forward(); }
@@ -88,6 +93,10 @@ private:
     std::mutex possessedPositionMutex_;
     juce::Vector3D<float> possessedFeetPosition_{};
     static constexpr float kPossessedEyeHeight = 1.6f;
+    std::atomic<bool> hasDirectedPose_{ false };
+    std::mutex directedPoseMutex_;
+    juce::Vector3D<float> directedPosition_{};
+    juce::Vector3D<float> directedTarget_{ 0.0f, 0.0f, -1.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FreeCamera)
 };

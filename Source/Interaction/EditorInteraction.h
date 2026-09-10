@@ -47,6 +47,9 @@ public:
     void select(entt::entity entity);
     [[nodiscard]] entt::entity selected() const;
     [[nodiscard]] std::optional<entt::entity> takeSelectionChange();
+    // A completed gizmo edit changes the selected object's authored state
+    // once. The inspector consumes this event instead of polling the world.
+    [[nodiscard]] std::optional<entt::entity> takeTransformChange();
 
     void setLocomotionMode(LocomotionMode mode) noexcept { locomotionMode_ = mode; }
     [[nodiscard]] LocomotionMode locomotionMode() const noexcept { return locomotionMode_; }
@@ -103,6 +106,7 @@ private:
     mutable std::mutex stateMutex_;
     entt::entity selected_ = entt::null;
     std::optional<entt::entity> pendingSelection_;
+    std::optional<entt::entity> pendingTransformChange_;
     LocomotionMode locomotionMode_ = LocomotionMode::seatedFly;
     TransformSpace transformSpace_ = TransformSpace::world;
     GizmoMode gizmoMode_ = GizmoMode::position;

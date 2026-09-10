@@ -201,6 +201,11 @@ juce::String BuildNodeDecomposedDefinitions(scene::ObjectDefinitionCatalog& cata
             }
 
             scene::ObjectComponentEntry component;
+            // This source node is the durable address of the imported mesh
+            // part within this assembly. Do not let first-save UUID minting
+            // change it on every reimport: connections and overrides target
+            // componentInstanceId, not the transient components vector index.
+            component.componentInstanceId = "mesh-node-" + juce::String(nodeIndex);
             component.kind = scene::ObjectComponentKind::Mesh;
             component.meshAssetId = meshAssetId;
             component.meshAssetVersionId = meshAssetVersionId;
@@ -312,7 +317,7 @@ juce::String SaveGeneratedScene(creation::assets::ProjectSession& session, const
     options.displayName = displayName;
     options.logicalPath = "scenes/" + displayName + ".xml";
     options.mediaType = "application/x-creation-engine-scene";
-    options.sourceApp = "Creation Engine";
+    options.sourceApp = "Djehuti Engine";
     options.description = "Scene generated from import";
     creation::assets::AssetDescriptor savedAsset;
     if (! creation::assets::ProjectAssetService::saveGeneratedAsset(session, data, options, savedAsset, error))

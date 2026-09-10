@@ -2,6 +2,8 @@
 
 #include "PhysicsComponents.h"
 
+#include <entt/entt.hpp>
+
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -27,6 +29,17 @@ struct CollisionEvent
     std::int64_t entityB = -1;
 };
 
+// Runtime facts read after CharacterVirtual has resolved its movement. They
+// deliberately describe what Jolt produced, not the player input that asked
+// for it, so animation and Pods can make the same grounded/airborne decision.
+struct CharacterMotionState
+{
+    float velocityX = 0.0f;
+    float velocityY = 0.0f;
+    float velocityZ = 0.0f;
+    bool grounded = false;
+};
+
 // Owns the entire Jolt simulation: allocators/job system, the broadphase/
 // object-layer boilerplate Jolt requires even for the simplest world, and
 // the PhysicsSystem itself. Constructed once, alongside ce::engine::World,
@@ -50,6 +63,10 @@ public:
     // (Decision 6) -- call once, right after constructing both World and
     // PhysicsWorld. Safe to call only once; asserts otherwise.
     void AttachToWorld(ce::engine::World& world);
+
+    // Disconnects registry callbacks and removes the registry context entry
+    // before this PhysicsWorld is destroyed or moved to another World.
+    void DetachFromWorld();
 
     // Accumulator-driven fixed step (Core Architectural Invariant 2): call
     // once per UI-timer callback with the REAL elapsed seconds since the
@@ -112,10 +129,14 @@ public:
                         float desiredHorizontalX, float desiredHorizontalZ,
                         float jumpSpeed, float dt);
     bool IsCharacterGrounded(std::int64_t entity) const;
+    [[nodiscard]] CharacterMotionState GetCharacterMotionState(std::int64_t entity) const;
 
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+    ce::engine::World* attachedWorld_ = nullptr;
+    entt::scoped_connection rigidBodyDestroyConnection_;
+    entt::scoped_connection characterDestroyConnection_;
 };
 
 } // namespace ce::physics

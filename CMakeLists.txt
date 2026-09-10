@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-set(CREATION_ENGINE_VERSION "0.0.1" CACHE STRING "Creation Engine product version")
+set(CREATION_ENGINE_VERSION "0.0.1" CACHE STRING "Djehuti Engine product version")
 project(CreationEngine VERSION ${CREATION_ENGINE_VERSION} LANGUAGES C CXX)
 
 # Each suite agent works from its own workspace, D:/CreationSuite-Workspaces/
@@ -35,14 +35,14 @@ find_library(CREATION_OPENXR_LOADER_LIBRARY NAMES openxr_loader
 # a headset on.
 if (NOT CREATION_OPENXR_INCLUDE_DIR OR NOT CREATION_OPENXR_LOADER_LIBRARY)
     message(FATAL_ERROR
-        "Creation Engine requires the OpenXR SDK and did not find it. "
+        "Djehuti Engine requires the OpenXR SDK and did not find it. "
         "Expected it at ${CREATION_OPENXR_SHARED_DEPS_ROOT} (shared across "
         "every suite agent workspace). If it has moved, reconfigure with "
         "-DCREATION_OPENXR_INCLUDE_DIR=<path>/include "
         "-DCREATION_OPENXR_LOADER_LIBRARY=<path>/lib/openxr_loader.lib.")
 endif()
 set(CREATION_ENGINE_HAS_OPENXR 1)
-message(STATUS "Creation Engine: OpenXR runtime support enabled (${CREATION_OPENXR_INCLUDE_DIR})")
+message(STATUS "Djehuti Engine: OpenXR runtime support enabled (${CREATION_OPENXR_INCLUDE_DIR})")
 
 # LLVM / vcpkg Build Rule (see AGENTS.md): LLVM must NEVER be managed by
 # this app's own vcpkg.json manifest. A real incident happened here --
@@ -105,7 +105,7 @@ find_library(CREATION_ENGINE_ZLIB_LIBRARY_DEBUG NAMES zd
 
 if (NOT CREATION_ENGINE_IXWEBSOCKET_INCLUDE_DIR OR NOT CREATION_ENGINE_IXWEBSOCKET_LIBRARY_RELEASE OR NOT CREATION_ENGINE_IXWEBSOCKET_LIBRARY_DEBUG)
     message(FATAL_ERROR
-        "Creation Engine requires ixwebsocket (reused from services/VfsService's "
+        "Djehuti Engine requires ixwebsocket (reused from services/VfsService's "
         "own vcpkg_installed tree, not vendored separately here) for the "
         "Djehuti Bridge import watcher, and did not find it at "
         "${CREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT}. Build services/VfsService "
@@ -131,7 +131,7 @@ set(CREATION_ENGINE_JOLT_VCPKG_ROOT
     "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/jolt-vcpkg/vcpkg_installed/x64-windows")
 if (NOT EXISTS "${CREATION_ENGINE_JOLT_VCPKG_ROOT}/share/Jolt/JoltConfig.cmake")
     message(FATAL_ERROR
-        "Creation Engine requires Jolt Physics and did not find it at "
+        "Djehuti Engine requires Jolt Physics and did not find it at "
         "${CREATION_ENGINE_JOLT_VCPKG_ROOT}. Install it into that isolated "
         "root with: D:/vcpkg/vcpkg.exe install joltphysics:x64-windows "
         "--classic --x-install-root=\"${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/jolt-vcpkg/vcpkg_installed\" "
@@ -144,6 +144,13 @@ find_package(Jolt CONFIG REQUIRED)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Several Engine smoke targets compile generated JUCE and FRust-adjacent
+# sources in parallel even when the outer MSBuild invocation uses /m:1.
+# MSVC needs /FS to synchronize their shared debug-symbol database.
+if(MSVC)
+    add_compile_options(/FS)
+endif()
 
 if(NOT DEFINED JUCE_DIR)
     message(FATAL_ERROR "Set JUCE_DIR to your JUCE root directory before configuring (same JUCE checkout Creation Station uses).")
@@ -188,6 +195,7 @@ endif()
 add_subdirectory(EngineCore)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/VFS" CreationSuiteSharedVFS)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/AssetSystem" CreationSuiteSharedAssetSystem)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/CharacterSystem" CreationSuiteSharedCharacterSystem)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/Services" CreationSuiteSharedServices)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/UI" CreationSuiteSharedUI)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/FrustPluginRuntime" CreationSuiteSharedFrustPluginRuntime)
@@ -203,7 +211,7 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/FrustPluginRuntime" C
 # different modes — not a separate desktop app talking to the game over a
 # socket.
 juce_add_gui_app(CreationEngineEditor
-    PRODUCT_NAME "Creation Engine"
+    PRODUCT_NAME "Djehuti Engine"
     COMPANY_NAME "LagDaemon Software"
     BUNDLE_ID "com.lagdaemon.creationengine"
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/icon.png"
@@ -253,6 +261,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Project/StarterGameTemplates.h
     Source/Views/NewGameDialog.h
     Source/Views/NewGameDialog.cpp
+    Source/Views/EditorAvatarPanel.h
+    Source/Views/EditorAvatarPanel.cpp
     Source/Assets/EngineAssetPack.h
     Source/Assets/EngineAssetPack.cpp
     Source/Assets/AssetPackStore.h
@@ -266,7 +276,6 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Frust/EngineNodeLibraryLoader.h
     Source/Frust/EngineNodeLibraryLoader.cpp
     Source/Input/InputBindingTypes.h
-    Source/Input/StarterInputMappingPresets.h
     Source/Input/InputBindingDocumentStore.h
     Source/Input/InputBindingDocumentStore.cpp
     Source/Input/InputActionSystem.h
@@ -339,6 +348,13 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/InputBindingsPanel.cpp
     Source/Runtime/GameClientWindow.h
     Source/Runtime/GameClientWindow.cpp
+    Source/Runtime/CameraDirector.h
+    Source/Runtime/CameraDirector.cpp
+    Source/Runtime/PuppetRuntime.h
+    Source/Runtime/PossessionService.h
+    Source/Runtime/PossessionService.cpp
+    Source/Runtime/RuntimeWorldRunner.h
+    Source/Runtime/RuntimeWorldRunner.cpp
     Source/Character/CharacterDefinition.h
     Source/Character/CharacterDefinition.cpp
     Source/Character/PossessedCharacter.h
@@ -359,6 +375,10 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Views/ImportPanel.cpp
     Source/Views/ContentBrowserPanel.h
     Source/Views/ContentBrowserPanel.cpp
+    Source/Views/SceneBuiltinsPanel.h
+    Source/Views/SceneBuiltinsPanel.cpp
+    Source/Views/SceneGraphPanel.h
+    Source/Views/SceneGraphPanel.cpp
     Source/Scene/Components.h
     Source/Scene/EngineSceneSerializer.h
     Source/Scene/EngineSceneSerializer.cpp
@@ -526,12 +546,14 @@ add_executable(CreationEngineInputActionSystemSmoke
     tests/InputActionSystemSmoke.cpp
     Source/Input/InputActionSystem.cpp
     Source/Input/InputBindingDocumentStore.cpp
+    Source/Assets/AssetPackStore.cpp
 )
 target_include_directories(CreationEngineInputActionSystemSmoke PRIVATE Source)
 target_link_libraries(CreationEngineInputActionSystemSmoke PRIVATE
     engine_core
     node_system
     creation_suite_asset_system
+    creation_suite_services
     juce::juce_core
     juce::juce_gui_basics
 )
@@ -656,7 +678,7 @@ add_test(NAME creation_engine_character_controller_smoke COMMAND CreationEngineC
 # Headless build: no rendering or client-only assets. Only juce_core and
 # juce_events provide cross-platform utilities for the server shell.
 juce_add_console_app(CreationEngineServer
-    PRODUCT_NAME "Creation Engine Server"
+    PRODUCT_NAME "Djehuti Engine Server"
     COMPANY_NAME "LagDaemon Software"
     BUNDLE_ID "com.lagdaemon.creationengine.server"
 )
@@ -712,16 +734,16 @@ install(TARGETS CreationEngineEditor
 )
 install(FILES README.md LICENSE DESTINATION .)
 
-set(CPACK_PACKAGE_NAME "Creation Engine")
+set(CPACK_PACKAGE_NAME "Djehuti Engine")
 set(CPACK_PACKAGE_VENDOR "LagDaemon Software")
 set(CPACK_PACKAGE_CONTACT "LagDaemon Software")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Creation Engine")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Djehuti Engine")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_FILE_NAME "creation-engine-${CPACK_PACKAGE_VERSION}-win64")
-set(CPACK_PACKAGE_INSTALL_DIRECTORY "Creation Engine")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "Djehuti Engine")
 set(CPACK_GENERATOR "ZIP;WIX")
-set(CPACK_WIX_PROGRAM_MENU_FOLDER "Creation Engine")
-set(CPACK_PACKAGE_EXECUTABLES "Creation Engine" "Creation Engine")
-set(CPACK_CREATE_DESKTOP_LINKS "Creation Engine")
+set(CPACK_WIX_PROGRAM_MENU_FOLDER "Djehuti Engine")
+set(CPACK_PACKAGE_EXECUTABLES "Djehuti Engine" "Djehuti Engine")
+set(CPACK_CREATE_DESKTOP_LINKS "Djehuti Engine")
 
 include(CPack)
