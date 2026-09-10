@@ -320,7 +320,7 @@ void ViewportComponent::ResolveProjectAssets(const creation::assets::ProjectSess
             assetCatalog_.LoadAssetPack(pack.id, pack.version, error);
         }, true);
         if (error.isNotEmpty())
-            juce::Logger::writeToLog("Creation Engine pack resolver: " + pack.id + " " + pack.version + ": " + error);
+            juce::Logger::writeToLog("Djehuti Engine pack resolver: " + pack.id + " " + pack.version + ": " + error);
     }
 
     // Grouped by (id, versionId) BEFORE parsing -- a multi-part model's N
@@ -344,7 +344,7 @@ void ViewportComponent::ResolveProjectAssets(const creation::assets::ProjectSess
         juce::String error;
         if (! assets::ProjectContentAssetStore::loadRenderable(session, settings, group.id, group.versionId, model, lease, error))
         {
-            juce::Logger::writeToLog("Creation Engine asset resolver: " + group.id + ": " + error);
+            juce::Logger::writeToLog("Djehuti Engine asset resolver: " + group.id + ": " + error);
             continue;
         }
         RunOnGLThread([this, &group, &model] {
@@ -480,9 +480,14 @@ interaction::TranslationConstraint ViewportComponent::constraintFor(TranslationH
 ViewportComponent::TranslationHandle ViewportComponent::desktopGizmoHandle(
     const juce::Vector3D<float>& origin, const juce::Vector3D<float>& direction) const
 {
-    if (vrTransformGizmo_.entity == entt::null) return TranslationHandle::none;
-    const auto& center = vrTransformGizmo_.center;
-    const float size = vrTransformGizmo_.scale;
+    VRTransformGizmo gizmo;
+    {
+        const juce::ScopedLock lock(desktopGizmoLock_);
+        gizmo = desktopTransformGizmo_;
+    }
+    if (gizmo.entity == entt::null) return TranslationHandle::none;
+    const auto& center = gizmo.center;
+    const float size = gizmo.scale;
     const auto mode = interactions_.gizmoMode();
 
     // The centre handle: free-move in position mode, uniform scale in
@@ -494,10 +499,10 @@ ViewportComponent::TranslationHandle ViewportComponent::desktopGizmoHandle(
         return TranslationHandle::free;
 
     // positionAxes is world-aligned unless GizmoMode::position + local
-    // space are both active (see updateDesktopTransformGizmo); scale and
+    // space are both active (see RefreshDesktopGizmo); scale and
     // rotate modes below intentionally don't consult it yet.
     const auto& worldOrLocal = mode == interaction::GizmoMode::position
-                                  ? vrTransformGizmo_.positionAxes
+                                   ? gizmo.positionAxes
                                   : std::array<juce::Vector3D<float>, 3>{{ { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } }};
     const std::array<std::pair<TranslationHandle, juce::Vector3D<float>>, 3> axes{{
         { TranslationHandle::xAxis, worldOrLocal[0] },
@@ -536,54 +541,56 @@ ViewportComponent::TranslationHandle ViewportComponent::desktopGizmoHandle(
     return TranslationHandle::none;
 }
 
-void ViewportComponent::updateDesktopTransformGizmo()
+void ViewportComponent::RefreshDesktopGizmo()
 {
-    vrHoverActive_ = false;
-    vrTransformGizmo_ = {};
+    VRTransformGizmo gizmo;
     const auto selected = interactions_.selected();
-    if (selected == entt::null) return;
+    if (selected == entt::null) {
+        const juce::ScopedLock lock(desktopGizmoLock_);
+        desktopTransformGizmo_ = {};
+        return;
+    }
     const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
     auto& registry = world_.Registry();
-    if (!registry.valid(selected) || !registry.all_of<scene::Transform>(selected)) return;
+    if (!registry.valid(selected) || !registry.all_of<scene::Transform>(selected)) {
+        const juce::ScopedLock gizmoLock(desktopGizmoLock_);
+        desktopTransformGizmo_ = {};
+        return;
+    }
     const auto& transform = registry.get<scene::Transform>(selected);
-    vrTransformGizmo_.entity = selected;
+    gizmo.entity = selected;
     // transform.position is LOCAL (relative to Parent) -- the gizmo widget
     // has to be drawn at the WORLD position that matches where the
     // selected entity actually renders, same reasoning as desktopPick's
     // fix above.
-    vrTransformGizmo_.center = scene::MatrixTranslation(scene::WorldModelMatrix(registry, selected));
-    vrTransformGizmo_.scale = 0.8f;
+    gizmo.center = scene::MatrixTranslation(scene::WorldModelMatrix(registry, selected));
+    gizmo.scale = 0.8f;
     if (interactions_.gizmoMode() == interaction::GizmoMode::position &&
         interactions_.transformSpace() == interaction::TransformSpace::local) {
         const auto rotation = juce::Matrix3D<float>::rotation(scene::ToJuceVector3D(transform.eulerRotationRadians));
-        vrTransformGizmo_.positionAxes = {{ { rotation.mat[0], rotation.mat[1], rotation.mat[2] },
-                                            { rotation.mat[4], rotation.mat[5], rotation.mat[6] },
-                                            { rotation.mat[8], rotation.mat[9], rotation.mat[10] } }};
+        gizmo.positionAxes = {{ { rotation.mat[0], rotation.mat[1], rotation.mat[2] },
+                                { rotation.mat[4], rotation.mat[5], rotation.mat[6] },
+                                { rotation.mat[8], rotation.mat[9], rotation.mat[10] } }};
     }
+    const juce::ScopedLock gizmoLock(desktopGizmoLock_);
+    desktopTransformGizmo_ = gizmo;
 }
 
 void ViewportComponent::mouseDown(const juce::MouseEvent& event)
 {
     if (!event.mods.isLeftButtonDown() || event.mods.isRightButtonDown()) return;
     grabKeyboardFocus();
-    // Record where/that the mouse went down; the actual ray cast, hit
-    // test, and EditorInteraction calls happen once per frame on the
-    // render thread (updateDesktopTransformDrag) -- see the class comment
-    // in the header for why.
-    desktopMouseX_.store(event.position.x, std::memory_order_relaxed);
-    desktopMouseY_.store(event.position.y, std::memory_order_relaxed);
-    desktopMouseButtonDown_.store(true, std::memory_order_relaxed);
+    handleDesktopPointer(event.position, true);
 }
 
 void ViewportComponent::mouseDrag(const juce::MouseEvent& event)
 {
-    desktopMouseX_.store(event.position.x, std::memory_order_relaxed);
-    desktopMouseY_.store(event.position.y, std::memory_order_relaxed);
+    handleDesktopPointer(event.position, true);
 }
 
-void ViewportComponent::mouseUp(const juce::MouseEvent&)
+void ViewportComponent::mouseUp(const juce::MouseEvent& event)
 {
-    desktopMouseButtonDown_.store(false, std::memory_order_relaxed);
+    handleDesktopPointer(event.position, false);
 }
 
 // Render-thread-only: called once per frame from renderOpenGL(). Reads the
@@ -600,12 +607,14 @@ int ViewportComponent::HandleAxisIndex(TranslationHandle handle) {
     }
 }
 
-void ViewportComponent::updateDesktopTransformDrag()
+void ViewportComponent::handleDesktopPointer(const juce::Point<float>& screenPos, bool isDown)
 {
-    const bool isDown = desktopMouseButtonDown_.load(std::memory_order_relaxed);
-    const juce::Point<float> screenPos{ desktopMouseX_.load(std::memory_order_relaxed),
-                                        desktopMouseY_.load(std::memory_order_relaxed) };
     const auto mode = interactions_.gizmoMode();
+    VRTransformGizmo gizmo;
+    {
+        const juce::ScopedLock lock(desktopGizmoLock_);
+        gizmo = desktopTransformGizmo_;
+    }
 
     if (isDown && !desktopMouseWasDown_) {
         // Press: hit-test the gizmo handles first; if nothing hit, fall
@@ -614,35 +623,35 @@ void ViewportComponent::updateDesktopTransformDrag()
         if (desktopRay(screenPos, origin, direction)) {
             const auto handle = desktopGizmoHandle(origin, direction);
             const auto axisIndex = HandleAxisIndex(handle);
-            if (handle != TranslationHandle::none && vrTransformGizmo_.entity != entt::null &&
+            if (handle != TranslationHandle::none && gizmo.entity != entt::null &&
                 mode == interaction::GizmoMode::rotate && axisIndex >= 0) {
                 const std::array<juce::Vector3D<float>, 3> rotateAxes{{
                     { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } }};
                 float angle = 0.0f, distanceFromCentre = 0.0f;
-                if (RingAngle(origin, direction, vrTransformGizmo_.center, rotateAxes[static_cast<std::size_t>(axisIndex)], angle, distanceFromCentre) &&
-                    interactions_.beginRotation(vrTransformGizmo_.entity, axisIndex, angle)) {
+                if (RingAngle(origin, direction, gizmo.center, rotateAxes[static_cast<std::size_t>(axisIndex)], angle, distanceFromCentre) &&
+                    interactions_.beginRotation(gizmo.entity, axisIndex, angle)) {
                     desktopTransformDrag_ = true;
                     desktopRotationAxisIndex_ = axisIndex;
                 }
-            } else if (handle != TranslationHandle::none && vrTransformGizmo_.entity != entt::null &&
-                      mode == interaction::GizmoMode::scale && axisIndex != -2) {
-                desktopDragDistance_ = juce::jmax(0.2f, (vrTransformGizmo_.center - origin).length());
-                if (interactions_.beginScale(vrTransformGizmo_.entity, axisIndex,
+            } else if (handle != TranslationHandle::none && gizmo.entity != entt::null &&
+                       mode == interaction::GizmoMode::scale && axisIndex != -2) {
+                desktopDragDistance_ = juce::jmax(0.2f, (gizmo.center - origin).length());
+                if (interactions_.beginScale(gizmo.entity, axisIndex,
                         scene::ToVec3(origin + direction * desktopDragDistance_)))
                     desktopTransformDrag_ = true;
-            } else if (handle != TranslationHandle::none && vrTransformGizmo_.entity != entt::null &&
-                      mode == interaction::GizmoMode::position) {
-                desktopDragDistance_ = juce::jmax(0.2f, (vrTransformGizmo_.center - origin).length());
+            } else if (handle != TranslationHandle::none && gizmo.entity != entt::null &&
+                       mode == interaction::GizmoMode::position) {
+                desktopDragDistance_ = juce::jmax(0.2f, (gizmo.center - origin).length());
                 // Single-axis handles only: pass the axis direction actually
                 // drawn/hit-tested (world or the entity's local basis vector,
-                // per positionAxes -- see updateDesktopTransformGizmo) so the
+                // per positionAxes -- see RefreshDesktopGizmo) so the
                 // drag itself matches what's on screen. Plane/free handles
                 // keep the existing world-aligned constraint mask, unaffected
                 // by local/world space.
                 const std::optional<engine::Vec3> localAxis = axisIndex >= 0 && axisIndex < 3
-                    ? std::optional<engine::Vec3>(scene::ToVec3(vrTransformGizmo_.positionAxes[static_cast<std::size_t>(axisIndex)]))
+                    ? std::optional<engine::Vec3>(scene::ToVec3(gizmo.positionAxes[static_cast<std::size_t>(axisIndex)]))
                     : std::nullopt;
-                if (interactions_.beginTranslation(vrTransformGizmo_.entity,
+                if (interactions_.beginTranslation(gizmo.entity,
                         scene::ToVec3(origin + direction * desktopDragDistance_), constraintFor(handle), localAxis))
                     desktopTransformDrag_ = true;
             } else {
@@ -667,14 +676,22 @@ void ViewportComponent::updateDesktopTransformDrag()
         } else {
             interactions_.updateTranslation(scene::ToVec3(origin + direction * desktopDragDistance_));
         }
+        RefreshDesktopGizmo();
     } else if (!isDown && desktopMouseWasDown_ && desktopTransformDrag_) {
         // Released: commit the drag to the undo stack.
         desktopTransformDrag_ = false;
         desktopRotationAxisIndex_ = -1;
         interactions_.endGrab();
+        RefreshDesktopGizmo();
     }
 
     desktopMouseWasDown_ = isDown;
+}
+
+void ViewportComponent::copyDesktopGizmoForRender()
+{
+    const juce::ScopedLock lock(desktopGizmoLock_);
+    vrTransformGizmo_ = desktopTransformGizmo_;
 }
 
 void ViewportComponent::RunOnGLThread(std::function<void()> work, bool blockUntilFinished) {
@@ -714,7 +731,7 @@ void ViewportComponent::updateVRInteraction()
         auto& registry = world_.Registry();
         if (registry.valid(selected) && registry.all_of<scene::Transform>(selected)) {
             vrTransformGizmo_.entity = selected;
-            // See updateDesktopTransformGizmo's identical fix -- Transform
+            // See RefreshDesktopGizmo's identical fix -- Transform
             // is local, the gizmo needs the world-composed position.
             vrTransformGizmo_.center = scene::MatrixTranslation(scene::WorldModelMatrix(registry, selected));
             vrTransformGizmo_.scale = 0.8f;
@@ -894,7 +911,7 @@ void ViewportComponent::uploadVRTransformGizmo()
         const auto c = vrTransformGizmo_.center;
         const float s = vrTransformGizmo_.scale;
         // World-aligned unless position mode + local space are both
-        // active (see updateDesktopTransformGizmo) -- used for the
+        // active (see RefreshDesktopGizmo) -- used for the
         // arrows and plane quads below. Rotation rings, further down,
         // intentionally always use plain world axes instead.
         const auto& axes = vrTransformGizmo_.positionAxes;
@@ -1010,17 +1027,9 @@ void ViewportComponent::newOpenGLContextCreated() {
               << reinterpret_cast<const char*>(glGetString(GL_VERSION)) << std::endl;
 
     // OpenXR is created only after JUCE has made this OpenGL context current.
-    // It remains optional so the editor still starts normally without a
-    // headset or an installed OpenXR runtime.
-    openXRProvider_ = std::make_unique<vr::OpenXRProvider>();
-    if (!openXRProvider_->initialize() ||
-        !openXRProvider_->initializeOpenGL(openGLContext_.getRawContext())) {
-        std::cout << "[vr] OpenXR unavailable; continuing in desktop mode." << std::endl;
-        openXRProvider_->shutdown();
-        openXRProvider_.reset();
-    } else {
-        std::cout << "[vr] OpenXR graphics session initialized." << std::endl;
-    }
+    // tryInitializeOpenXR also retries later when Quest Link wakes after the
+    // editor, while keeping a headset-free desktop launch valid.
+    tryInitializeOpenXR();
 
     shaderComposer_ = std::make_unique<ShaderComposer>(juce::File(CE_SHADER_SOURCE_DIR));
 
@@ -1032,7 +1041,7 @@ void ViewportComponent::newOpenGLContextCreated() {
     juce::String assetPackError;
     if (! assets::EngineAssetPack::ensureInstalled(assetPackError) ||
         ! assetCatalog_.LoadAssetPack(assets::EngineAssetPack::packId, assets::EngineAssetPack::version, assetPackError)) {
-        std::cout << "[render] could not load the Creation Engine Pack: " << assetPackError << std::endl;
+        std::cout << "[render] could not load the Djehuti Engine Pack: " << assetPackError << std::endl;
         return;
     }
 
@@ -1061,6 +1070,11 @@ void ViewportComponent::PublishFrameSnapshot() {
     // message thread genuinely touch the same registry concurrently with
     // this call (also message-thread, from MainComponent::timerCallback(),
     // but a different call site/time than an inspector edit).
+    // EditorInteraction acquires its state mutex before the World registry
+    // mutex while a gizmo drag is active. Capture selection first so this
+    // message-thread snapshot never reverses that order and deadlocks the
+    // render thread when a transform edit is released.
+    const auto selectedEntity = interactions_.selected();
     const std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
 
     // Object definitions persist an asset identifier rather than a GPU
@@ -1095,12 +1109,18 @@ void ViewportComponent::PublishFrameSnapshot() {
         // under AssetCatalog::NodeAssetKey, not the bare assetId -- see
         // ResolveProjectAssets and docs/OBJECT_MODEL.md's "Multi-part
         // import decomposes into components".
+        const auto sourceAssetKey = reference.packId.isNotEmpty()
+            ? scene::AssetCatalog::PackAssetKey(reference.packId, reference.packVersion, reference.assetId)
+            : reference.assetId;
+        const auto resolvedAssetKey = reference.nodeIndex >= 0
+            ? scene::AssetCatalog::NodeAssetKey(sourceAssetKey,
+                                                reference.packId.isNotEmpty() ? juce::String{} : reference.versionId,
+                                                reference.nodeIndex)
+            : sourceAssetKey;
         const auto plainAssetKey = reference.nodeIndex >= 0
             ? scene::AssetCatalog::NodeAssetKey(reference.assetId, reference.versionId, reference.nodeIndex)
             : reference.assetId;
-        auto asset = reference.packId.isNotEmpty()
-            ? assetCatalog_.Find(scene::AssetCatalog::PackAssetKey(reference.packId, reference.packVersion, reference.assetId))
-            : assetCatalog_.Find(plainAssetKey);
+        auto asset = assetCatalog_.Find(resolvedAssetKey);
         if (asset.mesh == nullptr && reference.packId.isNotEmpty()) {
             asset = assetCatalog_.Find(plainAssetKey);
         }
@@ -1114,7 +1134,6 @@ void ViewportComponent::PublishFrameSnapshot() {
         }
     }
 
-    const auto selectedEntity = interactions_.selected();
     auto drawView = world_.Registry().view<const scene::Transform, const scene::MeshRenderer>();
     for (auto entity : drawView) {
         const auto& renderer = drawView.get<const scene::MeshRenderer>(entity);
@@ -1191,8 +1210,7 @@ void ViewportComponent::PublishFrameSnapshot() {
                     }
 
                     // AI7 crossfade: while blendFromClip names a valid clip,
-                    // blend it (frozen at blendFromTime, the pose it was in
-                    // the instant the crossfade started) against activeClip
+                    // blend it (advancing from blendFromTime) against activeClip
                     // (the target, still advancing normally above) by
                     // blendTime/blendDuration. This advances independently of
                     // playbackSpeed/playing -- a crossfade is a fixed real-
@@ -1206,6 +1224,15 @@ void ViewportComponent::PublishFrameSnapshot() {
                     }
 
                     if (blendFromClipData != nullptr) {
+                        // A transition is two clips playing concurrently. A
+                        // frozen source visibly drags a character back toward
+                        // one pose during every crossfade.
+                        if (animator->playing && blendFromClipData->duration > 0.0f) {
+                            animator->blendFromTime += deltaSeconds * animator->playbackSpeed;
+                            animator->blendFromTime = std::fmod(animator->blendFromTime, blendFromClipData->duration);
+                            if (animator->blendFromTime < 0.0f)
+                                animator->blendFromTime += blendFromClipData->duration;
+                        }
                         animator->blendTime += deltaSeconds;
                         const float weight = animator->blendDuration > 0.0f
                                                   ? juce::jlimit(0.0f, 1.0f, animator->blendTime / animator->blendDuration)
@@ -1240,6 +1267,7 @@ void ViewportComponent::PublishFrameSnapshot() {
 }
 
 void ViewportComponent::renderOpenGL() {
+    tryInitializeOpenXR();
     bool vrFrameActive = false;
     if (openXRProvider_ != nullptr) {
         vrFrameActive = openXRProvider_->beginFrame(vrFrame_);
@@ -1291,8 +1319,7 @@ void ViewportComponent::renderOpenGL() {
         uploadVRTransformGizmo();
         uploadVREditorCart();
     } else {
-        updateDesktopTransformDrag();
-        updateDesktopTransformGizmo();
+        copyDesktopGizmoForRender();
         uploadVRTransformGizmo();
     }
 
@@ -1557,11 +1584,35 @@ void ViewportComponent::renderOpenGL() {
     if (vrFrameActive) openXRProvider_->submitFrame(vrFrame_);
 }
 
+void ViewportComponent::tryInitializeOpenXR()
+{
+    if (openXRProvider_ != nullptr)
+        return;
+
+    const double nowSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+    if (nowSeconds < nextOpenXRRetrySeconds_)
+        return;
+
+    // A failed system lookup is normal while a Quest headset or Link is
+    // asleep. Limit retries to one deliberate attempt every five seconds.
+    nextOpenXRRetrySeconds_ = nowSeconds + 5.0;
+    auto provider = std::make_unique<vr::OpenXRProvider>();
+    if (!provider->initialize() || !provider->initializeOpenGL(openGLContext_.getRawContext())) {
+        std::cout << "[vr] OpenXR headset not ready; will retry automatically." << std::endl;
+        provider->shutdown();
+        return;
+    }
+
+    openXRProvider_ = std::move(provider);
+    std::cout << "[vr] OpenXR graphics session initialized." << std::endl;
+}
+
 void ViewportComponent::openGLContextClosing() {
     if (openXRProvider_ != nullptr) {
         openXRProvider_->shutdown();
         openXRProvider_.reset();
     }
+    nextOpenXRRetrySeconds_ = 0.0;
     {
         const std::lock_guard<std::mutex> lock(world_.RegistryMutex());
         auto view = world_.Registry().view<scene::MeshRenderer>();

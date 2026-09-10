@@ -122,6 +122,68 @@ struct BehaviorAttachments {
     std::vector<juce::String> podIds;
 };
 
+// A Scene owns instances, never the character asset itself. The referenced
+// Definition is a suite-wide VFS asset; the rest is durable state belonging
+// to this particular placed or player-created character.
+struct CharacterInstanceRef {
+    juce::String instanceId;
+    juce::String definitionAssetId;
+    juce::String definitionVersionId;
+    juce::String rosterAssetId;
+    juce::NamedValueSet state;
+};
+
+// Engine-provided scene objects are authored entities, not project assets.
+// Their visualization is editor-only, while their configuration remains
+// available to the running scene.
+enum class BuiltInKind : std::uint8_t {
+    spawner,
+    playerStart,
+    cameraMarker,
+    triggerVolume,
+    waypoint,
+    audioEmitter
+};
+
+struct SceneBuiltIn {
+    BuiltInKind kind = BuiltInKind::spawner;
+};
+
+// Player Start is one configured use of this durable generic spawner.
+// NPC, loot, vehicle, and scripted encounter spawners will use the same
+// contract without making Player Start a special asset type.
+struct Spawner {
+    juce::String spawnId;
+    bool enabled = true;
+    int maximumActive = 1;
+    float respawnDelaySeconds = 0.0f;
+};
+
+// A named place where a Game's PlayerSlot may create or restore its selected
+// CharacterInstance. The slot name, rather than an EnTT handle, is the stable
+// connection between a Game asset and a Scene asset.
+struct PossessionSpawn {
+    juce::String playerSlotId = "player-1";
+    // Authored character asset to instantiate when this Player Start is used.
+    // The spawned entity is runtime-only; the marker remains the sole scene
+    // object that records the player's initial character choice.
+    juce::String characterAssetId;
+};
+
+// Runtime-only identity for a character created by a PossessionSpawn. It is
+// deliberately not serialized: Stop restores the authored scene snapshot.
+struct RuntimeSpawnedCharacter {
+    juce::String playerSlotId;
+};
+
+// Compatibility reader for scenes saved before PossessionSpawn existed.
+// New authoring must use CharacterInstanceRef + PossessionSpawn; the old
+// marker remains only so existing project scenes keep opening correctly.
+struct PlayerSpawn {
+    float capsuleRadiusMeters = 0.3f;
+    float capsuleHalfHeightMeters = 0.9f;
+};
+
 // Animation Control plan Phase 3: freezes this entity's own attached
 // Pods -- EngineFrustHost::tick skips on_tick for an entity carrying this
 // (lifecycle hooks on_spawn/on_begin_play/on_end_play still fire once as
@@ -237,7 +299,7 @@ struct Animator {
     float playbackSpeed = 1.0f; // multiplies deltaSeconds before advancing `time`.
 
     // AI7 animation-control crossfade: when blendFromClip >= 0, the render
-    // path samples BOTH blendFromClip (at its own frozen `time` the moment
+    // path samples BOTH blendFromClip (at its own advancing `time` from
     // the crossfade started) and activeClip (the blend target), blending
     // toward activeClip as blendTime advances toward blendDuration. Once
     // blendTime >= blendDuration the blend is done and blendFromClip resets
@@ -245,7 +307,7 @@ struct Animator {
     // animCrossfadeTo host node (Source/Frust/EngineFrustHost), not by
     // anything in the render path itself.
     int blendFromClip = -1;
-    float blendFromTime = 0.0f; // frozen `time` blendFromClip was at when the crossfade started.
+    float blendFromTime = 0.0f; // seconds into blendFromClip; advances while the crossfade is active.
     float blendTime = 0.0f;
     float blendDuration = 0.0f;
 };

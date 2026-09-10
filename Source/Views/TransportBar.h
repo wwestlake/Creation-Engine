@@ -34,7 +34,7 @@ private:
     TransportLookAndFeel transportLookAndFeel_;
 
     juce::Image logoImage_;
-    juce::Label titleLabel_{ {}, "Creation Engine" };
+    juce::Label titleLabel_{ {}, "Djehuti Engine" };
     juce::Label statusLabel_;
 
     juce::TextButton playButton_{ "play" };

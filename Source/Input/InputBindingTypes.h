@@ -92,10 +92,8 @@ struct InputCombo
     juce::Array<ComboKeyPress> keys;
 };
 
-// One InputBindings document == one Game (see InputBindingDocumentStore) --
-// not a separately browsable/versioned Thing, same reasoning games.xml
-// itself is not one (docs/OBJECT_MODEL.md's create/list/open/save/delete/
-// rename test): there is exactly one of these per Game, by design.
+// The binding set selected for one named context from a versioned Input
+// Mapping asset. A Game references the asset; it does not own this data.
 struct InputBindingSet
 {
     juce::Array<InputAction> actions;

@@ -9,7 +9,6 @@
 
 #include "engine/simulation.h"
 #include "engine/world.h"
-#include "Character/PossessedCharacter.h"
 #include "Physics/PhysicsWorld.h"
 #include "Frust/EngineFrustHost.h"
 #include "Frust/PodCatalog.h"
@@ -21,6 +20,7 @@
 #include "Views/PropertiesPanel.h"
 #include "Diagnostics/EngineLogVfsWriter.h"
 #include "Views/ContentBrowserPanel.h"
+#include "Views/EditorAvatarPanel.h"
 #include "Views/InputBindingsPanel.h"
 #include "Views/LogPanel.h"
 #include "Import/DjehutiImportWatcher.h"
@@ -31,7 +31,12 @@
 #include "Views/LightPanel.h"
 #include "Views/MaterialGraphPanel.h"
 #include "Views/PlaceholderPanel.h"
+#include "Views/SceneBuiltinsPanel.h"
+#include "Views/SceneGraphPanel.h"
 #include "Runtime/GameClientWindow.h"
+#include "Runtime/CameraDirector.h"
+#include "Runtime/PossessionService.h"
+#include "Runtime/RuntimeWorldRunner.h"
 #include "Project/EngineGameDocument.h"
 #include "Project/StarterGameTemplates.h"
 
@@ -101,16 +106,13 @@ private:
     void RunPreUpdatePhase();
     float RunPhysicsResolvePhase();
     void RunPostPhysicsPhase(float physicsElapsedSeconds);
+    void RunRuntimeFrame();
+    void UpdatePossessedCharacter(float physicsElapsedSeconds);
+    bool beginAutomaticPlayerPossession(bool placeAtSpawn, juce::String& error);
+    void releaseEditorPossession();
     void SetPlaying(bool playing);
     void initialiseDockingWorkspace();
     void openGameClient();
-    // Possessable Designer Character plan, Phase 4: spawns (or reuses, if
-    // one is already alive) a capsule character at the free-fly camera's
-    // current position, hands it to PhysicsWorld's CharacterVirtual wrapper,
-    // switches viewport_'s camera into possessed mode, and calls SetPlaying(true)
-    // -- possessing IS entering Play in place, not a separate mode (Decision 7).
-    // Stop (headerBar_.onStop) is the one way out, matching every other Play state.
-    void possessDesignerCharacter();
 
     // Editor UI/Workflow Overhaul plan, Phase 5: opens (or, if already
     // open, just activates) an independent PodEditorPanel+PodInfoPanel
@@ -190,6 +192,7 @@ private:
     bool ensureProjectSessionActive(juce::String& errorMessage);
     void saveAppSettings();
     void loadAppSettings();
+    void SetEditorAvatar(const juce::String& assetId);
     // Called right after projectSession_ becomes valid (new project,
     // opened project, or restored last-opened project) so podCatalog_
     // reflects whatever Pods that project has already saved.
@@ -206,6 +209,7 @@ private:
     // function, which every other emplace<>-heavy function in this
     // codebase already is).
     void HandleAssetDropped(const juce::String& description, juce::Point<int> localPosition);
+    void CreateBuiltIn(ce::scene::BuiltInKind kind);
     // Input Combo Events plan -- re-derives frustHost_'s "input-combos"
     // node library from inputActionSystem_.Bindings().combos. Called
     // whenever the active Game's combo list changes: both game-load call
@@ -239,15 +243,12 @@ private:
     // plan). AttachToWorld() is called once, in the constructor body.
     ce::physics::PhysicsWorld physicsWorld_;
     double lastPhysicsAdvanceSeconds_ = 0.0;
-    // Possessable Designer Character plan, Phase 3-4: the live orchestration
-    // object plus which entity (if any) is currently possessed (-1 = none).
-    // std::int64_t, not entt::entity, matching PhysicsWorld/PossessedCharacter's
-    // own entity-id convention throughout.
-    ce::character::PossessedCharacter possessedCharacter_;
-    std::int64_t possessedEntityId_ = -1;
     ce::interaction::EditorInteraction interactions_ { world_ };
     ce::frust::EngineFrustHost frustHost_ { world_ };
     ce::input::InputActionSystem inputActionSystem_;
+    ce::runtime::PossessionService possessionService_ { world_, physicsWorld_, inputActionSystem_ };
+    ce::runtime::CameraDirector cameraDirector_;
+    ce::runtime::RuntimeWorldRunner runtimeWorldRunner_ { world_, physicsWorld_, frustHost_, inputActionSystem_ };
     // Named registry of Pods (docs/BEHAVIOR_COMPONENT_MODEL.md, and the
     // Pod Management System plan generalizing it) -- owned here since
     // both PodEditorPanel (editing) and behaviorAttachmentPanel_
@@ -260,6 +261,9 @@ private:
     // ObjectDefinitionEditorPanel (edit) need the same catalog.
     ce::scene::ObjectDefinitionCatalog objectDefinitions_;
     bool isPlaying_ = false;
+    // Captured once at the first Play press. Pause intentionally retains it
+    // so Play resumes; Stop restores it and discards runtime-only changes.
+    juce::ValueTree playModeSceneSnapshot_;
 
     CreationSuiteHeaderBar headerBar_;
     creation::ui::SuiteShellController suiteShellController_;
@@ -286,14 +290,14 @@ private:
     juce::Component viewportRenderHost_;
 
     ce::ViewportComponent viewport_;
-    juce::TextButton runGameButton_ { "Run Game Client" };
-    juce::TextButton possessCharacterButton_ { "Possess Character" };
 
     // Editor UI/Workflow Overhaul plan, Phase 2: the one always-open,
     // selection-driven panel -- replaces the four separate standing panels
     // (Transform, Material Inspector, Behaviors, Lighting) that used to sit
     // here, each independently reading whatever entity was selected.
     ce::PropertiesPanel propertiesPanel_ { world_, interactions_, frustHost_, podCatalog_ };
+    ce::views::SceneBuiltinsPanel sceneBuiltinsPanel_;
+    ce::views::SceneGraphPanel sceneGraphPanel_ { world_ };
 
     // Input Binding System plan -- authors the active Game's one
     // InputBindings document. Always-docked, session-lifetime editor, not
@@ -333,6 +337,8 @@ private:
     // declared after viewport_: its constructor needs a fully-constructed
     // ImportPanel& to reach the AudioCatalog it evicts from on delete.
     ce::views::ContentBrowserPanel contentBrowserPanel_;
+    ce::views::EditorAvatarPanel editorAvatarPanel_;
+    juce::String editorAvatarAssetId_ { "EditorMainMale" };
 
     // The Log window -- a live, filterable view over ce::diagnostics::
     // EngineLog (timestamp/level/category/message). See LogPanel.h.

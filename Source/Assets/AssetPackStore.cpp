@@ -24,6 +24,7 @@ bool parseManifest(const juce::MemoryBlock& data, AssetPackStore::Manifest& mani
     manifest.version = object->getProperty("version").toString();
     manifest.title = object->getProperty("title").toString();
     manifest.defaultScene = object->getProperty("defaultScene").toString();
+    manifest.defaultInputMapping = object->getProperty("defaultInputMapping").toString();
     if (manifest.id.isEmpty() || manifest.version.isEmpty() || manifest.title.isEmpty())
     {
         error = "Asset Pack manifest requires id, version, and title.";
@@ -32,6 +33,11 @@ bool parseManifest(const juce::MemoryBlock& data, AssetPackStore::Manifest& mani
     if (manifest.defaultScene.isNotEmpty() && ! isSafeRelativePath(manifest.defaultScene))
     {
         error = "Asset Pack defaultScene must be inside the pack.";
+        return false;
+    }
+    if (manifest.defaultInputMapping.isNotEmpty() && ! isSafeRelativePath(manifest.defaultInputMapping))
+    {
+        error = "Asset Pack defaultInputMapping must be inside the pack.";
         return false;
     }
     manifest.assets.clear();
@@ -52,7 +58,8 @@ bool parseManifest(const juce::MemoryBlock& data, AssetPackStore::Manifest& mani
             return false;
         }
         manifest.assets.add({ asset->getProperty("id").toString(), asset->getProperty("kind").toString(),
-                              payload, asset->getProperty("generator").toString() });
+                              asset->getProperty("title").toString(), payload,
+                              asset->getProperty("generator").toString() });
     }
     return true;
 }

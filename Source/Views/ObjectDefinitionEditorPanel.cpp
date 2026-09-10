@@ -128,6 +128,7 @@ void ObjectDefinitionEditorPanel::PickMesh() {
         if (result <= 0 || result > static_cast<int>(meshes.size())) return;
         const auto& chosen = meshes[static_cast<std::size_t>(result - 1)];
         scene::ObjectComponentEntry entry;
+        entry.componentInstanceId = juce::Uuid().toString();
         entry.kind = scene::ObjectComponentKind::Mesh;
         entry.meshAssetId = chosen.id;
         entry.meshAssetVersionId = chosen.versionId;
@@ -153,6 +154,7 @@ void ObjectDefinitionEditorPanel::AddPod() {
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&addComponentButton_), [this, podNames](int result) {
         if (result <= 0 || result > static_cast<int>(podNames.size())) return;
         scene::ObjectComponentEntry entry;
+        entry.componentInstanceId = juce::Uuid().toString();
         entry.kind = scene::ObjectComponentKind::Pod;
         entry.podId = podNames[static_cast<std::size_t>(result - 1)];
         components_.push_back(std::move(entry));
@@ -178,6 +180,7 @@ void ObjectDefinitionEditorPanel::PickChildDefinition() {
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&addComponentButton_), [this, ids](int result) {
         if (result <= 0 || result > static_cast<int>(ids.size())) return;
         scene::ObjectComponentEntry entry;
+        entry.componentInstanceId = juce::Uuid().toString();
         entry.kind = scene::ObjectComponentKind::Child;
         entry.childDefinitionId = ids[static_cast<std::size_t>(result - 1)];
         // Identity transform -- editing a child's local placement isn't

@@ -1,212 +1,126 @@
-# Creation Engine Object Model
+# Djehuti Engine Container and Component Model
 
-**This is settled, not open for debate.** The user described this directly,
-repeatedly, across many attempts, until it landed precisely. A future
-session reading this: don't re-derive it, don't second-guess whether it's
-serious, don't ask to confirm again. Apply it, and move fast.
+Status: canonical architecture baseline. This document defines the terms the
+Engine uses. It replaces the earlier "everything is a component" document,
+which incorrectly treated Project, Game, and Scene as component assets.
 
-## Why this, instead of the conventional pattern
+## 1. Containers
 
-This is not novelty for its own sake. It's an attempt to find the actual
-minimal, principled shape of "a game" -- not to inherit boundaries other
-engines have (Unreal's Actor vs. ActorComponent, Unity's GameObject vs.
-Component, a privileged Scene/World type) just because they're
-conventional. Those boundaries exist for those engines' own historical
-and practical reasons, not because they're structurally necessary. Judge
-every one of them on whether it's actually required, not on precedent.
+A **Project** is a Suite-wide VFS container. It owns assets and does not
+belong to one application. Applications may organize their own documents
+within the Project, but they do not own the Project or make its assets
+private.
 
-## Hierarchy is a view, not the substrate
+Djehuti Engine uses the following container hierarchy:
 
-Nesting/containment (a tree, an outliner, parent/child) is a projection
-for human reasoning -- a convenient way for a person to look at part of
-the system -- not what the underlying data structure has to be. The real
-substrate is a graph: components as nodes, relationships as typed edges.
-"Houses" is one kind of edge. A wired connection (component A's output to
-component B's input) is another kind of edge, sitting on the same
-substrate. Nothing requires every relationship in the system to reduce
-cleanly to a tree; a tree view is just one useful rendering of the graph
-when containment happens to be the relationship worth looking at.
+```
+Project -> Game -> Scene
+```
 
-## The one primitive: Component
+A **Game** is an Engine document container within a Project. It identifies
+the scenes, game policy, input configuration, and other Engine-specific
+documents that make up that game.
 
-There is exactly one concept in this engine: the **component**. Nothing
-else exists as a distinct kind of thing -- not "GameObject," not "Scene,"
-not "World." Those are not engine concepts.
+A **Scene** is an Engine document container and the authored composition
+currently being edited or played. The 3D Scene Editor edits this container.
+A Scene owns scene-object records. It does not become a reusable component
+asset merely because it contains placed objects.
 
-A component may, independently and optionally:
+The physical VFS representation is an implementation detail, but the target
+shape is a versioned Game directory and a versioned Scene directory containing
+JSON documents. No durable document may require an operating-system path.
 
-- carry a **position** (and orientation/scale) -- some do, some don't. A
-  component with no position is pure behavior/logic, with no spatial
-  meaning at all.
-- **house other components** -- a component can contain other components,
-  which act/render relative to the housing component's position, if it
-  has one.
+## 2. Component Assets
 
-That's the whole model. Recursive, uniform, all the way up and all the
-way down. A game is a big component, full of components, some of which
-house other components, some of which have position, some of which are
-pure behavior with neither.
+A **component asset** is a reusable, versioned asset described entirely by
+its own data and references to other assets. It never embeds the bytes of a
+referenced mesh, material, texture, code pod, or child component.
 
-## There is no privileged tier
+Every reusable building block is a component asset. Examples of component
+capabilities include mesh presentation, material selection, code behavior,
+animation, audio, and reusable child composition. These examples describe
+capabilities, not mandatory Engine asset types.
 
-"GameObject," "Scene," "World," "Level" are labels a *game* built on this
-engine chooses to apply to a component at whatever point of nesting or
-scale is meaningful to that game -- the engine itself must never treat any
-of them as a distinct type. The same way Minecraft calls one top-level
-component "the Overworld" and another "the Nether": a game can have many
-of what it calls "Worlds" because "World" was never a privileged
-singleton to the engine to begin with.
+A component asset may expose named slots, defaults, properties, and typed
+connection points. It may reference other component assets to form a reusable
+**component assembly**. An assembly is still a reference graph, not a copied
+bundle of its referenced assets.
 
-Concretely: `engine::World` (a real, capitalized, singular class in this
-codebase today) bakes in exactly the wrong assumption -- that "World" is
-an engine-level primitive rather than game vocabulary applied to an
-ordinary component instance. This needs to be corrected, not preserved
-as-is just because it already exists.
+## 3. Mesh Components
 
-## Behaviors (Pods) are components, not a special case
+A mesh component references model data and describes its mesh hierarchy. It
+has named material slots, each with an optional default material-asset
+reference. It may also have default child-component or code-component
+references. Materials are independent assets; a mesh never owns material
+bytes.
 
-A FRust pod is exactly a component, the same tier as a mesh reference or
-a physics component -- not a second-class "attached behavior" bolted onto
-a "real" object. Any component can carry pod-behavior. Nothing about
-having a position or housing children is a prerequisite for having
-behavior, and nothing about having behavior implies a position.
+The Mesh Asset Editor opens this reusable definition. It presents the textured
+mesh hierarchy and edits slots, defaults, child-component references, and
+other reusable composition. It is not the Scene Editor and it does not edit a
+particular placed scene object.
 
-## Entity, Thing, Object -- and where Project/Game/Scene sit
+## 4. Scene Objects and Instances
 
-This refines "the one primitive: Component" above, it doesn't replace it.
-Component is the mechanism. Entity, Thing, and Object are what a human
-calls a component depending on how much of that mechanism it has actually
-taken on -- three rungs on one ladder, not three competing ideas.
+A **scene object** is a record owned by a Scene. It identifies one placement
+of a component asset or component assembly and records scene-specific data:
 
-**Entity**: the top-level abstraction. A name, and nothing else
-guaranteed. Pure identity.
+- stable scene-object identity;
+- the component asset/assembly reference and version policy;
+- transform and parent/child scene relation;
+- scene-owned connections and instance configuration;
+- explicit overrides of reusable defaults.
 
-**Thing**: an Entity that has gained real spatio-temporal extent. This is
-literal, not metaphor -- a real memory footprint, a real duration, real
-causal power within whatever process holds it. A Thing genuinely exists,
-the same way a running piece of code genuinely occupies memory for a real
-span of time and does real work in that time.
+The same component assembly may be placed in many scenes or more than once in
+one scene. Each placement has its own scene object record. Changing reusable
+defaults does not silently overwrite an existing scene object's overrides.
 
-**Object**: a Thing that has taken on a specific characteristic set. Not a
-privileged tier -- "Object" is a badly overloaded word elsewhere (a class,
-an instance, an elementary particle of some type system, depending who's
-using it), so it's deliberately narrowed here to mean exactly this: a Thing
-plus whichever bundle of characteristics got applied. A mesh reference is a
-Thing with mesh-characteristics. A material is a Thing with
-material-characteristics. A stop sign is a Thing composed from several
-other Things (a model, a material, maybe a behavior). None of these is a
-lesser category than another -- same non-negotiable point "There is no
-privileged tier" above already makes about GameObject/Scene/World, applied
-one level down to "Object" itself.
+If a component combination and its wiring are intended for reuse, they are
+published as a component assembly asset. If they exist only in one Scene,
+they remain scene-owned data.
 
-A container variant exists: some Things exist specifically to hold an
-arbitrary number of other Things, with FRust as the glue that wires the
-contents together. This is not a third kind of edge -- it's the "houses"
-edge from "Hierarchy is a view, not the substrate" above, at a coarser
-grain, plus real FRust-level connections (the wired-connection edge, same
-section) between whatever's inside. Composition itself reuses the exact
-mechanism already built for `ObjectDefinition`'s uniform component list --
-`ObjectComponentKind::{Mesh, Pod, Child}`, one list, tagged by kind. No new
-composition mechanism is introduced by any of this.
+## 5. Collision and Runtime Roles
 
-Where this sits, one level up from the engine itself: **Project** is the
-real top-level Thing, spanning every application in the Creation Suite --
-Creation Engine among several others. Each **application** is a tool
-operating on Things within its own area of the Project, not the Project
-itself. The editor window is a *view into* the Project, not identical to
-whatever it's currently showing -- the same relationship "hierarchy is a
-view, not the substrate" already establishes, recurring one level up at a
-different scale. Creation Engine specifically manages **Game**-Things:
-exactly one open at a time in the live editor, but every Game-Thing that
-exists in the Project is listable and reopenable. **Scene**-Things get the
-same treatment one level inside a Game.
+A collider is configuration on a placed scene object or one of its placed
+component instances. It is not intrinsic to a mesh component asset and it is
+not a property of the Scene container. A placed object may have no collider,
+one collider, or multiple colliders attached to selected mesh children or
+groups.
 
-The operational test for Thing-hood: can you create it, list it, open it,
-save it, delete it, rename it -- the exact verb surface `PodCatalog` and
-`ObjectDefinitionCatalog` already give Pods and Object Definitions. As of
-this writing, Game and Scene do not clear that bar -- they can only be
-created, then nothing else. Fixing that is the subject of a companion
-implementation plan, not a documentation exercise; this section records
-the settled reasoning for why it matters, not the mechanics of the fix.
+Motion behavior is a separate runtime role. Static, kinematic, and dynamic
+describe how a placed object participates in a particular Scene's simulation;
+they do not describe a mesh asset. The editor must configure collision and
+motion deliberately by purpose, not through a single "Add Physics" action.
 
-## Where the current implementation matches this (fixed)
+## 6. Runtime Resolution
 
-`ObjectDefinition` (`Source/Scene/ObjectDefinitions.h`) used to hard-code
-three separately-typed slots -- `meshAssetId` (a field), `behaviorPods`
-(its own list), `children` (another list). That was the exact arbitrary
-category distinction this model rejects. It's been collapsed into one
-uniform `std::vector<ObjectComponentEntry>`, tagged by
-`ObjectComponentKind::{Mesh, Pod, Child}` -- a mesh reference, an attached
-Pod, and a nested child object are now the same kind of list entry.
+At runtime, Djehuti Engine resolves scene-object records and component
+references into renderer, physics, animation, audio, and FRust runtime state.
+The renderer's AssetCatalog is a GPU-resource cache and resolver only. It is
+not the authoritative component graph, not the source of scene persistence,
+and not an asset ownership boundary.
 
-## Multi-part import decomposes into components, not one blob
+## 7. Current Migration Boundary
 
-A source file's mesh-bearing nodes are components housing components,
-each carrying its own position -- and that's true whether there's one
-node or twenty-six. Import reflects this directly: a model produces one
-Object Definition with one Mesh-kind component per mesh-bearing node,
-each with its own relative transform. There is deliberately no special
-case for exactly one node: an earlier version of this treated ">1 nodes"
-as the threshold for decomposition, silently skipping it for a single-
-node file -- which meant that node's own authored offset (relative to
-the file's root) was dropped, not applied, for every single-mesh import.
-That was the same "no privileged tier" violation this whole document
-argues against, just at the import layer: "exactly one" is not an
-architecturally different case from "several."
+`ObjectDefinition` is the current compatibility representation for an early
+component assembly. It currently supports mesh, Pod, and child-definition
+references. New work must evolve it toward the general component-assembly
+schema while continuing to read existing Object Definition assets and saved
+scenes. It is not the final name or final data model.
 
-Every Mesh-kind component instantiates as its OWN child entity,
-uniformly -- including when a definition has exactly one. A component's
-own Transform always holds a value relative to its Parent (per "hierarchy
-is a view, not the substrate" above); the entity housing a definition's
-components never bakes any child's position into its own Transform, and
-never has a child's world-equivalent position baked into that child's
-Transform either. `WorldModelMatrix` (`Source/Scene/TransformHierarchy.h`)
-composes the Parent chain into a world matrix at the moment it's needed --
-render, pick, gizmo drag -- which is what makes moving a parent correctly
-move everything under it, live, without re-baking anything.
+`EngineSceneSerializer` currently writes one XML scene document containing
+ECS-derived records. It is a compatibility persistence format. New scene
+storage must migrate toward explicit JSON scene-object documents without
+breaking existing project content.
 
-Two accepted limitations of this, named here so they stay tracked rather
-than rediscovered later:
+## 8. Invariants
 
-- **Node-index addressing is order-dependent.** A part is addressed as
-  "node N of asset X." Re-exporting a file with reordered nodes silently
-  repoints existing placed instances at the wrong part. A node name is
-  stored as a display/fallback value, but there's no automatic
-  reconciliation-by-name.
-- **`composeTransform` is additive, not a real matrix composition** -- it
-  adds positions and rotations and multiplies scale; it does not rotate a
-  child's offset by its parent's orientation. This was already a latent
-  approximation for nested Child definitions; multi-part import exposes
-  it far more often, for any source rig with a rotated intermediate node.
-  A real fix is matrix-based composition -- future work, not yet built.
-
-## Today's mechanism (real, working, not yet reshaped)
-
-- An object definition does not own a GPU resource or raw C++ pointer. It
-  stores an asset identifier. The viewport resolves that identifier
-  through `AssetCatalog` once it has a live OpenGL context.
-- Definitions can compose children. The factory detects direct and
-  indirect cycles, while allowing the same child definition to be reused
-  in separate branches.
-- Definition identity, asset references, behavior references, and
-  per-instance state are serialized with the scene.
-- During a behavior call, `engine_current_object_entity()` identifies
-  only the object receiving that call. The behavior can use a separately
-  granted Engine capability such as `engine_set_position_x`; it is not
-  given unrestricted registry access. Pod source discovery and VFS-backed
-  project packaging are a separate asset-management concern from this
-  execution contract.
-
-The Engine's named behavior lifecycle is documented in
-[`FRUST_BEHAVIOR_LIFECYCLE.md`](FRUST_BEHAVIOR_LIFECYCLE.md). Animation
-control -- built the same way, as Pods/FRust nodes, deliberately not as a
-separate Animation Blueprint-style system -- is documented in
-[`ANIMATION_MODEL.md`](ANIMATION_MODEL.md).
-
-## Applying this
-
-Every future addition to the object/scene system is judged against this:
-does it introduce a special-cased category ("this is a GameObject, that's
-a Pod, that's a Scene") that the engine itself enforces? If yes, it's
-wrong regardless of how convenient it looks, and should be built as one
-more instance of the single component concept instead.
+- Projects own assets Suite-wide; applications consume assets they understand.
+- Containers contain documents and scene-object records; component assets are
+  reusable reference graphs.
+- A reference is never ownership of the referenced asset's bytes.
+- Runtime pointers, OpenGL resources, Jolt handles, and EnTT handles are not
+  durable asset or scene-document data.
+- Reusable defaults and scene-specific overrides have separate storage and
+  clear edit surfaces.
+- All durable references use stable asset identifiers and version policies,
+  never OS filesystem paths.

@@ -32,6 +32,19 @@ struct RequiredPackInfo
     juce::String version;
 };
 
+// A Game owns the policy for one controllable participant, not the character
+// itself. The policy and roster are suite-wide character assets resolved by
+// stable id/version through the project's VFS.
+struct PlayerSlotInfo
+{
+    juce::String id;
+    juce::String displayName;
+    juce::String creatorPolicyAssetId;
+    juce::String creatorPolicyVersionId;
+    juce::String defaultRosterAssetId;
+    juce::String defaultInstanceAssetId;
+};
+
 struct GameDocumentInfo
 {
     juce::String id;
@@ -39,6 +52,16 @@ struct GameDocumentInfo
     juce::String entrySceneId;
     juce::Array<SceneDocumentInfo> scenes;
     juce::Array<RequiredPackInfo> requiredPacks;
+    juce::Array<PlayerSlotInfo> playerSlots;
+
+    // Input mappings are suite assets. A new Game pins the packaged mapping
+    // it was created with; a designer edit publishes a project-owned asset
+    // and replaces this reference without modifying the packaged original.
+    juce::String inputMappingPackId;
+    juce::String inputMappingPackVersion;
+    juce::String inputMappingEntryPath;
+    juce::String inputMappingAssetId;
+    juce::String inputMappingAssetVersionId;
 
     // The creation::assets::AssetKind::game manifest entry this game is
     // registered as -- same reasoning as SceneDocumentInfo::catalogAssetId

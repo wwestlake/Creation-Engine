@@ -53,6 +53,10 @@ public:
     std::int64_t dispatch(EngineFrustEvent event, std::int64_t argument = 0);
     void prepareLevel(std::int64_t tick);
     void beginPlay(std::int64_t tick);
+    void prePhysicsTick(std::int64_t tick);
+    void postPhysicsTick(std::int64_t tick);
+    // Compatibility entry point for callers that do not own a split physics
+    // phase yet. New runtime hosts call prePhysicsTick/postPhysicsTick.
     void tick(std::int64_t tick);
     void endPlay(std::int64_t tick);
     void notifyObjectDestroyed(entt::entity entity, std::int64_t tick);

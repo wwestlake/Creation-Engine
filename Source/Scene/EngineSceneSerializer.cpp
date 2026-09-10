@@ -1,5 +1,6 @@
 #include "Scene/EngineSceneSerializer.h"
 
+#include "Physics/PhysicsComponents.h"
 #include "Render/Scene/Material.h"
 
 namespace ce::scene
@@ -53,6 +54,7 @@ juce::ValueTree EngineSceneSerializer::serializeScene(ce::engine::World& world)
         {
             entityNode.setProperty("visible", flags->visible, nullptr);
             entityNode.setProperty("locked", flags->locked, nullptr);
+            entityNode.setProperty("editorOnly", flags->editorOnly, nullptr);
         }
 
         if (auto* transform = reg.try_get<Transform>(entity))
@@ -105,6 +107,69 @@ juce::ValueTree EngineSceneSerializer::serializeScene(ce::engine::World& world)
 
         if (auto* objectDefinition = reg.try_get<ObjectDefinitionRef>(entity))
             entityNode.setProperty("objectDefinitionId", objectDefinition->definitionId, nullptr);
+
+        if (auto* character = reg.try_get<CharacterInstanceRef>(entity))
+        {
+            juce::ValueTree characterNode("CharacterInstance");
+            characterNode.setProperty("instanceId", character->instanceId, nullptr);
+            characterNode.setProperty("definitionAssetId", character->definitionAssetId, nullptr);
+            characterNode.setProperty("definitionVersionId", character->definitionVersionId, nullptr);
+            characterNode.setProperty("rosterAssetId", character->rosterAssetId, nullptr);
+            for (int index = 0; index < character->state.size(); ++index)
+                characterNode.setProperty(character->state.getName(index), character->state.getValueAt(index), nullptr);
+            entityNode.addChild(characterNode, -1, nullptr);
+        }
+
+        if (auto* possessionSpawn = reg.try_get<PossessionSpawn>(entity)) {
+            entityNode.setProperty("possessionPlayerSlotId", possessionSpawn->playerSlotId, nullptr);
+            entityNode.setProperty("possessionCharacterAssetId", possessionSpawn->characterAssetId, nullptr);
+        }
+
+        if (auto* builtIn = reg.try_get<SceneBuiltIn>(entity))
+            entityNode.setProperty("builtInKind", static_cast<int>(builtIn->kind), nullptr);
+
+        if (auto* spawner = reg.try_get<Spawner>(entity))
+        {
+            juce::ValueTree spawnerNode("Spawner");
+            spawnerNode.setProperty("spawnId", spawner->spawnId, nullptr);
+            spawnerNode.setProperty("enabled", spawner->enabled, nullptr);
+            spawnerNode.setProperty("maximumActive", spawner->maximumActive, nullptr);
+            spawnerNode.setProperty("respawnDelaySeconds", spawner->respawnDelaySeconds, nullptr);
+            entityNode.addChild(spawnerNode, -1, nullptr);
+        }
+
+        if (auto* playerSpawn = reg.try_get<PlayerSpawn>(entity))
+        {
+            entityNode.setProperty("isPlayerSpawn", true, nullptr);
+            entityNode.setProperty("playerCapsuleRadiusMeters", playerSpawn->capsuleRadiusMeters, nullptr);
+            entityNode.setProperty("playerCapsuleHalfHeightMeters", playerSpawn->capsuleHalfHeightMeters, nullptr);
+        }
+
+        if (auto* rigidBody = reg.try_get<physics::RigidBodyComponent>(entity))
+        {
+            juce::ValueTree rigidBodyNode("RigidBody");
+            rigidBodyNode.setProperty("motionType", static_cast<int>(rigidBody->motionType), nullptr);
+            rigidBodyNode.setProperty("mass", rigidBody->mass, nullptr);
+            rigidBodyNode.setProperty("friction", rigidBody->friction, nullptr);
+            rigidBodyNode.setProperty("restitution", rigidBody->restitution, nullptr);
+            rigidBodyNode.setProperty("linearDamping", rigidBody->linearDamping, nullptr);
+            rigidBodyNode.setProperty("angularDamping", rigidBody->angularDamping, nullptr);
+            entityNode.addChild(rigidBodyNode, -1, nullptr);
+        }
+
+        if (auto* collider = reg.try_get<physics::ColliderComponent>(entity))
+        {
+            juce::ValueTree colliderNode("Collider");
+            colliderNode.setProperty("shape", static_cast<int>(collider->shape), nullptr);
+            colliderNode.setProperty("halfExtentX", collider->halfExtentX, nullptr);
+            colliderNode.setProperty("halfExtentY", collider->halfExtentY, nullptr);
+            colliderNode.setProperty("halfExtentZ", collider->halfExtentZ, nullptr);
+            colliderNode.setProperty("radius", collider->radius, nullptr);
+            colliderNode.setProperty("halfHeight", collider->halfHeight, nullptr);
+            colliderNode.setProperty("collisionLayer", static_cast<int>(collider->collisionLayer), nullptr);
+            colliderNode.setProperty("isSensor", collider->isSensor, nullptr);
+            entityNode.addChild(colliderNode, -1, nullptr);
+        }
 
         if (auto* behaviors = reg.try_get<BehaviorAttachments>(entity))
         {
@@ -172,6 +237,7 @@ bool EngineSceneSerializer::restoreScene(ce::engine::World& world, const juce::V
         SceneFlags flags;
         flags.visible = entityNode.getProperty("visible", true);
         flags.locked = entityNode.getProperty("locked", false);
+        flags.editorOnly = entityNode.getProperty("editorOnly", false);
         reg.emplace<SceneFlags>(entity, flags);
 
         auto tNode = entityNode.getChildWithName("Transform");
@@ -212,6 +278,80 @@ bool EngineSceneSerializer::restoreScene(ce::engine::World& world, const juce::V
         const auto objectDefinitionId = entityNode.getProperty("objectDefinitionId").toString();
         if (objectDefinitionId.isNotEmpty())
             reg.emplace<ObjectDefinitionRef>(entity, ObjectDefinitionRef{ objectDefinitionId });
+
+        if (const auto characterNode = entityNode.getChildWithName("CharacterInstance"); characterNode.isValid())
+        {
+            CharacterInstanceRef character;
+            character.instanceId = characterNode.getProperty("instanceId").toString();
+            character.definitionAssetId = characterNode.getProperty("definitionAssetId").toString();
+            character.definitionVersionId = characterNode.getProperty("definitionVersionId").toString();
+            character.rosterAssetId = characterNode.getProperty("rosterAssetId").toString();
+            for (int index = 0; index < characterNode.getNumProperties(); ++index)
+            {
+                const auto property = characterNode.getPropertyName(index);
+                if (property != juce::Identifier("instanceId") && property != juce::Identifier("definitionAssetId") &&
+                    property != juce::Identifier("definitionVersionId") && property != juce::Identifier("rosterAssetId"))
+                    character.state.set(property, characterNode.getProperty(property));
+            }
+            reg.emplace<CharacterInstanceRef>(entity, std::move(character));
+        }
+
+        const auto possessionSlotId = entityNode.getProperty("possessionPlayerSlotId").toString();
+        if (possessionSlotId.isNotEmpty())
+            reg.emplace<PossessionSpawn>(entity, PossessionSpawn{
+                possessionSlotId, entityNode.getProperty("possessionCharacterAssetId").toString() });
+
+        if (entityNode.hasProperty("builtInKind"))
+            reg.emplace<SceneBuiltIn>(entity, SceneBuiltIn{
+                static_cast<BuiltInKind>(static_cast<int>(entityNode.getProperty("builtInKind"))) });
+
+        if (const auto spawnerNode = entityNode.getChildWithName("Spawner"); spawnerNode.isValid())
+        {
+            Spawner spawner;
+            spawner.spawnId = spawnerNode.getProperty("spawnId").toString();
+            spawner.enabled = spawnerNode.getProperty("enabled", true);
+            spawner.maximumActive = static_cast<int>(spawnerNode.getProperty("maximumActive", 1));
+            spawner.respawnDelaySeconds = static_cast<float>(spawnerNode.getProperty("respawnDelaySeconds", 0.0));
+            reg.emplace<Spawner>(entity, std::move(spawner));
+        }
+
+        if (entityNode.getProperty("isPlayerSpawn", false))
+        {
+            PlayerSpawn playerSpawn;
+            playerSpawn.capsuleRadiusMeters = static_cast<float>(entityNode.getProperty("playerCapsuleRadiusMeters", 0.3));
+            playerSpawn.capsuleHalfHeightMeters = static_cast<float>(entityNode.getProperty("playerCapsuleHalfHeightMeters", 0.9));
+            reg.emplace<PlayerSpawn>(entity, playerSpawn);
+            // One-way migration at load time: legacy scenes become usable by
+            // the slot/spawn runtime without rewriting their original data.
+            if (!reg.all_of<PossessionSpawn>(entity))
+                reg.emplace<PossessionSpawn>(entity, PossessionSpawn{});
+        }
+
+        if (const auto rigidBodyNode = entityNode.getChildWithName("RigidBody"); rigidBodyNode.isValid())
+        {
+            physics::RigidBodyComponent rigidBody;
+            rigidBody.motionType = static_cast<physics::MotionType>(static_cast<int>(rigidBodyNode.getProperty("motionType", 2)));
+            rigidBody.mass = static_cast<float>(rigidBodyNode.getProperty("mass", 1.0));
+            rigidBody.friction = static_cast<float>(rigidBodyNode.getProperty("friction", 0.5));
+            rigidBody.restitution = static_cast<float>(rigidBodyNode.getProperty("restitution", 0.0));
+            rigidBody.linearDamping = static_cast<float>(rigidBodyNode.getProperty("linearDamping", 0.05));
+            rigidBody.angularDamping = static_cast<float>(rigidBodyNode.getProperty("angularDamping", 0.05));
+            reg.emplace<physics::RigidBodyComponent>(entity, rigidBody);
+        }
+
+        if (const auto colliderNode = entityNode.getChildWithName("Collider"); colliderNode.isValid())
+        {
+            physics::ColliderComponent collider;
+            collider.shape = static_cast<physics::ColliderShapeKind>(static_cast<int>(colliderNode.getProperty("shape", 0)));
+            collider.halfExtentX = static_cast<float>(colliderNode.getProperty("halfExtentX", 0.5));
+            collider.halfExtentY = static_cast<float>(colliderNode.getProperty("halfExtentY", 0.5));
+            collider.halfExtentZ = static_cast<float>(colliderNode.getProperty("halfExtentZ", 0.5));
+            collider.radius = static_cast<float>(colliderNode.getProperty("radius", 0.5));
+            collider.halfHeight = static_cast<float>(colliderNode.getProperty("halfHeight", 0.5));
+            collider.collisionLayer = static_cast<std::uint16_t>(static_cast<int>(colliderNode.getProperty("collisionLayer", 0)));
+            collider.isSensor = static_cast<bool>(colliderNode.getProperty("isSensor", false));
+            reg.emplace<physics::ColliderComponent>(entity, collider);
+        }
 
         if (const auto behaviorsNode = entityNode.getChildWithName("Behaviors"); behaviorsNode.isValid())
         {

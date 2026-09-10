@@ -1,30 +1,30 @@
-# Behavior / Component / Model
+# Behavior / Component Assembly
 
 Status: design baseline for review (2026-09-02)
 
 This document replaces any Unreal Blueprint framing used earlier in
 discussion. Creation Engine does not attach one script to one Actor class.
-It composes plugin Components onto a Model, wired together by a graph the
-Model itself owns. See [`OBJECT_MODEL.md`](OBJECT_MODEL.md) for the
-existing entity/definition data model this extends, and
+It composes reusable component assets into a component assembly, wired
+together by a graph the assembly itself owns. A Scene places scene objects
+that reference those assemblies; neither Project, Game, nor Scene is itself a
+component asset. See [`OBJECT_MODEL.md`](OBJECT_MODEL.md) for the canonical
+container and component model, and
 [`Suite-Node-Authoring-Design.md`](../../../docs/architecture/Suite-Node-Authoring-Design.md)
 for the Composite-node mechanism this reuses rather than reinvents.
 
 ## 1. The three terms
 
-**Model** — a composed, reusable unit: one or more Mesh objects positioned
-relative to each other, their Materials, Animations, a list of attached
-Component instances, and one wiring graph internal to the Model that
-connects those components to whatever the Model specifically needs. A
-Model is what gets placed in a scene. Example: "Cart" is a Model —
-chassis mesh plus four wheel meshes, their materials, and a
-CartMovementControl component wired to each wheel's rotation and the
-chassis transform.
+**Component assembly** — a composed, reusable reference graph: component
+assets, their defaults, and typed connections. An assembly does not embed its
+referenced asset bytes. A Scene places a scene object that references an
+assembly and carries its own transform, scene-only connections, and overrides.
+The current `ObjectDefinition` format is a compatibility adapter for this
+concept, not its final schema or final name.
 
-**Component** — a reusable, pluggable unit with its own internal control
-logic. Attaching a Component to a Model adds it to that Model's component
-list; it does nothing by itself until the Model's wiring graph connects
-its output pins to something. A Component's outputs mean nothing on their
+**Component** — a reusable, pluggable asset with one or more capabilities.
+A behavior-backed component adds internal control logic. Adding a component
+reference to an assembly does nothing by itself until the assembly's wiring
+graph connects its output pins to something. A Component's outputs mean nothing on their
 own — they are only meaningful once wired to a specific target.
 
 **Behavior** — the graph model a Component (or any node-graph-backed unit)
@@ -57,18 +57,18 @@ independently-editable interface (renaming a pin does not break existing
 links). Component-on-a-Model is that same mechanism applied to attaching
 plugin behavior to an object, not a parallel system.
 
-## 3. Wiring a Component into a Model
+## 3. Wiring a Component into an Assembly
 
-1. Attach: add a Component instance to a Model's component list.
-2. Wire: in the Model's own wiring graph, connect the Component's output
-   pins to specific targets the Model exposes — ordinary nodes with their
+1. Reference: add a component-asset reference to an assembly.
+2. Wire: in the assembly's own wiring graph, connect the Component's output
+   pins to specific targets the assembly exposes — ordinary nodes with their
    own typed pins (e.g. "this wheel mesh's rotation," "the chassis
    transform"). These target nodes are built per Model as needed; there is
    no separate mechanism required for a Model to expose connection
    points beyond the same typed-pin/typed-node contract Components
    already use.
 
-A Model with no components attached is just static geometry. A Component
+A component assembly with no behavior references may be presentation-only. A Component
 attached but unwired does nothing. Both states are valid and expected
 during authoring.
 

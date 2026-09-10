@@ -20,7 +20,7 @@ bool ProjectContentAssetStore::importSource(creation::assets::ProjectSession& se
 {
     if (! session.isValid())
     {
-        errorMessage = "Open a Creation Engine game before importing assets.";
+        errorMessage = "Open a Djehuti Engine game before importing assets.";
         return false;
     }
 
@@ -32,7 +32,7 @@ bool ProjectContentAssetStore::importSource(creation::assets::ProjectSession& se
     options.logicalPath = sourceBundleRoot + sourceFile.getFileName();
     options.category = category;
     options.mediaType = sourceFile.getFileExtension().substring(1).toLowerCase();
-    options.sourceApp = "Creation Engine";
+    options.sourceApp = "Djehuti Engine";
     options.sourceTool = "Engine Import";
     options.importerId = "creation-engine-source-import";
     options.importerVersion = "1";

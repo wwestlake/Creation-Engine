@@ -26,6 +26,7 @@
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 
 #include <algorithm>
+#include <cassert>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -218,17 +219,23 @@ PhysicsWorld::PhysicsWorld()
     impl_ = std::make_unique<Impl>();
 }
 
-PhysicsWorld::~PhysicsWorld() = default;
+PhysicsWorld::~PhysicsWorld()
+{
+    DetachFromWorld();
+}
 
 void PhysicsWorld::AttachToWorld(ce::engine::World& world)
 {
+    assert(attachedWorld_ == nullptr);
+    if (attachedWorld_ != nullptr)
+        return;
     // Dangling-handle safety (Decision 6): an entity's RigidBodyComponent
     // can be removed by ANY path (explicit component removal, or the whole
     // entity being destroyed) -- entt's on_destroy fires for all of them,
     // unlike a single call site like notifyObjectDestroyed would. Removes
     // and destroys the Jolt body immediately so a gone entity never leaves
     // a "ghost" body still simulating.
-    world.Registry().on_destroy<RigidBodyComponent>().connect<[](entt::registry& registry, entt::entity entity)
+    rigidBodyDestroyConnection_ = world.Registry().on_destroy<RigidBodyComponent>().connect<[](entt::registry& registry, entt::entity entity)
     {
         // Static connect-time lambda can't capture `this` -- reads the
         // owning PhysicsWorld::Impl back out of the registry's own
@@ -252,7 +259,7 @@ void PhysicsWorld::AttachToWorld(ce::engine::World& world)
     // Phase 1) -- a separate map, not a component field, since
     // CharacterVirtual is heavier than a BodyID (see CharacterControllerTag's
     // own comment).
-    world.Registry().on_destroy<CharacterControllerTag>().connect<[](entt::registry& registry, entt::entity entity)
+    characterDestroyConnection_ = world.Registry().on_destroy<CharacterControllerTag>().connect<[](entt::registry& registry, entt::entity entity)
     {
         auto* impl = registry.ctx().find<PhysicsWorld::Impl*>();
         if (impl != nullptr && *impl != nullptr)
@@ -264,6 +271,24 @@ void PhysicsWorld::AttachToWorld(ce::engine::World& world)
     }>();
 
     world.Registry().ctx().emplace<PhysicsWorld::Impl*>(impl_.get());
+    attachedWorld_ = &world;
+}
+
+void PhysicsWorld::DetachFromWorld()
+{
+    if (attachedWorld_ == nullptr)
+        return;
+
+    std::lock_guard<std::mutex> lock(attachedWorld_->RegistryMutex());
+    auto& registry = attachedWorld_->Registry();
+    rigidBodyDestroyConnection_.release();
+    characterDestroyConnection_.release();
+    if (auto* registeredImpl = registry.ctx().find<PhysicsWorld::Impl*>();
+        registeredImpl != nullptr && *registeredImpl == impl_.get())
+    {
+        registry.ctx().erase<PhysicsWorld::Impl*>();
+    }
+    attachedWorld_ = nullptr;
 }
 
 float PhysicsWorld::Advance(ce::engine::World& world, float realElapsedSeconds)
@@ -659,6 +684,16 @@ bool PhysicsWorld::IsCharacterGrounded(std::int64_t entity) const
 {
     const auto found = impl_->characters.find(static_cast<entt::entity>(entity));
     return found != impl_->characters.end() && found->second->IsSupported();
+}
+
+CharacterMotionState PhysicsWorld::GetCharacterMotionState(std::int64_t entity) const
+{
+    const auto found = impl_->characters.find(static_cast<entt::entity>(entity));
+    if (found == impl_->characters.end())
+        return {};
+
+    const auto velocity = found->second->GetLinearVelocity();
+    return { velocity.GetX(), velocity.GetY(), velocity.GetZ(), found->second->IsSupported() };
 }
 
 } // namespace ce::physics

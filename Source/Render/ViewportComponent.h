@@ -71,34 +71,10 @@ namespace ce {
 // snapshotMutex_ below guards only a cheap shared_ptr swap, never the
 // snapshot's own data (immutable once published, so the render thread
 // reads through its copy of the pointer with no lock held at all).
-// world_.RegistryMutex() is still used, deliberately, by gizmo picking/
-// dragging and mouse-click selection (desktopPick,
-// updateDesktopTransformGizmo/Drag) -- those stay interactive, on-demand,
-// and render-thread-resident for the reason documented on
-// updateDesktopTransformDrag() itself (avoiding a worse contention
-// problem from message-thread mouse-move events). Snapshotting only
-// applies to the part of the frame that ran unconditionally, every tick,
-// regardless of user interaction -- the actual "render and update
-// everything at once" problem.
-//
-// Gizmo picking/dragging deliberately does NOT follow the "share via
-// RegistryMutex" rule above, for the same reason FreeCamera's WASD/look
-// input doesn't: RegistryMutex is also locked by this same render thread
-// every single frame just to draw the gizmo (updateDesktopTransformGizmo,
-// below), so a continuous stream of message-thread lock acquisitions
-// during a drag (one per mouse-move, far more than 60/sec) fights the
-// render thread for that same lock and reliably hangs the app. Camera
-// look/fly never had this problem because it never crosses threads at
-// all -- FreeCamera reads raw input state (atomics) and does all its
-// actual position math from inside Update(), called from here on the
-// render thread. Gizmo interaction follows the same shape: mouseDown/
-// mouseDrag/mouseUp (below) only record where the mouse is and whether
-// the button is down, as atomics; updateDesktopTransformDrag(), called
-// once per frame from renderOpenGL() alongside updateDesktopTransformGizmo(),
-// does the actual ray cast, hit test, and EditorInteraction calls -- all
-// on the render thread, so RegistryMutex is never contended by two
-// threads during a drag, only ever touched by the one that already owns
-// it every frame regardless.
+// Desktop picking, selection, and gizmo manipulation are editor operations,
+// so they run directly in the JUCE message-thread mouse callbacks. The render
+// thread receives a copied gizmo draw state only; it never takes the World
+// registry lock for a desktop editor interaction.
 class ViewportComponent final : public juce::Component,
                                  private juce::OpenGLRenderer,
                                  public juce::DragAndDropTarget {
@@ -121,6 +97,11 @@ public:
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override;
+
+    // Message-thread only. Rebuild after a selection or authored transform
+    // change; the renderer copies the resulting draw state without reading
+    // the live World.
+    void RefreshDesktopGizmo();
 
     DirectionalLight GetSunLight() const;
     void SetSunLight(const DirectionalLight& light);
@@ -151,6 +132,8 @@ public:
     void EnterPossessedMode() { freeCamera_.EnterPossessedMode(); }
     void ExitPossessedMode() { freeCamera_.ExitPossessedMode(); }
     void SetPossessedFeetPosition(juce::Vector3D<float> feetPosition) { freeCamera_.SetPossessedFeetPosition(feetPosition); }
+    void SetDirectedCameraPose(juce::Vector3D<float> position, juce::Vector3D<float> target) { freeCamera_.SetDirectedPose(position, target); }
+    void ClearDirectedCameraPose() { freeCamera_.ClearDirectedPose(); }
 
     // The free camera's current look direction (Target() - Position(), unit
     // length), snapshotted under stateLock_ the same way SpawnPosition()
@@ -224,10 +207,15 @@ private:
     void renderOpenGL() override;
     void openGLContextClosing() override;
 
+    // Called only on the render thread, where JUCE has made the OpenGL
+    // context current. A headset may become available after the editor
+    // launches, so OpenXR discovery is retried instead of being startup-only.
+    void tryInitializeOpenXR();
+
     void updateVREditorRig(float deltaSeconds);
     void updateVRInteraction();
-    void updateDesktopTransformDrag();
-    void updateDesktopTransformGizmo();
+    void handleDesktopPointer(const juce::Point<float>& screenPosition, bool buttonDown);
+    void copyDesktopGizmoForRender();
     void uploadVRWands();
     void uploadVRTransformGizmo();
     void uploadVREditorCart();
@@ -253,6 +241,7 @@ private:
 
     juce::OpenGLContext openGLContext_;
     std::unique_ptr<vr::OpenXRProvider> openXRProvider_;
+    double nextOpenXRRetrySeconds_ = 0.0;
     engine::vr::FrameState vrFrame_{};
     // The OpenXR eye pose already contains physical headset height.  This
     // rig is the world-space floor anchor, so adding another 1.6 m here
@@ -301,19 +290,14 @@ private:
     std::unique_ptr<ShaderComposer> shaderComposer_;
     scene::AssetCatalog assetCatalog_;
 
-    // Written from mouseDown/mouseDrag/mouseUp (message thread), read once
-    // per frame from updateDesktopTransformDrag() (render thread) -- see
-    // the class comment above for why this is atomics-only, no mutex.
-    std::atomic<bool> desktopMouseButtonDown_{ false };
-    std::atomic<float> desktopMouseX_{ 0.0f };
-    std::atomic<float> desktopMouseY_{ 0.0f };
-
-    // Render-thread-only state below: never touched from mouseDown/
-    // mouseDrag/mouseUp, only from updateDesktopTransformDrag().
+    // Message-thread-only desktop interaction lifecycle. Renderer access is
+    // limited to a separately copied draw description below.
     bool desktopMouseWasDown_ = false;
     bool desktopTransformDrag_ = false;
     float desktopDragDistance_ = 0.0f;
     int desktopRotationAxisIndex_ = -1;
+    juce::CriticalSection desktopGizmoLock_;
+    VRTransformGizmo desktopTransformGizmo_{};
 
     mutable juce::CriticalSection stateLock_;
     DirectionalLight sunLight_;

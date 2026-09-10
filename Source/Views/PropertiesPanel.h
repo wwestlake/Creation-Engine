@@ -55,6 +55,7 @@ public:
     // decides what "open" means (open the first attached Pod's editor, or
     // -- object-first -- create one and attach it now if none exists yet).
     std::function<void(entt::entity)> onOpenEditorRequested;
+    std::function<juce::StringArray()> playerCharacterAssetChoices;
 
     void resized() override;
     void paint(juce::Graphics& g) override;
@@ -63,12 +64,21 @@ private:
     class ContentHost;
 
     void DeleteSelectedEntity();
+    void SetSelectedPlayerStartCharacter(const juce::String& assetId);
+    // Character choices are stable application assets. They are loaded when
+    // selection changes, never from the 30 Hz inspector refresh path.
+    void UpdatePlayerStartState(bool reloadCharacterChoices = false);
 
     engine::World& world_;
     entt::entity selectedEntity_ = entt::null;
 
     juce::TextButton deleteObjectButton_{ "Delete Object" };
     juce::TextButton openEditorButton_{ "Open Editor" };
+    juce::Label playerStartCharacterLabel_{ {}, "Player Character" };
+    juce::ComboBox playerStartCharacterBox_;
+    juce::StringArray cachedPlayerCharacterChoices_;
+    entt::entity displayedPlayerStart_ = entt::null;
+    juce::String displayedPlayerCharacterAssetId_;
     juce::Viewport scrollView_;
     std::unique_ptr<ContentHost> content_;
 

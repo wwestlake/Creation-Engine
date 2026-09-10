@@ -24,16 +24,13 @@ namespace ce::render {
 // (Source/Physics/PhysicsComponents.h) to the whole draw pass. Engine Loop
 // Decoupling plan, Phase 2.
 //
-// Deliberately does NOT cover gizmo picking/dragging or mouse-click
-// selection (desktopPick, updateDesktopTransformGizmo/Drag in
-// ViewportComponent.cpp) -- those stay on the render thread reading
-// world_.Registry() directly under RegistryMutex, unchanged, for the
-// reason already documented on ViewportComponent's own class comment:
-// they're interactive and on-demand, deliberately kept there to avoid a
-// WORSE contention problem (message-thread mouse-move fighting this same
-// per-frame lock during a drag). This snapshot is scoped to the
-// continuous, every-frame draw pass only -- mesh rendering, materials,
-// skeletal animation -- which is the actual "render and update everything
+// Desktop gizmo picking/dragging and mouse-click selection remain editor
+// interaction state rather than renderable state. They execute on the JUCE
+// message thread and publish only the tiny gizmo draw description the render
+// thread needs; the renderer does not read world_.Registry() for desktop
+// interaction. This snapshot is scoped to the continuous draw pass only --
+// mesh rendering, materials, skeletal animation -- which is the actual
+// "render and update everything
 // at once" problem reported: physics/possession/animation and the render
 // loop fighting over one shared, live registry every single frame.
 struct RenderableEntity {

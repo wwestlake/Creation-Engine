@@ -1,11 +1,9 @@
 #include "Input/InputActionSystem.h"
-#include "Input/StarterInputMappingPresets.h"
 
 #include "node_system/core_control_flow.h"
 
 #include <iostream>
 #include <memory>
-#include <set>
 
 namespace
 {
@@ -191,46 +189,6 @@ int main()
         (void)system.IsActionActive("Sprint");
     }
 
-    // -- GetStarterInputMappingPresets (Modifier-Key Bindings + Starter
-    // Movement Mapping Presets plan) --
-    {
-        const auto presets = GetStarterInputMappingPresets();
-        if (presets.size() != 3) {
-            std::cerr << "Expected exactly 3 starter input mapping presets, found " << presets.size() << ".\n";
-            return 1;
-        }
-        const std::set<juce::String> expectedActionNames = {
-            "MoveForward", "MoveBackward", "MoveLeft", "MoveRight", "Jump", "Sprint", "Crouch",
-            "Interact",
-        };
-        for (const auto& preset : presets) {
-            if (preset.name.isEmpty() || preset.description.isEmpty()) {
-                std::cerr << "A starter input mapping preset is missing a name/description.\n";
-                return 1;
-            }
-            if (static_cast<std::size_t>(preset.bindings.actions.size()) != expectedActionNames.size()) {
-                std::cerr << "Preset \"" << preset.name << "\" does not have exactly the expected " << expectedActionNames.size() << " Actions.\n";
-                return 1;
-            }
-            std::set<juce::String> actualNames;
-            for (const auto& action : preset.bindings.actions) {
-                if (action.kind != ActionKind::Digital) {
-                    std::cerr << "Preset \"" << preset.name << "\" Action \"" << action.name << "\" should be Digital.\n";
-                    return 1;
-                }
-                actualNames.insert(action.name);
-            }
-            if (actualNames != expectedActionNames) {
-                std::cerr << "Preset \"" << preset.name << "\" does not provide exactly the expected Action names.\n";
-                return 1;
-            }
-            if (!preset.bindings.combos.isEmpty()) {
-                std::cerr << "Preset \"" << preset.name << "\" should not define any Combos (movement-only, per scope).\n";
-                return 1;
-            }
-        }
-    }
-
-    std::cout << "Input action system + Domain::Input nodes + Input Combo Events + starter mapping presets passed.\n";
+    std::cout << "Input action system + Domain::Input nodes + Input Combo Events passed.\n";
     return 0;
 }

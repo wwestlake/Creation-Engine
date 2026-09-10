@@ -100,11 +100,12 @@ InputActionSystem::InputActionSystem(std::unique_ptr<InputControllerBackend> con
 {
 }
 
-void InputActionSystem::LoadForGame(creation::assets::ProjectSession& session,
+void InputActionSystem::LoadForGame(const creation::assets::ProjectSession& session,
                                      const project::GameDocumentInfo& game,
-                                     juce::String& errorMessage)
+                                     juce::String& errorMessage,
+                                     const juce::String& contextId)
 {
-    InputBindingDocumentStore::load(session, game, bindings_, errorMessage);
+    InputBindingDocumentStore::load(session, game, contextId, bindings_, errorMessage);
     current_.clear();
     previous_.clear();
 }

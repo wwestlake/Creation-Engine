@@ -51,9 +51,17 @@ void PossessedCharacter::Update(ce::engine::World& world, ce::physics::PhysicsWo
 
     physics.UpdateCharacter(world, entity, worldX, worldZ, jumpPressed ? kJumpSpeed : 0.0f, dt);
 
-    // Animation: discrete Idle/Walk/Run crossfades on speed thresholds
-    // (Decision 5 -- no blend tree, matches what already ships).
-    const char* targetClip = speed <= 0.01f ? "Idle" : (sprinting ? "Run" : "Walk");
+    // Animation follows the resolved Jolt state rather than desired input.
+    // This distinguishes jump/fall/land from a player merely holding W.
+    const auto motion = physics.GetCharacterMotionState(entity);
+    const float horizontalSpeed = std::sqrt(motion.velocityX * motion.velocityX + motion.velocityZ * motion.velocityZ);
+    const char* targetClip = "Idle";
+    if (!motion.grounded)
+        targetClip = motion.velocityY > 0.25f ? "Jump" : "Fall";
+    else if (horizontalSpeed > 3.5f)
+        targetClip = "Run";
+    else if (horizontalSpeed > 0.10f)
+        targetClip = "Walk";
     {
         std::lock_guard<std::mutex> lock(world.RegistryMutex());
         auto& registry = world.Registry();

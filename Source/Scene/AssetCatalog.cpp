@@ -176,7 +176,7 @@ bool AssetCatalog::LoadAssetPack(const juce::String& packId, const juce::String&
             if (Find(declared.id).mesh == nullptr)
                 AddAlias(declared.id, cacheKey);
         }
-        else if (declared.kind == "model")
+        else if (declared.kind == "model" || declared.kind == "character")
         {
             LoadedModel model;
             if (declared.payload.isEmpty() || ! LoadGltf(cacheDirectory.getChildFile(declared.payload), model) ||
@@ -194,6 +194,38 @@ bool AssetCatalog::LoadAssetPack(const juce::String& packId, const juce::String&
                 continue;
             }
             SetSourceIdentity(cacheKey, declared.id, {}, packId, version);
+            // Register each mesh-bearing source node as its own GPU entry and
+            // retain the source hierarchy. A packed character is a complete
+            // authored object, not an implicit alias for primitive zero.
+            ModelHierarchy hierarchy;
+            hierarchy.nodes.reserve(model.nodes.size());
+            for (std::size_t nodeIndex = 0; nodeIndex < model.nodes.size(); ++nodeIndex) {
+                const auto& sourceNode = model.nodes[nodeIndex];
+                ModelHierarchyNode node;
+                node.sourceNodeIndex = static_cast<int>(nodeIndex);
+                node.parentIndex = sourceNode.parentIndex;
+                node.localTransform.position = { sourceNode.localTranslation.x, sourceNode.localTranslation.y,
+                                                 sourceNode.localTranslation.z };
+                node.localTransform.eulerRotationRadians = { sourceNode.localEulerRotationRadians.x,
+                                                              sourceNode.localEulerRotationRadians.y,
+                                                              sourceNode.localEulerRotationRadians.z };
+                node.localTransform.scale = { sourceNode.localScale.x, sourceNode.localScale.y, sourceNode.localScale.z };
+                node.hasMesh = sourceNode.meshIndex >= 0;
+                hierarchy.nodes.push_back(node);
+                if (!node.hasMesh) continue;
+
+                const auto nodeKey = NodeAssetKey(cacheKey, {}, static_cast<int>(nodeIndex));
+                if (!AddNodeFromModel(nodeKey, model, static_cast<int>(nodeIndex))) {
+                    errorMessage = "Could not build mesh node " + juce::String(static_cast<int>(nodeIndex)) +
+                                   " for " + declared.id + ".";
+                    return false;
+                }
+                SetSourceIdentity(nodeKey, declared.id, {}, packId, version);
+            }
+            {
+                const std::lock_guard<std::mutex> lock(mutex_);
+                modelHierarchies_[cacheKey.toStdString()] = std::move(hierarchy);
+            }
             if (Find(declared.id).mesh == nullptr)
                 AddAlias(declared.id, cacheKey);
         }
@@ -229,6 +261,14 @@ bool AssetCatalog::AddNodeFromModel(const juce::String& name, const LoadedModel&
 
 juce::String AssetCatalog::NodeAssetKey(const juce::String& assetId, const juce::String& versionId, int nodeIndex) {
     return assetId + "@" + versionId + "#node" + juce::String(nodeIndex);
+}
+
+std::optional<AssetCatalog::ModelHierarchy> AssetCatalog::FindModelHierarchy(const juce::String& name) const
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = modelHierarchies_.find(name.toStdString());
+    if (found == modelHierarchies_.end()) return std::nullopt;
+    return found->second;
 }
 
 bool AssetCatalog::BuildAssetFromPrimitive(const juce::String& name, const LoadedModel& model, std::size_t primitiveIndex,

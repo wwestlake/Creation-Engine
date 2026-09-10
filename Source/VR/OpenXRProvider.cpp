@@ -90,8 +90,8 @@ bool OpenXRProvider::initialize()
 #if CE_HAS_OPENXR
     XrInstanceCreateInfo createInfo{XR_TYPE_INSTANCE_CREATE_INFO};
     createInfo.applicationInfo.apiVersion = XR_CURRENT_API_VERSION;
-    std::snprintf(createInfo.applicationInfo.applicationName, XR_MAX_APPLICATION_NAME_SIZE, "Creation Engine");
-    std::snprintf(createInfo.applicationInfo.engineName, XR_MAX_ENGINE_NAME_SIZE, "Creation Engine");
+    std::snprintf(createInfo.applicationInfo.applicationName, XR_MAX_APPLICATION_NAME_SIZE, "Djehuti Engine");
+    std::snprintf(createInfo.applicationInfo.engineName, XR_MAX_ENGINE_NAME_SIZE, "Djehuti Engine");
     const char* extensions[] = { XR_KHR_OPENGL_ENABLE_EXTENSION_NAME };
     createInfo.enabledExtensionCount = 1;
     createInfo.enabledExtensionNames = extensions;
@@ -331,7 +331,7 @@ bool OpenXRProvider::initializeInput()
     const auto session = reinterpret_cast<XrSession>(session_);
     XrActionSetCreateInfo actionSetInfo{ XR_TYPE_ACTION_SET_CREATE_INFO };
     std::strncpy(actionSetInfo.actionSetName, "creation_engine_editor", XR_MAX_ACTION_SET_NAME_SIZE - 1);
-    std::strncpy(actionSetInfo.localizedActionSetName, "Creation Engine Editor", XR_MAX_LOCALIZED_ACTION_SET_NAME_SIZE - 1);
+    std::strncpy(actionSetInfo.localizedActionSetName, "Djehuti Engine Editor", XR_MAX_LOCALIZED_ACTION_SET_NAME_SIZE - 1);
     XrActionSet actionSet = XR_NULL_HANDLE;
     if (xrCreateActionSet(instance, &actionSetInfo, &actionSet) != XR_SUCCESS) return false;
     actionSet_ = reinterpret_cast<void*>(actionSet);

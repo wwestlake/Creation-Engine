@@ -6,7 +6,7 @@
 
 class CreationEngineApplication final : public juce::JUCEApplication {
 public:
-    const juce::String getApplicationName() override { return "Creation Engine"; }
+    const juce::String getApplicationName() override { return "Djehuti Engine"; }
     const juce::String getApplicationVersion() override { return "0.0.1"; }
 
     // Single-instance: launching the exe again (a shortcut double-click, a

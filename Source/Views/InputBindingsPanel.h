@@ -7,7 +7,6 @@
 
 #include "Input/InputActionSystem.h"
 #include "Input/InputBindingDocumentStore.h"
-#include "Input/StarterInputMappingPresets.h"
 #include "Project/EngineGameDocument.h"
 
 namespace ce::views
@@ -51,6 +50,11 @@ public:
     // (e.g. ImportPanel::onContentChanged).
     std::function<void()> onCombosChanged;
 
+    // The mapping save can retarget the active Game from the packaged asset
+    // to a new project-owned version. MainComponent persists that changed
+    // Game catalog entry before the ProjectSession manifest is committed.
+    std::function<bool(const project::GameDocumentInfo&, juce::String&)> onGameUpdated;
+
     void resized() override;
     void paint(juce::Graphics& g) override;
 
@@ -62,7 +66,6 @@ private:
     class ComboCaptureOverlay;
 
     void AddAction();
-    void LoadPreset(const input::InputMappingPreset& preset);
     void RemoveAction(const juce::String& name);
     void SetActionKind(const juce::String& name, input::ActionKind kind);
     void AddBinding(const juce::String& actionName);
@@ -83,10 +86,10 @@ private:
     input::InputActionSystem& inputActionSystem_;
     creation::assets::ProjectSession& projectSession_;
     project::GameDocumentInfo activeGame_;
+    juce::String activeContextId_ { "editor-play" };
 
     juce::Label titleLabel_ { {}, "Input Bindings" };
     juce::TextButton addActionButton_ { "Add Action" };
-    juce::TextButton loadPresetButton_ { "Load Preset" };
     juce::TextButton addComboButton_ { "Add Combo" };
     juce::TextButton saveButton_ { "Save" };
     juce::Label statusLabel_;

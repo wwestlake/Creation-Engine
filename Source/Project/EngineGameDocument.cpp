@@ -53,6 +53,11 @@ GameDocumentInfo ReadGameInfo(const juce::ValueTree& node)
     game.name = node.getProperty("name").toString();
     game.entrySceneId = node.getProperty("entrySceneId").toString();
     game.catalogAssetId = node.getProperty("catalogAssetId").toString();
+    game.inputMappingPackId = node.getProperty("inputMappingPackId").toString();
+    game.inputMappingPackVersion = node.getProperty("inputMappingPackVersion").toString();
+    game.inputMappingEntryPath = node.getProperty("inputMappingEntryPath").toString();
+    game.inputMappingAssetId = node.getProperty("inputMappingAssetId").toString();
+    game.inputMappingAssetVersionId = node.getProperty("inputMappingAssetVersionId").toString();
     for (const auto child : node)
         if (child.hasType("Scene")) game.scenes.add(ReadSceneInfo(child));
     if (const auto requiredPacks = node.getChildWithName("RequiredPacks"); requiredPacks.isValid())
@@ -60,6 +65,19 @@ GameDocumentInfo ReadGameInfo(const juce::ValueTree& node)
             if (packNode.hasType("Pack"))
                 game.requiredPacks.add({ packNode.getProperty("packId").toString(),
                                          packNode.getProperty("version").toString() });
+    if (const auto playerSlots = node.getChildWithName("PlayerSlots"); playerSlots.isValid())
+        for (const auto slotNode : playerSlots)
+            if (slotNode.hasType("PlayerSlot"))
+                game.playerSlots.add({ slotNode.getProperty("id").toString(),
+                                       slotNode.getProperty("displayName").toString(),
+                                       slotNode.getProperty("creatorPolicyAssetId").toString(),
+                                       slotNode.getProperty("creatorPolicyVersionId").toString(),
+                                       slotNode.getProperty("defaultRosterAssetId").toString(),
+                                       slotNode.getProperty("defaultInstanceAssetId").toString() });
+    // Older game documents predate PlayerSlots.  They still participate in
+    // the same suite-wide possession contract through the standard slot.
+    if (game.playerSlots.isEmpty())
+        game.playerSlots.add({ "player-1", "Player 1", {}, {}, {}, {} });
     return game;
 }
 
@@ -80,14 +98,14 @@ bool CopyStarterScene(creation::assets::ProjectSession& session,
         templateSceneData.getData(), static_cast<int>(templateSceneData.getSize())));
     if (xml == nullptr)
     {
-        error = "The Creation Engine Pack scene \"" + templateSceneId + "\" is not valid scene data.";
+        error = "The Djehuti Engine Pack scene \"" + templateSceneId + "\" is not valid scene data.";
         return false;
     }
 
     auto sceneTree = juce::ValueTree::fromXml(*xml);
     if (! sceneTree.hasType("CreationEngineScene"))
     {
-        error = "The Creation Engine Pack scene \"" + templateSceneId + "\" has the wrong document type.";
+        error = "The Djehuti Engine Pack scene \"" + templateSceneId + "\" has the wrong document type.";
         return false;
     }
 
@@ -102,8 +120,8 @@ bool CopyStarterScene(creation::assets::ProjectSession& session,
     options.displayName = scene.name;
     options.logicalPath = game.scenePath(scene.id);
     options.mediaType = "application/x-creation-engine-scene";
-    options.sourceApp = "Creation Engine";
-    options.description = "Creation Engine Scene";
+    options.sourceApp = "Djehuti Engine";
+    options.description = "Djehuti Engine Scene";
     creation::assets::AssetDescriptor savedAsset;
     if (! creation::assets::ProjectAssetService::saveGeneratedAsset(session, ToMemory(document), options, savedAsset, error))
     {
@@ -131,8 +149,8 @@ bool RegisterGameAsset(creation::assets::ProjectSession& session, GameDocumentIn
     options.displayName = game.name;
     options.logicalPath = "engine/games/" + game.id + "/game.asset.xml";
     options.mediaType = "application/x-creation-engine-game";
-    options.sourceApp = "Creation Engine";
-    options.description = "Creation Engine Game";
+    options.sourceApp = "Djehuti Engine";
+    options.description = "Djehuti Engine Game";
     creation::assets::AssetDescriptor savedAsset;
     if (! creation::assets::ProjectAssetService::saveGeneratedAsset(session, ToMemory(marker), options, savedAsset, error))
         return false;
@@ -147,6 +165,11 @@ juce::ValueTree WriteGameInfo(const GameDocumentInfo& game)
     node.setProperty("name", game.name, nullptr);
     node.setProperty("entrySceneId", game.entrySceneId, nullptr);
     node.setProperty("catalogAssetId", game.catalogAssetId, nullptr);
+    node.setProperty("inputMappingPackId", game.inputMappingPackId, nullptr);
+    node.setProperty("inputMappingPackVersion", game.inputMappingPackVersion, nullptr);
+    node.setProperty("inputMappingEntryPath", game.inputMappingEntryPath, nullptr);
+    node.setProperty("inputMappingAssetId", game.inputMappingAssetId, nullptr);
+    node.setProperty("inputMappingAssetVersionId", game.inputMappingAssetVersionId, nullptr);
     for (const auto& scene : game.scenes) {
         juce::ValueTree sceneNode("Scene");
         sceneNode.setProperty("id", scene.id, nullptr);
@@ -163,7 +186,29 @@ juce::ValueTree WriteGameInfo(const GameDocumentInfo& game)
         requiredPacks.addChild(packNode, -1, nullptr);
     }
     node.addChild(requiredPacks, -1, nullptr);
+    juce::ValueTree playerSlots("PlayerSlots");
+    for (const auto& slot : game.playerSlots)
+    {
+        juce::ValueTree slotNode("PlayerSlot");
+        slotNode.setProperty("id", slot.id, nullptr);
+        slotNode.setProperty("displayName", slot.displayName, nullptr);
+        slotNode.setProperty("creatorPolicyAssetId", slot.creatorPolicyAssetId, nullptr);
+        slotNode.setProperty("creatorPolicyVersionId", slot.creatorPolicyVersionId, nullptr);
+        slotNode.setProperty("defaultRosterAssetId", slot.defaultRosterAssetId, nullptr);
+        slotNode.setProperty("defaultInstanceAssetId", slot.defaultInstanceAssetId, nullptr);
+        playerSlots.addChild(slotNode, -1, nullptr);
+    }
+    node.addChild(playerSlots, -1, nullptr);
     return node;
+}
+
+void AssignPackagedInputMapping(GameDocumentInfo& game)
+{
+    game.inputMappingPackId = ce::assets::EngineAssetPack::packId;
+    game.inputMappingPackVersion = ce::assets::EngineAssetPack::version;
+    game.inputMappingEntryPath = ce::assets::EngineAssetPack::defaultInputMappingPath();
+    game.inputMappingAssetId = {};
+    game.inputMappingAssetVersionId = {};
 }
 } // namespace
 
@@ -211,12 +256,23 @@ bool EngineGameDocumentStore::ensureInitialGame(creation::assets::ProjectSession
                                                 juce::String& errorMessage)
 {
     if (!loadGames(session, games, errorMessage)) return false;
-    if (!games.isEmpty()) return true;
+    if (!games.isEmpty()) {
+        bool migrated = false;
+        for (auto& existing : games) {
+            if (existing.inputMappingPackId.isEmpty() && existing.inputMappingAssetId.isEmpty()) {
+                AssignPackagedInputMapping(existing);
+                migrated = true;
+            }
+        }
+        return !migrated || saveGames(session, games, errorMessage);
+    }
 
     GameDocumentInfo game;
     game.id = NewId();
     game.name = "Game";
     game.requiredPacks.add({ ce::assets::EngineAssetPack::packId, ce::assets::EngineAssetPack::version });
+    AssignPackagedInputMapping(game);
+    game.playerSlots.add({ "player-1", "Player 1", {}, {}, {}, {} });
     SceneDocumentInfo scene{ NewId(), "Main" };
     game.entrySceneId = scene.id;
 
@@ -239,6 +295,8 @@ bool EngineGameDocumentStore::createGame(creation::assets::ProjectSession& sessi
     createdGame.id = NewId();
     createdGame.name = name.trim().isEmpty() ? "New Game" : name.trim();
     createdGame.requiredPacks.add({ ce::assets::EngineAssetPack::packId, ce::assets::EngineAssetPack::version });
+    AssignPackagedInputMapping(createdGame);
+    createdGame.playerSlots.add({ "player-1", "Player 1", {}, {}, {}, {} });
     createdScene = { NewId(), "Main" };
     createdGame.entrySceneId = createdScene.id;
     if (! CopyStarterScene(session, createdGame, createdScene, templateSceneId, errorMessage)) return false;
@@ -286,8 +344,8 @@ bool EngineGameDocumentStore::saveScene(creation::assets::ProjectSession& sessio
     options.displayName = scene.name;
     options.logicalPath = game.scenePath(scene.id);
     options.mediaType = "application/x-creation-engine-scene";
-    options.sourceApp = "Creation Engine";
-    options.description = "Creation Engine Scene";
+    options.sourceApp = "Djehuti Engine";
+    options.description = "Djehuti Engine Scene";
     creation::assets::AssetDescriptor savedAsset;
     if (!creation::assets::ProjectAssetService::saveGeneratedAsset(session, ToMemory(document), options, savedAsset, errorMessage)) {
         errorMessage = "Could not save scene \"" + scene.name + "\": " + errorMessage;
@@ -473,8 +531,8 @@ bool EngineGameDocumentStore::renameScene(creation::assets::ProjectSession& sess
         options.displayName = trimmed;
         options.logicalPath = game.scenePath(sceneId);
         options.mediaType = "application/x-creation-engine-scene";
-        options.sourceApp = "Creation Engine";
-        options.description = "Creation Engine Scene";
+        options.sourceApp = "Djehuti Engine";
+        options.description = "Djehuti Engine Scene";
         creation::assets::AssetDescriptor savedAsset;
         if (!creation::assets::ProjectAssetService::saveGeneratedAsset(session, ToMemory(document), options, savedAsset, errorMessage))
             return false;

@@ -63,6 +63,15 @@ void FreeCamera::Update(float deltaSeconds) {
     }
     wasLookingLastFrame_ = isLooking;
 
+    if (hasDirectedPose_.load(std::memory_order_acquire)) {
+        std::lock_guard<std::mutex> lock(directedPoseMutex_);
+        position_ = directedPosition_;
+        const auto direction = (directedTarget_ - directedPosition_).normalised();
+        yaw_ = std::atan2(direction.x, -direction.z);
+        pitch_ = std::asin(juce::jlimit(-1.0f, 1.0f, direction.y));
+        return;
+    }
+
     if (possessedMode_.load(std::memory_order_relaxed)) {
         // Look-around above still applies (holding right-click still turns
         // the head); position_ itself comes entirely from whatever was last
@@ -140,6 +149,13 @@ void FreeCamera::Update(float deltaSeconds) {
 void FreeCamera::SetPossessedFeetPosition(juce::Vector3D<float> feetPosition) {
     std::lock_guard<std::mutex> lock(possessedPositionMutex_);
     possessedFeetPosition_ = feetPosition;
+}
+
+void FreeCamera::SetDirectedPose(juce::Vector3D<float> position, juce::Vector3D<float> target) {
+    std::lock_guard<std::mutex> lock(directedPoseMutex_);
+    directedPosition_ = position;
+    directedTarget_ = target;
+    hasDirectedPose_.store(true, std::memory_order_release);
 }
 
 void FreeCamera::AdjustSpeed(float wheelDeltaY) {
