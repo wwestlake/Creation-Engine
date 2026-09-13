@@ -484,6 +484,7 @@ add_executable(CreationEngineFrustPluginSmoke
     Source/Frust/EngineNodeLibraryLoader.cpp
     Source/Input/InputActionSystem.cpp
     Source/Input/InputBindingDocumentStore.cpp
+    Source/Assets/AssetPackStore.cpp
     Source/Physics/PhysicsWorld.cpp
     Source/Scene/AnimatorControl.cpp
 )
@@ -528,6 +529,7 @@ add_executable(CreationEngineObjectBehaviorSmoke
     Source/Frust/EngineNodeLibraryLoader.cpp
     Source/Input/InputActionSystem.cpp
     Source/Input/InputBindingDocumentStore.cpp
+    Source/Assets/AssetPackStore.cpp
     Source/Physics/PhysicsWorld.cpp
     Source/Scene/AnimatorControl.cpp
 )
@@ -742,6 +744,7 @@ target_compile_definitions(CreationEngineServer PRIVATE
 )
 
 target_link_libraries(CreationEngineServer PRIVATE
+    Jolt::Jolt
     engine_core
     node_system
     creation_suite_asset_system
