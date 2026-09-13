@@ -101,11 +101,18 @@ private:
     {
         if (splashWindow_ == nullptr) return;
         auto reportProgress = [this](const juce::String& status, float progress) {
-            if (splashWindow_ != nullptr) splashWindow_->report(status, progress);
+            if (splashWindow_ == nullptr) return;
+
+            splashWindow_->report(status, progress);
+            if (progress >= 1.0f) {
+                juce::Component::SafePointer<StartupSplashWindow> splash(splashWindow_.get());
+                juce::Timer::callAfterDelay(200, [this, splash] {
+                    if (splash != nullptr && splashWindow_.get() == splash.getComponent())
+                        splashWindow_ = nullptr;
+                });
+            }
         };
         mainWindow_ = std::make_unique<MainWindow>(getApplicationName(), std::move(reportProgress));
-        splashWindow_->report("Djehuti Engine is ready.", 1.0f);
-        splashWindow_ = nullptr;
     }
 
     std::unique_ptr<MainWindow> mainWindow_;

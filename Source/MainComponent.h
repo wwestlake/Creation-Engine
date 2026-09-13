@@ -196,6 +196,8 @@ private:
     void saveAppSettings();
     void loadAppSettings();
     void SetEditorAvatar(const juce::String& assetId);
+    void ReportStartupProgress(const juce::String& statusText, float progress);
+    void FinishStartupProgress(const juce::String& statusText);
     // Called right after projectSession_ becomes valid (new project,
     // opened project, or restored last-opened project) so podCatalog_
     // reflects whatever Pods that project has already saved.
@@ -230,6 +232,8 @@ private:
     bool startupProjectRetryPending_ = false;
     int startupProjectRetryAttempts_ = 0;
     double nextStartupProjectRetrySeconds_ = 0.0;
+    bool startupReadyReported_ = false;
+    StartupProgressCallback startupProgressCallback_;
 
     // Makes this process discoverable to CreationSuiteVfsService's idle
     // check (suiteHasAnyOtherLiveApp() in the service's Main.cpp) --

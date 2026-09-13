@@ -101,13 +101,9 @@ MainComponent::MainComponent(StartupProgressCallback startupProgressCallback)
       djehutiImportWatcher_(world_, viewport_, objectDefinitions_),
       lightPanel_(viewport_),
       materialsPanel_(viewport_),
-      contentBrowserPanel_(viewport_, importPanel_, podCatalog_, objectDefinitions_) {
-    const auto reportStartup = [&startupProgressCallback](const juce::String& statusText, float progress) {
-        if (startupProgressCallback)
-            startupProgressCallback(statusText, juce::jlimit(0.0f, 1.0f, progress));
-    };
-
-    reportStartup("Preparing Engine runtime...", 0.10f);
+      contentBrowserPanel_(viewport_, importPanel_, podCatalog_, objectDefinitions_),
+      startupProgressCallback_(std::move(startupProgressCallback)) {
+    ReportStartupProgress("Preparing Engine runtime...", 0.10f);
     physicsWorld_.AttachToWorld(world_);
     // See suiteProcessRegistration_'s header comment: this is what keeps
     // CreationSuiteVfsService alive while this app is actually running.
@@ -147,7 +143,7 @@ MainComponent::MainComponent(StartupProgressCallback startupProgressCallback)
     viewportRenderHost_.setInterceptsMouseClicks(false, false);
     viewport_.addComponentListener(this);
 
-    reportStartup("Loading Suite settings...", 0.22f);
+    ReportStartupProgress("Loading Suite settings...", 0.22f);
     juce::String suiteErr;
     suiteSettings_ = suiteSettingsStore_.load(suiteErr);
     loadAppSettings();
@@ -157,7 +153,7 @@ MainComponent::MainComponent(StartupProgressCallback startupProgressCallback)
         return ce::assets::EngineAssetPack::characterAssetIds();
     };
 
-    reportStartup("Loading FRust runtime...", 0.36f);
+    ReportStartupProgress("Loading FRust runtime...", 0.36f);
     std::string frustError;
     if (!frustHost_.loadBundled(frustError)) {
         juce::Logger::writeToLog("Djehuti Engine FRust host: " + juce::String(frustError));
@@ -369,7 +365,7 @@ MainComponent::MainComponent(StartupProgressCallback startupProgressCallback)
         }
         OpenPodEditor(podName);
     };
-    reportStartup("Building editor workspace...", 0.58f);
+    ReportStartupProgress("Building editor workspace...", 0.58f);
     initialiseDockingWorkspace();
 
     dockManager_->activatePanel("viewport");
@@ -378,20 +374,37 @@ MainComponent::MainComponent(StartupProgressCallback startupProgressCallback)
     setSize(1400, 900);
     startTimerHz(30);
 
-    reportStartup("Opening Suite project...", 0.78f);
+    ReportStartupProgress("Opening Suite project...", 0.78f);
     juce::String projectError;
     if (!ensureProjectSessionActive(projectError)) {
         headerBar_.setStatusText("Project setup: " + projectError);
         startupProjectRetryPending_ = true;
         nextStartupProjectRetrySeconds_ = juce::Time::getMillisecondCounterHiRes() / 1000.0 + 0.75;
+        ReportStartupProgress("Waiting for Suite project service...", 0.82f);
+    } else {
+        ReportStartupProgress(projectSession_.isValid() ? "Preparing first viewport frame..." : "Waiting for project selection...", 0.94f);
     }
-    reportStartup(projectSession_.isValid() ? "Restoring project assets..." : "Waiting for Suite project service...", 0.90f);
 }
 
 MainComponent::~MainComponent() {
     removeKeyListener(commandManager_.getKeyMappings());
     stopTimer();
     gameClients_.clear();
+}
+
+void MainComponent::ReportStartupProgress(const juce::String& statusText, float progress)
+{
+    if (startupProgressCallback_)
+        startupProgressCallback_(statusText, juce::jlimit(0.0f, 1.0f, progress));
+}
+
+void MainComponent::FinishStartupProgress(const juce::String& statusText)
+{
+    if (startupReadyReported_)
+        return;
+
+    startupReadyReported_ = true;
+    ReportStartupProgress(statusText, 1.0f);
 }
 
 void MainComponent::paint(juce::Graphics& g) {
@@ -1030,11 +1043,14 @@ void MainComponent::timerCallback() {
         const double nowSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0;
         if (nowSeconds >= nextStartupProjectRetrySeconds_) {
             juce::String projectError;
+            ReportStartupProgress("Opening Suite project... attempt " + juce::String(startupProjectRetryAttempts_ + 2), 0.82f);
             if (ensureProjectSessionActive(projectError)) {
                 startupProjectRetryPending_ = false;
                 saveAppSettings();
+                ReportStartupProgress("Preparing first viewport frame...", 0.94f);
             } else if (++startupProjectRetryAttempts_ >= 5) {
                 startupProjectRetryPending_ = false;
+                FinishStartupProgress("Project setup needs attention.");
                 juce::AlertWindow::showMessageBoxAsync(
                     juce::MessageBoxIconType::WarningIcon,
                     "Project Setup Failed",
@@ -1089,6 +1105,13 @@ void MainComponent::timerCallback() {
     // every Animator now (moved out of ViewportComponent::renderOpenGL()
     // -- see its own comment).
     viewport_.PublishFrameSnapshot();
+
+    if (!startupReadyReported_) {
+        if (projectSession_.isValid())
+            FinishStartupProgress(activeScene_.id.isNotEmpty() ? "Djehuti Engine is ready." : "Djehuti Engine is ready; no Scene is open.");
+        else if (!startupProjectRetryPending_)
+            FinishStartupProgress("Djehuti Engine is ready for project setup.");
+    }
 }
 
 void MainComponent::RunRuntimeFrame()
@@ -1305,6 +1328,7 @@ bool MainComponent::openActiveGame(juce::String& errorMessage)
         errorMessage = "No Suite project is open.";
         return false;
     }
+    ReportStartupProgress("Opening active Game document...", 0.84f);
     // A project with no game catalog is a known first-open state. Its
     // generated Game and entry Scene must become active immediately; this is
     // explicit first-project initialization, not a fallback for an existing
@@ -1331,6 +1355,7 @@ bool MainComponent::LoadLastOpenedGameAndScene(juce::String& errorMessage)
         errorMessage = "No Suite project is open.";
         return false;
     }
+    ReportStartupProgress("Restoring last open Game and Scene...", 0.86f);
 
     juce::String settingsError;
     const auto settings = creation::services::SuiteVfsJsonStore::loadJson("engine-settings.json", settingsError);
@@ -1396,6 +1421,7 @@ bool MainComponent::LoadGameAndScene(const ce::project::GameDocumentInfo& game, 
                                      juce::String& errorMessage)
 {
     activeGame_ = game;
+    ReportStartupProgress("Loading Game: " + game.name, 0.88f);
     juce::String inputBindingsError;
     inputActionSystem_.LoadForGame(projectSession_, activeGame_, inputBindingsError);
     if (inputBindingsError.isNotEmpty()) {
@@ -1409,6 +1435,7 @@ bool MainComponent::LoadGameAndScene(const ce::project::GameDocumentInfo& game, 
     contentBrowserPanel_.SetProjectContent(&projectSession_);
 
     if (scene.id.isEmpty()) {
+        ReportStartupProgress("Opening Game with no active Scene...", 0.91f);
         // Game context is set up, but there's no scene to load -- a real,
         // reachable "game open, nothing rendering" state, not an error.
         // "The void scene": the viewport shows only its own always-drawn
@@ -1433,9 +1460,12 @@ bool MainComponent::LoadGameAndScene(const ce::project::GameDocumentInfo& game, 
         return true;
     }
 
+    ReportStartupProgress("Loading Scene: " + scene.name, 0.91f);
     if (!ce::project::EngineGameDocumentStore::loadScene(projectSession_, activeGame_, scene, world_, errorMessage)) return false;
     activeScene_ = scene;
+    ReportStartupProgress("Resolving project assets...", 0.93f);
     viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
+    ReportStartupProgress("Preparing runtime level...", 0.95f);
     frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
     interactions_.select(entt::null);
     propertiesPanel_.SetSelectedEntity(entt::null);
@@ -1443,6 +1473,7 @@ bool MainComponent::LoadGameAndScene(const ce::project::GameDocumentInfo& game, 
     propertiesPanel_.Refresh();
     headerBar_.setProjectLabel("Project: " + projectSession_.getManifest().projectName + " | " + activeGame_.name + " / " + activeScene_.name);
     saveAppSettings();
+    ReportStartupProgress("Preparing first viewport frame...", 0.97f);
     return true;
 }
 
