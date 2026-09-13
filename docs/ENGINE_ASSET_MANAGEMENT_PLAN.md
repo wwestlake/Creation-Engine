@@ -158,6 +158,27 @@ dependencies, Engine compatibility, and duplicate pack/version identity before
 making it available. The pack remains in the central suite library; a game
 adds it deliberately as a required dependency.
 
+### Model Unit Contract
+
+**One Djehuti world unit is one meter.** Imported model geometry is interpreted
+directly in that unit system: a two-meter character has approximately two units
+between its feet and head, and a ten-meter building has approximately ten units
+across its corresponding dimension. This is a coordinate-system contract, not
+a requirement that every model be physically one meter in size.
+
+glTF node-scale factors are ignored by the Engine importer. They are not a
+reliable statement of physical size across authoring tools and conversion
+chains; MakeHuman-to-FBX-to-Blender exports are a confirmed example, carrying
+a `0.1` conversion factor even when their raw mesh coordinates are already
+human-sized in meters. The importer preserves translation and rotation but
+loads every glTF node and joint at scale `(1, 1, 1)`.
+
+Import validation records raw geometry bounds, the measured resolved size, axis
+orientation, and ground contact. A humanoid asset is validated against the
+canonical humanoid range using its raw mesh/skeleton measurement, never a
+standalone source-file scale field. Source files are preserved unchanged; the
+derived Engine asset is the normalized, reproducible runtime form.
+
 ## Engine User Interface
 
 The Engine requires domain-specific authoring surfaces in addition to the

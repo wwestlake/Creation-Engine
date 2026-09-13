@@ -199,6 +199,7 @@ bool AssetCatalog::LoadAssetPack(const juce::String& packId, const juce::String&
             // authored object, not an implicit alias for primitive zero.
             ModelHierarchy hierarchy;
             hierarchy.nodes.reserve(model.nodes.size());
+            hierarchy.modelSpaceBasis = model.modelSpaceBasis;
             for (std::size_t nodeIndex = 0; nodeIndex < model.nodes.size(); ++nodeIndex) {
                 const auto& sourceNode = model.nodes[nodeIndex];
                 ModelHierarchyNode node;
@@ -293,7 +294,13 @@ bool AssetCatalog::BuildAssetFromPrimitive(const juce::String& name, const Loade
             (srcMaterial.baseColorTexturePath.existsAsFile() || srcMaterial.metallicRoughnessTexturePath.existsAsFile() ||
              srcMaterial.normalTexturePath.existsAsFile());
 
-        if (hasAnyDiskTexture) {
+        if (srcMaterial.baseColorTextureBytes.getSize() > 0) {
+            texture = std::make_unique<gl::Texture2D>();
+            if (texture->LoadFromMemory(srcMaterial.baseColorTextureBytes.getData(), srcMaterial.baseColorTextureBytes.getSize(),
+                                        srcMaterial.baseColorTextureDebugName)) {
+                material->albedoTexture = texture.get();
+            }
+        } else if (hasAnyDiskTexture) {
             // A real Material Graph, generated on the spot from whichever
             // texture maps this material actually has -- see
             // ApplyGeneratedMaterialGraph's own comment above. Replaces
@@ -324,6 +331,7 @@ bool AssetCatalog::BuildAssetFromPrimitive(const juce::String& name, const Loade
             joint.parentIndex = loadedJoint.parentIndex;
             joint.inverseBindMatrix = loadedJoint.inverseBindMatrix;
             joint.localBindTransform = loadedJoint.localBindTransform;
+            joint.rootParentBindTransform = loadedJoint.rootParentBindTransform;
             joint.bindTranslation = loadedJoint.bindTranslation;
             joint.bindRotation[0] = loadedJoint.bindRotation[0];
             joint.bindRotation[1] = loadedJoint.bindRotation[1];

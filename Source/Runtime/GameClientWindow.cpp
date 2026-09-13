@@ -35,7 +35,6 @@ GameClientContent::GameClientContent(int clientNumber, juce::ValueTree sceneStat
     ce::scene::EngineSceneSerializer::restoreScene(world_, sceneState);
     addAndMakeVisible(viewport_);
     viewport_.ResolveProjectAssets(projectSession, suiteSettings);
-    viewport_.EnableFirstPersonMode();
     possessAuthoredPlayer();
     hud_.setText(inputMappingError_.isEmpty()
                      ? "CLIENT " + juce::String(clientNumber_) + "  |  " + gameName + " / " + sceneName
@@ -132,6 +131,7 @@ void GameClientContent::possessAuthoredPlayer()
     if (!possessionService_.possessCharacter(request, error))
         return;
 
+    cameraDirector_.setMode(CameraMode::follow);
     viewport_.EnterPossessedMode();
     cameraDirector_.attach(request.subjectEntityId);
     {

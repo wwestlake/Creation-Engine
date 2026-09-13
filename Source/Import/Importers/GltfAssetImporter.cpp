@@ -365,6 +365,25 @@ ImportResult GltfAssetImporter::Import(const juce::File& sourceFile, ImportConte
         ! context.catalog->AddAlias(sourceDescriptor.id, assetName))
         return ImportResult::Failed("The imported model could not be registered with its project asset identity.");
 
+    // A decomposed scene instance references one mesh-bearing glTF node,
+    // not the model's first primitive. Populate every node cache entry now
+    // so an import followed immediately by placement is visible without
+    // waiting for a later scene reopen to resolve it.
+    bool addedNodeAssets = true;
+    context.viewport->RunOnGLThread([&] {
+        for (std::size_t nodeIndex = 0; nodeIndex < model.nodes.size(); ++nodeIndex) {
+            if (model.nodes[nodeIndex].meshIndex < 0) continue;
+            const auto nodeKey = scene::AssetCatalog::NodeAssetKey(sourceDescriptor.id, sourceDescriptor.versionId,
+                                                                    static_cast<int>(nodeIndex));
+            if (!context.catalog->AddNodeFromModel(nodeKey, model, static_cast<int>(nodeIndex))) {
+                addedNodeAssets = false;
+                return;
+            }
+        }
+    }, /*blockUntilFinished=*/true);
+    if (!addedNodeAssets)
+        return ImportResult::Failed("Failed to build the imported model's mesh-node resources.");
+
     juce::String objectDefinitionNote;
     std::vector<ImportResult::PlacedPart> sceneParts;
     if (context.objectDefinitions != nullptr) {
@@ -434,6 +453,21 @@ ImportResult GltfAssetImporter::Reimport(const juce::File& sourceFile,
     if (! context.catalog->SetSourceIdentity(existingAsset.displayName, newDescriptor.id, newDescriptor.versionId) ||
         ! context.catalog->AddAlias(newDescriptor.id, existingAsset.displayName))
         return ImportResult::Failed("The reimported model could not be re-registered with its project asset identity.");
+
+    bool addedNodeAssets = true;
+    context.viewport->RunOnGLThread([&] {
+        for (std::size_t nodeIndex = 0; nodeIndex < model.nodes.size(); ++nodeIndex) {
+            if (model.nodes[nodeIndex].meshIndex < 0) continue;
+            const auto nodeKey = scene::AssetCatalog::NodeAssetKey(newDescriptor.id, newDescriptor.versionId,
+                                                                    static_cast<int>(nodeIndex));
+            if (!context.catalog->AddNodeFromModel(nodeKey, model, static_cast<int>(nodeIndex))) {
+                addedNodeAssets = false;
+                return;
+            }
+        }
+    }, /*blockUntilFinished=*/true);
+    if (!addedNodeAssets)
+        return ImportResult::Failed("Failed to rebuild the reimported model's mesh-node resources.");
 
     juce::String objectDefinitionNote;
     std::vector<ImportResult::PlacedPart> sceneParts;

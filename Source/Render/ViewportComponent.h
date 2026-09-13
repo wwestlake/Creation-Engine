@@ -125,6 +125,16 @@ public:
     // still need to reach the viewport). Message-thread only.
     void PublishFrameSnapshot();
 
+    // Authoring is event-driven. Selection and transform/material changes
+    // request one new immutable render snapshot instead of rebuilding the
+    // entire scene at the editor timer rate while it is idle.
+    void MarkFrameSnapshotDirty() noexcept { frameSnapshotDirty_ = true; }
+
+    // VR is an explicit editor presentation mode. Keeping a headset linked
+    // must not make ordinary desktop navigation wait on OpenXR frame pacing.
+    void SetVREditorEnabled(bool enabled) noexcept { vrEditorEnabled_.store(enabled, std::memory_order_release); }
+    [[nodiscard]] bool IsVREditorEnabled() const noexcept { return vrEditorEnabled_.load(std::memory_order_acquire); }
+
     // Possessable Designer Character plan, Phase 4 -- thin pass-throughs to
     // freeCamera_'s new possessed mode (see FreeCamera.h). SetPossessedFeetPosition
     // is safe to call from any thread (freeCamera_ locks it internally); the
@@ -147,7 +157,7 @@ public:
     // (SceneFlags::editorOnly, e.g. the VR edit-mode cart) are skipped by
     // both rendering and picking while true, hidden rather than
     // destroyed/despawned. VR Editor Cart plan Phase 2.
-    void SetPlaying(bool playing) { isPlaying_ = playing; }
+    void SetPlaying(bool playing) { isPlaying_ = playing; MarkFrameSnapshotDirty(); }
 
     // Catalog access for SC5's "+ Add" menu (HierarchyPanel) to list/look
     // up placeable assets, and for Source/Import's importers to register
@@ -174,6 +184,9 @@ public:
 
     // Resolves durable project asset references into this viewport's GPU
     // cache after a game scene opens. It does not author or rewrite content.
+    // A scene can deserialize before JUCE has created a current GL context;
+    // in that case the latest request is retained and completed once the
+    // context reports ready instead of silently producing an empty viewport.
     void ResolveProjectAssets(const creation::assets::ProjectSession& session,
                               const creation::suite::SuiteSettings& settings);
 
@@ -211,6 +224,7 @@ private:
     // context current. A headset may become available after the editor
     // launches, so OpenXR discovery is retried instead of being startup-only.
     void tryInitializeOpenXR();
+    void resolvePendingProjectAssetsOnMessageThread();
 
     void updateVREditorRig(float deltaSeconds);
     void updateVRInteraction();
@@ -241,6 +255,7 @@ private:
 
     juce::OpenGLContext openGLContext_;
     std::unique_ptr<vr::OpenXRProvider> openXRProvider_;
+    std::atomic<bool> vrEditorEnabled_{ false };
     double nextOpenXRRetrySeconds_ = 0.0;
     engine::vr::FrameState vrFrame_{};
     // The OpenXR eye pose already contains physical headset height.  This
@@ -289,6 +304,12 @@ private:
     GLsizei vrCartVertexCount_ = 0;
     std::unique_ptr<ShaderComposer> shaderComposer_;
     scene::AssetCatalog assetCatalog_;
+    std::atomic<bool> glReady_{ false };
+    // Both pointers refer to MainComponent-owned members. They are only
+    // consumed on the message thread and exist for the Viewport's lifetime.
+    std::mutex pendingAssetResolveMutex_;
+    const creation::assets::ProjectSession* pendingProjectSession_ = nullptr;
+    const creation::suite::SuiteSettings* pendingSuiteSettings_ = nullptr;
 
     // Message-thread-only desktop interaction lifecycle. Renderer access is
     // limited to a separately copied draw description below.
@@ -325,6 +346,9 @@ private:
     // above (that one still measures real render-frame delta, still used
     // for freeCamera_/VR rig movement, which stays render-thread work).
     double lastSnapshotTimeSeconds_ = 0.0;
+    // Message-thread-owned alongside PublishFrameSnapshot(). Dynamic Play
+    // frames bypass this gate; an idle editor does not.
+    bool frameSnapshotDirty_ = true;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ViewportComponent)
 };

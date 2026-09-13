@@ -261,6 +261,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Project/StarterGameTemplates.h
     Source/Views/NewGameDialog.h
     Source/Views/NewGameDialog.cpp
+    Source/Views/OpenDocumentDialog.h
+    Source/Views/OpenDocumentDialog.cpp
     Source/Views/EditorAvatarPanel.h
     Source/Views/EditorAvatarPanel.cpp
     Source/Assets/EngineAssetPack.h
@@ -280,6 +282,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Input/InputBindingDocumentStore.cpp
     Source/Input/InputActionSystem.h
     Source/Input/InputActionSystem.cpp
+    Source/Input/RawMouseInput.h
+    Source/Input/RawMouseInput.cpp
     Source/Interaction/EditorInteraction.h
     Source/Interaction/EditorInteraction.cpp
     Source/Branding.h
@@ -392,6 +396,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Scene/AssetPlacement.cpp
     Source/Scene/AnimationSampler.h
     Source/Scene/AnimationSampler.cpp
+    Source/Animation/ProceduralLocomotion.h
+    Source/Animation/ProceduralLocomotion.cpp
     Source/Scene/AnimatorControl.h
     Source/Scene/AnimatorControl.cpp
     Source/Scene/AnimationSlicer.h
@@ -684,6 +690,15 @@ target_compile_definitions(CreationEngineDefaultScenePhysicsSmoke PRIVATE
     CE_DEFAULT_SCENE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/EnginePack/scenes/DefaultScene.xml"
 )
 add_test(NAME creation_engine_default_scene_physics_smoke COMMAND CreationEngineDefaultScenePhysicsSmoke)
+
+# Deterministic, renderer-independent foundation for grounded procedural
+# locomotion. Jolt integration consumes these results in the runtime layer.
+add_executable(CreationEngineProceduralLocomotionSmoke
+    tests/ProceduralLocomotionSmoke.cpp
+    Source/Animation/ProceduralLocomotion.cpp
+)
+target_include_directories(CreationEngineProceduralLocomotionSmoke PRIVATE Source)
+add_test(NAME creation_engine_procedural_locomotion_smoke COMMAND CreationEngineProceduralLocomotionSmoke)
 
 # --- Dedicated server executable ------------------------------------------
 # Headless build: no rendering or client-only assets. Only juce_core and

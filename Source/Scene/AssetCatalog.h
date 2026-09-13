@@ -60,6 +60,7 @@ public:
 
     struct ModelHierarchy {
         std::vector<ModelHierarchyNode> nodes;
+        juce::Matrix3D<float> modelSpaceBasis;
     };
 
     struct Asset {

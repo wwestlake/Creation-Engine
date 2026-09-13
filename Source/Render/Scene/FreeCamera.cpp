@@ -25,43 +25,34 @@ juce::Vector3D<float> FreeCamera::FlatForward() const {
 void FreeCamera::mouseDown(const juce::MouseEvent& event) {
     viewport_.grabKeyboardFocus();
     if (!event.mods.isRightButtonDown()) return;
+    if (!rawMouse_.beginCapture(viewport_)) return;
     isLooking_.store(true, std::memory_order_relaxed);
+}
+
+void FreeCamera::mouseUp(const juce::MouseEvent& event) {
+    if (!event.mods.isRightButtonDown()) {
+        isLooking_.store(false, std::memory_order_relaxed);
+        rawMouse_.endCapture();
+    }
 }
 
 void FreeCamera::Update(float deltaSeconds) {
     const bool flaggedLooking = isLooking_.load(std::memory_order_relaxed);
 
-    if (flaggedLooking && !wasLookingLastFrame_) {
-        // Just entered (mouseDown set the flag since last frame): hide
-        // the cursor and anchor it at the viewport centre as this
-        // frame's reference point for the delta below.
-        viewport_.setMouseCursor(juce::MouseCursor::NoCursor);
-        lastMouseScreenPos_ = viewport_.getScreenBounds().getCentre().toFloat();
-        juce::Desktop::getInstance().setMousePosition(lastMouseScreenPos_.toInt());
-    } else if (flaggedLooking && !juce::ModifierKeys::getCurrentModifiersRealtime().isRightButtonDown()) {
-        // Still flagged as looking, but the OS says the button is
-        // actually up -- the real release, caught here instead of
-        // waiting on a JUCE mouseUp that might not arrive while the
-        // cursor is hidden. Nothing to restore: yaw_/pitch_/position_
-        // just stop changing, the camera is already exactly where it is.
+    if (flaggedLooking && !juce::ModifierKeys::getCurrentModifiersRealtime().isRightButtonDown()) {
+        // A release outside the viewport can bypass JUCE's mouseUp. Raw
+        // capture is ended asynchronously on the message thread.
         isLooking_.store(false, std::memory_order_relaxed);
-        viewport_.setMouseCursor(juce::MouseCursor::NormalCursor);
+        rawMouse_.endCapture();
     }
 
     const bool isLooking = isLooking_.load(std::memory_order_relaxed);
     if (isLooking) {
-        const auto currentPos = juce::Desktop::getMousePosition().toFloat();
-        const auto delta = currentPos - lastMouseScreenPos_;
+        const auto delta = rawMouse_.consumeDeltas();
         constexpr float sensitivity = 0.005f;
         yaw_ += delta.x * sensitivity;
         pitch_ = juce::jlimit(-1.5f, 1.5f, pitch_ - delta.y * sensitivity);
-        // Re-anchor to the viewport centre every frame so the cursor
-        // never actually reaches a real screen edge during a long look.
-        const auto centre = viewport_.getScreenBounds().getCentre().toFloat();
-        juce::Desktop::getInstance().setMousePosition(centre.toInt());
-        lastMouseScreenPos_ = centre;
     }
-    wasLookingLastFrame_ = isLooking;
 
     if (hasDirectedPose_.load(std::memory_order_acquire)) {
         std::lock_guard<std::mutex> lock(directedPoseMutex_);

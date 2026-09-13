@@ -76,6 +76,13 @@ struct MeshRenderer {
     std::shared_ptr<Material> material;
 };
 
+// Import-owned conversion from an asset's canonical model space to Djehuti
+// render space. Applied after skinning so vertices, inverse binds, and
+// animated joints remain in one untouched source coordinate system.
+struct ImportedModelSpace {
+    juce::Matrix3D<float> basis;
+};
+
 // A serializable asset identifier. Object definitions use this instead of
 // embedding GPU resources, and the viewport resolves it through AssetCatalog.
 struct MeshAssetReference {
@@ -272,6 +279,7 @@ struct Skeleton {
         int parentIndex = -1; // index into Skeleton::joints, or -1 for a root joint.
         juce::Matrix3D<float> inverseBindMatrix;
         juce::Matrix3D<float> localBindTransform;
+        juce::Matrix3D<float> rootParentBindTransform;
 
         // AI5: bind pose decomposed into TRS (see LoadedJoint's matching
         // fields in Render/Import/GltfLoader.h for why) -- the fallback

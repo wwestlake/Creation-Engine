@@ -245,7 +245,7 @@ std::vector<juce::Matrix3D<float>> ComputeSkinningMatrices(const Skeleton& skele
         const int parent = skeleton.joints[index].parentIndex;
         worldTransforms[index] = (parent >= 0 && static_cast<std::size_t>(parent) < jointCount)
                                       ? resolveWorld(static_cast<std::size_t>(parent)) * localTransforms[index]
-                                      : localTransforms[index];
+                                      : skeleton.joints[index].rootParentBindTransform * localTransforms[index];
         computed[index] = true;
         return worldTransforms[index];
     };

@@ -63,7 +63,10 @@ class MainComponent final : public juce::Component,
                             public juce::DragAndDropContainer
 {
 public:
+    using StartupProgressCallback = std::function<void(const juce::String& statusText, float progress)>;
+
     MainComponent();
+    explicit MainComponent(StartupProgressCallback startupProgressCallback);
     ~MainComponent() override;
 
     void paint(juce::Graphics&) override;
@@ -161,13 +164,10 @@ private:
     // tail (ResolveProjectAssets/prepareLevel/content-panel rewiring/
     // saveAppSettings).
     //
-    // Reads games_/lastOpenedGameId/lastOpenedSceneId once and resolves
-    // "the Game/Scene that should be open right now." Unlike the old
-    // openActiveGame, a last-opened game/scene that isn't found does NOT
-    // fall back to games.getFirst()/scenes.getFirst() -- it resolves to
-    // "open nothing," a real, reachable state. Returns false only for a
-    // genuine failure (no project active); "nothing was last-opened" is
-    // not a failure, it returns true having opened nothing.
+    // Restores the exact Game/Scene most recently open for the active Suite
+    // project. Project recency is never allowed to leak across projects: if
+    // this project has no saved active document, it deliberately opens no
+    // Game or Scene rather than selecting an arbitrary available one.
     bool LoadLastOpenedGameAndScene(juce::String& errorMessage);
     // Does the actual load once a specific game/scene have been resolved
     // (by LoadLastOpenedGameAndScene, or directly by selectGame/
@@ -179,10 +179,13 @@ private:
                           juce::String& errorMessage);
     void selectGame(const juce::String& gameId);
     void selectScene(const juce::String& sceneId);
+    void showOpenGameDialog();
+    void showOpenSceneDialog();
     void createGame();
     void createScene();
     void RenameGame(const juce::String& gameId);
     void RenameScene(const juce::String& gameId, const juce::String& sceneId);
+
 
     // Imports the template's starterModelAssetId (if any) from the Engine
     // Pack and places it at the current scene's origin -- the shared tail

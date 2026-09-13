@@ -1,5 +1,7 @@
 #include "Render/Scene/Mesh.h"
 
+#include <limits>
+
 using namespace juce::gl;
 
 namespace ce {
@@ -23,6 +25,23 @@ void Mesh::Upload(const std::vector<Vertex>& vertices, const std::vector<GLuint>
     gl::VertexArray::Unbind();
 
     indexCount_ = static_cast<GLsizei>(indices.size());
+
+    if (vertices.empty()) {
+        bounds_ = {};
+        return;
+    }
+
+    const auto largest = std::numeric_limits<float>::max();
+    bounds_.minimum = { largest, largest, largest };
+    bounds_.maximum = { -largest, -largest, -largest };
+    for (const auto& vertex : vertices) {
+        bounds_.minimum.x = juce::jmin(bounds_.minimum.x, vertex.position[0]);
+        bounds_.minimum.y = juce::jmin(bounds_.minimum.y, vertex.position[1]);
+        bounds_.minimum.z = juce::jmin(bounds_.minimum.z, vertex.position[2]);
+        bounds_.maximum.x = juce::jmax(bounds_.maximum.x, vertex.position[0]);
+        bounds_.maximum.y = juce::jmax(bounds_.maximum.y, vertex.position[1]);
+        bounds_.maximum.z = juce::jmax(bounds_.maximum.z, vertex.position[2]);
+    }
 }
 
 void Mesh::Draw() {

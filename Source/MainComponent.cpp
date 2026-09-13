@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <mutex>
 #include <unordered_map>
 
@@ -19,6 +20,7 @@
 #include "Scene/ObjectDefinitions.h"
 #include "Project/EngineGameDocument.h"
 #include "Views/NewGameDialog.h"
+#include "Views/OpenDocumentDialog.h"
 #include "engine/foundation_gameplay.h"
 #include "engine/tick_phase.h"
 
@@ -40,6 +42,9 @@ constexpr juce::CommandID kOpenProjectBrowserCommand = 0x1009;
 constexpr int kViewPanelItemIdBase = 9000;
 constexpr int kViewResetLayoutItemId = 8999;
 constexpr int kHelpAboutItemId = 8998;
+constexpr int kViewVREditorItemId = 8997;
+constexpr int kFileOpenGameItemId = 8996;
+constexpr int kFileOpenSceneItemId = 8995;
 
 struct DockPanelMenuEntry { const char* id; const char* label; };
 constexpr DockPanelMenuEntry kDockPanelMenuEntries[] = {
@@ -86,12 +91,23 @@ private:
 }
 
 MainComponent::MainComponent()
+    : MainComponent(StartupProgressCallback{})
+{
+}
+
+MainComponent::MainComponent(StartupProgressCallback startupProgressCallback)
     : viewport_(world_, interactions_, viewportRenderHost_),
       importPanel_(world_, viewport_, projectSession_),
       djehutiImportWatcher_(world_, viewport_, objectDefinitions_),
       lightPanel_(viewport_),
       materialsPanel_(viewport_),
       contentBrowserPanel_(viewport_, importPanel_, podCatalog_, objectDefinitions_) {
+    const auto reportStartup = [&startupProgressCallback](const juce::String& statusText, float progress) {
+        if (startupProgressCallback)
+            startupProgressCallback(statusText, juce::jlimit(0.0f, 1.0f, progress));
+    };
+
+    reportStartup("Preparing Engine runtime...", 0.10f);
     physicsWorld_.AttachToWorld(world_);
     // See suiteProcessRegistration_'s header comment: this is what keeps
     // CreationSuiteVfsService alive while this app is actually running.
@@ -131,6 +147,7 @@ MainComponent::MainComponent()
     viewportRenderHost_.setInterceptsMouseClicks(false, false);
     viewport_.addComponentListener(this);
 
+    reportStartup("Loading Suite settings...", 0.22f);
     juce::String suiteErr;
     suiteSettings_ = suiteSettingsStore_.load(suiteErr);
     loadAppSettings();
@@ -140,6 +157,7 @@ MainComponent::MainComponent()
         return ce::assets::EngineAssetPack::characterAssetIds();
     };
 
+    reportStartup("Loading FRust runtime...", 0.36f);
     std::string frustError;
     if (!frustHost_.loadBundled(frustError)) {
         juce::Logger::writeToLog("Djehuti Engine FRust host: " + juce::String(frustError));
@@ -351,6 +369,7 @@ MainComponent::MainComponent()
         }
         OpenPodEditor(podName);
     };
+    reportStartup("Building editor workspace...", 0.58f);
     initialiseDockingWorkspace();
 
     dockManager_->activatePanel("viewport");
@@ -359,12 +378,14 @@ MainComponent::MainComponent()
     setSize(1400, 900);
     startTimerHz(30);
 
+    reportStartup("Opening Suite project...", 0.78f);
     juce::String projectError;
     if (!ensureProjectSessionActive(projectError)) {
         headerBar_.setStatusText("Project setup: " + projectError);
         startupProjectRetryPending_ = true;
         nextStartupProjectRetrySeconds_ = juce::Time::getMillisecondCounterHiRes() / 1000.0 + 0.75;
     }
+    reportStartup(projectSession_.isValid() ? "Restoring project assets..." : "Waiting for Suite project service...", 0.90f);
 }
 
 MainComponent::~MainComponent() {
@@ -481,6 +502,10 @@ juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(&commandManager_, kNewGameCommand);
         menu.addCommandItem(&commandManager_, kNewSceneCommand);
         menu.addSeparator();
+
+        menu.addItem(kFileOpenGameItemId, "Open Game...", !games_.isEmpty());
+        menu.addItem(kFileOpenSceneItemId, "Open Scene...", !activeGame_.scenes.isEmpty());
+        menu.addSeparator();
         menu.addCommandItem(&commandManager_, kSaveCommand);
         menu.addSeparator();
         menu.addCommandItem(&commandManager_, kImportCommand);
@@ -500,6 +525,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce
         for (const auto& entry : kDockPanelMenuEntries)
             menu.addItem(itemId++, entry.label);
         menu.addSeparator();
+        menu.addItem(kViewVREditorItemId, "Enable VR Editor", true, viewport_.IsVREditorEnabled());
         menu.addItem(kViewResetLayoutItemId, "Reset Layout");
         return menu;
     }
@@ -523,8 +549,21 @@ juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce
 
 void MainComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
 {
+    if (topLevelMenuIndex == 0) // File
+    {
+        if (menuItemID == kFileOpenGameItemId) { showOpenGameDialog(); return; }
+        if (menuItemID == kFileOpenSceneItemId) { showOpenSceneDialog(); return; }
+    }
+
     if (topLevelMenuIndex == 2) // View
     {
+        if (menuItemID == kViewVREditorItemId)
+        {
+            const bool enabled = !viewport_.IsVREditorEnabled();
+            viewport_.SetVREditorEnabled(enabled);
+            headerBar_.setStatusText(enabled ? "Connecting VR editor..." : "VR editor disconnected; desktop rendering active.");
+            return;
+        }
         if (menuItemID == kViewResetLayoutItemId)
         {
             if (dockManager_ != nullptr) dockManager_->resetLayout();
@@ -843,6 +882,16 @@ bool MainComponent::beginAutomaticPlayerPossession(bool placeAtSpawn, juce::Stri
             registry.emplace<ce::scene::Parent>(character, ce::scene::Parent{});
             registry.emplace<ce::scene::Transform>(character, spawns.get<ce::engine::Transform>(spawn));
 
+            std::vector<entt::entity> visualParts;
+            float visualMinimumY = std::numeric_limits<float>::max();
+            const auto transformPoint = [](const juce::Matrix3D<float>& matrix, const juce::Vector3D<float>& point) {
+                return juce::Vector3D<float>{
+                    matrix.mat[0] * point.x + matrix.mat[4] * point.y + matrix.mat[8] * point.z + matrix.mat[12],
+                    matrix.mat[1] * point.x + matrix.mat[5] * point.y + matrix.mat[9] * point.z + matrix.mat[13],
+                    matrix.mat[2] * point.x + matrix.mat[6] * point.y + matrix.mat[10] * point.z + matrix.mat[14]
+                };
+            };
+
             // Recreate every mesh-bearing source node beneath one runtime
             // character root. The root is the physics/possession subject;
             // its children preserve the authored model hierarchy and draw all
@@ -863,11 +912,26 @@ bool MainComponent::beginAutomaticPlayerPossession(bool placeAtSpawn, juce::Stri
                     localTransform = ce::scene::composeTransform(localTransform,
                         hierarchy->nodes[static_cast<std::size_t>(index)].localTransform);
 
+                // A character's physical Transform is a feet-on-floor
+                // anchor. Source art is not guaranteed to use that origin:
+                // the MakeHuman exports, for example, place their root at
+                // the top of the body. Measure the transformed mesh bounds
+                // rather than guessing a per-tool offset.
+                const auto localMatrix = ce::scene::ToModelMatrix(localTransform) * hierarchy->modelSpaceBasis;
+                const auto& bounds = nodeAsset.mesh->bounds();
+                for (const float x : { bounds.minimum.x, bounds.maximum.x })
+                    for (const float y : { bounds.minimum.y, bounds.maximum.y })
+                        for (const float z : { bounds.minimum.z, bounds.maximum.z })
+                            visualMinimumY = juce::jmin(visualMinimumY,
+                                transformPoint(localMatrix, { x, y, z }).y);
+
                 const auto part = world_.CreateEntity();
                 registry.emplace<ce::scene::Name>(part, slot.displayName + " Character / mesh " +
                                                    juce::String(node.sourceNodeIndex));
                 registry.emplace<ce::scene::Parent>(part, ce::scene::Parent{ character });
                 registry.emplace<ce::scene::Transform>(part, localTransform);
+                registry.emplace<ce::scene::ImportedModelSpace>(part, ce::scene::ImportedModelSpace{
+                    hierarchy->modelSpaceBasis });
                 registry.emplace<ce::scene::MeshRenderer>(part, ce::scene::MeshRenderer{ nodeAsset.mesh, nodeAsset.material });
                 registry.emplace<ce::scene::MeshAssetReference>(part, ce::scene::MeshAssetReference{
                     asset.assetId, asset.versionId, asset.packId, asset.packVersion, node.sourceNodeIndex });
@@ -875,6 +939,7 @@ bool MainComponent::beginAutomaticPlayerPossession(bool placeAtSpawn, juce::Stri
                     registry.emplace<ce::scene::Skeleton>(part, *nodeAsset.skeleton);
                 if (nodeAsset.animationClips != nullptr && !nodeAsset.animationClips->empty())
                     registry.emplace<ce::scene::Animator>(part, ce::scene::Animator{ nodeAsset.animationClips, 0, 0.0f, false, true });
+                visualParts.push_back(part);
             }
             ce::scene::CharacterInstanceRef instance;
             instance.instanceId = juce::Uuid().toString();
@@ -882,6 +947,12 @@ bool MainComponent::beginAutomaticPlayerPossession(bool placeAtSpawn, juce::Stri
             instance.definitionVersionId = asset.versionId;
             instance.state.set("capsuleRadiusMeters", 0.3);
             instance.state.set("capsuleHalfHeightMeters", 0.9);
+            if (visualMinimumY != std::numeric_limits<float>::max()) {
+                const float visualGroundOffset = -visualMinimumY;
+                for (const auto part : visualParts)
+                    registry.get<ce::scene::Transform>(part).position.y += visualGroundOffset;
+                instance.state.set("visualGroundOffsetMeters", visualGroundOffset);
+            }
             registry.emplace<ce::scene::CharacterInstanceRef>(character, std::move(instance));
             registry.emplace<ce::scene::RuntimeSpawnedCharacter>(character, ce::scene::RuntimeSpawnedCharacter{ slot.id });
         }
@@ -895,6 +966,10 @@ bool MainComponent::beginAutomaticPlayerPossession(bool placeAtSpawn, juce::Stri
         request.capsuleHalfHeightMeters = static_cast<float>(instance.state.getWithDefault("capsuleHalfHeightMeters", 0.9));
     }
     if (!possessionService_.possessCharacter(request, error)) return false;
+    // Starting in follow mode makes a newly spawned character observable.
+    // First-person remains an explicit camera-mode choice, never an
+    // inherited surprise from an earlier editor play session.
+    cameraDirector_.setMode(ce::runtime::CameraMode::follow);
     cameraDirector_.attach(request.subjectEntityId);
     viewport_.EnterPossessedMode();
     return true;
@@ -987,10 +1062,12 @@ void MainComponent::timerCallback() {
         propertiesPanel_.SetSelectedEntity(*selection);
         sceneGraphPanel_.SetSelectedEntity(*selection);
         viewport_.RefreshDesktopGizmo();
+        viewport_.MarkFrameSnapshotDirty();
     }
     if (interactions_.takeTransformChange()) {
         propertiesPanel_.Refresh();
         viewport_.RefreshDesktopGizmo();
+        viewport_.MarkFrameSnapshotDirty();
     }
     if (pendingSceneTransitionId_.isNotEmpty()) {
         const auto requestedScene = pendingSceneTransitionId_;
@@ -1258,20 +1335,41 @@ bool MainComponent::LoadLastOpenedGameAndScene(juce::String& errorMessage)
     juce::String settingsError;
     const auto settings = creation::services::SuiteVfsJsonStore::loadJson("engine-settings.json", settingsError);
     const auto* settingsObject = settings.getDynamicObject();
-    const auto lastGameId = settingsObject != nullptr ? settingsObject->getProperty("lastOpenedGameId").toString() : juce::String{};
-    const auto lastSceneId = settingsObject != nullptr ? settingsObject->getProperty("lastOpenedSceneId").toString() : juce::String{};
+    juce::String lastGameId;
+    juce::String lastSceneId;
+    if (settingsObject != nullptr)
+    {
+        // Recent documents are keyed by Suite project. A Game ID only has
+        // meaning inside its project, so a global last-opened pair caused a
+        // different project to open an empty editor at startup.
+        const auto recentDocuments = settingsObject->getProperty("recentDocuments");
+        if (const auto* byProject = recentDocuments.getDynamicObject())
+        {
+            const auto projectDocument = byProject->getProperty(projectSession_.getProjectId());
+            if (const auto* document = projectDocument.getDynamicObject())
+            {
+                lastGameId = document->getProperty("gameId").toString();
+                lastSceneId = document->getProperty("sceneId").toString();
+            }
+        }
+
+        // One-time compatibility with settings written before recency was
+        // project-scoped. Never use a pair belonging to a different project.
+        if (lastGameId.isEmpty()
+            && settingsObject->getProperty("lastOpenedProjectId").toString() == projectSession_.getProjectId())
+        {
+            lastGameId = settingsObject->getProperty("lastOpenedGameId").toString();
+            lastSceneId = settingsObject->getProperty("lastOpenedSceneId").toString();
+        }
+    }
 
     ce::project::GameDocumentInfo resolvedGame;
     for (const auto& game : games_)
         if (game.id == lastGameId) { resolvedGame = game; break; }
     if (resolvedGame.id.isEmpty()) {
-        // Nothing was last-opened (or it no longer exists) -- open
-        // nothing. A real, reachable state, not a fallback to
-        // games_.getFirst(). Same "the void scene" reasoning as
-        // LoadGameAndScene's own empty-scene branch below -- whatever was
-        // previously loaded (e.g. a different project's scene, still live
-        // in world_ from before this project became active) must actually
-        // be cleared, not just have its id forgotten.
+        // Nothing was last-opened for this project (or it no longer exists).
+        // Open nothing; do not substitute a game merely because it exists.
+        // Clear any world still live from a previously opened project too.
         {
             std::lock_guard<std::mutex> lock(world_.RegistryMutex());
             world_.Registry().clear();
@@ -1568,6 +1666,43 @@ void MainComponent::selectScene(const juce::String& sceneId)
     }
 }
 
+void MainComponent::showOpenGameDialog()
+{
+    std::vector<ce::views::OpenDocumentChoice> choices;
+    choices.reserve(static_cast<std::size_t>(games_.size()));
+    for (const auto& game : games_) {
+        choices.push_back({ game.id, game.name,
+                            juce::String(game.scenes.size()) + (game.scenes.size() == 1 ? " scene" : " scenes") });
+    }
+
+    auto safeThis = juce::Component::SafePointer<MainComponent>(this);
+    ce::views::showOpenDocumentDialog("Open Game", "Select a Game to open its entry Scene.", std::move(choices),
+        [safeThis](juce::String gameId) {
+            if (safeThis != nullptr) safeThis->selectGame(gameId);
+        });
+}
+
+void MainComponent::showOpenSceneDialog()
+{
+    if (activeGame_.id.isEmpty()) {
+        showOperationError("No Game Open", "Open a Game before selecting one of its Scenes.");
+        return;
+    }
+
+    std::vector<ce::views::OpenDocumentChoice> choices;
+    choices.reserve(static_cast<std::size_t>(activeGame_.scenes.size()));
+    for (const auto& scene : activeGame_.scenes) {
+        choices.push_back({ scene.id, scene.name,
+                            scene.id == activeGame_.entrySceneId ? "Entry Scene" : "Scene in " + activeGame_.name });
+    }
+
+    auto safeThis = juce::Component::SafePointer<MainComponent>(this);
+    ce::views::showOpenDocumentDialog("Open Scene", "Select a Scene in " + activeGame_.name + ".", std::move(choices),
+        [safeThis](juce::String sceneId) {
+            if (safeThis != nullptr) safeThis->selectScene(sceneId);
+        });
+}
+
 void MainComponent::createGame()
 {
     auto safeThis = juce::Component::SafePointer<MainComponent>(this);
@@ -1831,17 +1966,39 @@ void MainComponent::loadPodsForActiveProject()
 
 void MainComponent::saveAppSettings()
 {
-    auto* object = new juce::DynamicObject();
+    juce::String loadError;
+    auto settings = creation::services::SuiteVfsJsonStore::loadJson("engine-settings.json", loadError);
+    auto* object = settings.getDynamicObject();
+    if (object == nullptr)
+    {
+        object = new juce::DynamicObject();
+        settings = juce::var(object);
+    }
     if (projectSession_.isValid())
         object->setProperty("lastOpenedProjectId", projectSession_.getProjectId());
     if (activeGame_.id.isNotEmpty())
         object->setProperty("lastOpenedGameId", activeGame_.id);
     if (activeScene_.id.isNotEmpty())
         object->setProperty("lastOpenedSceneId", activeScene_.id);
+    if (projectSession_.isValid() && activeGame_.id.isNotEmpty() && activeScene_.id.isNotEmpty())
+    {
+        auto recentDocuments = object->getProperty("recentDocuments");
+        auto* byProject = recentDocuments.getDynamicObject();
+        if (byProject == nullptr)
+        {
+            byProject = new juce::DynamicObject();
+            object->setProperty("recentDocuments", juce::var(byProject));
+        }
+
+        auto* document = new juce::DynamicObject();
+        document->setProperty("gameId", activeGame_.id);
+        document->setProperty("sceneId", activeScene_.id);
+        byProject->setProperty(projectSession_.getProjectId(), juce::var(document));
+    }
     object->setProperty("editorAvatarAssetId", editorAvatarAssetId_);
 
     juce::String errorMessage;
-    creation::services::SuiteVfsJsonStore::saveJson("engine-settings.json", juce::var(object), errorMessage);
+    creation::services::SuiteVfsJsonStore::saveJson("engine-settings.json", settings, errorMessage);
 }
 
 void MainComponent::loadAppSettings()

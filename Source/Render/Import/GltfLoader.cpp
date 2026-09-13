@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <array>
 #include <unordered_map>
 #include <utility>
 
@@ -23,12 +24,119 @@ const cgltf_accessor* FindAttributeAccessor(const cgltf_primitive& primitive, cg
     return nullptr;
 }
 
+struct NodeTransform {
+    juce::Matrix3D<float> matrix;
+    juce::Vector3D<float> translation;
+    std::array<float, 4> rotation{ 0.0f, 0.0f, 0.0f, 1.0f };
+    juce::Vector3D<float> scale{ 1.0f, 1.0f, 1.0f };
+};
+
+std::array<float, 4> QuaternionFromRotationMatrix(const float* matrix) {
+    const float m00 = matrix[0], m01 = matrix[4], m02 = matrix[8];
+    const float m10 = matrix[1], m11 = matrix[5], m12 = matrix[9];
+    const float m20 = matrix[2], m21 = matrix[6], m22 = matrix[10];
+    const float trace = m00 + m11 + m22;
+    std::array<float, 4> rotation;
+
+    if (trace > 0.0f) {
+        const float scale = std::sqrt(trace + 1.0f) * 2.0f;
+        rotation = { (m21 - m12) / scale, (m02 - m20) / scale, (m10 - m01) / scale, 0.25f * scale };
+    } else if (m00 > m11 && m00 > m22) {
+        const float scale = std::sqrt(1.0f + m00 - m11 - m22) * 2.0f;
+        rotation = { 0.25f * scale, (m01 + m10) / scale, (m02 + m20) / scale, (m21 - m12) / scale };
+    } else if (m11 > m22) {
+        const float scale = std::sqrt(1.0f + m11 - m00 - m22) * 2.0f;
+        rotation = { (m01 + m10) / scale, 0.25f * scale, (m12 + m21) / scale, (m02 - m20) / scale };
+    } else {
+        const float scale = std::sqrt(1.0f + m22 - m00 - m11) * 2.0f;
+        rotation = { (m02 + m20) / scale, (m12 + m21) / scale, 0.25f * scale, (m10 - m01) / scale };
+    }
+    return rotation;
+}
+
+float ColumnLength(const float* matrix, int columnStart) {
+    return std::sqrt(matrix[columnStart] * matrix[columnStart]
+                   + matrix[columnStart + 1] * matrix[columnStart + 1]
+                   + matrix[columnStart + 2] * matrix[columnStart + 2]);
+}
+
+NodeTransform ReadNodeTransform(const cgltf_node& node, bool preserveScale) {
+    float matrix[16];
+    cgltf_node_transform_local(&node, matrix);
+
+    float rotationMatrix[16];
+    std::memcpy(rotationMatrix, matrix, sizeof(rotationMatrix));
+
+    const float scaleX = ColumnLength(matrix, 0);
+    const float scaleY = ColumnLength(matrix, 4);
+    const float scaleZ = ColumnLength(matrix, 8);
+
+    const auto normalizeColumn = [](float* values, int columnStart, float length) {
+        if (length > 0.0f) {
+            values[columnStart] /= length;
+            values[columnStart + 1] /= length;
+            values[columnStart + 2] /= length;
+        }
+    };
+    normalizeColumn(rotationMatrix, 0, scaleX);
+    normalizeColumn(rotationMatrix, 4, scaleY);
+    normalizeColumn(rotationMatrix, 8, scaleZ);
+
+    NodeTransform result;
+    result.matrix = juce::Matrix3D<float>(preserveScale ? matrix : rotationMatrix);
+    result.translation = { matrix[12], matrix[13], matrix[14] };
+    result.rotation = QuaternionFromRotationMatrix(rotationMatrix);
+    result.scale = preserveScale ? juce::Vector3D<float>{ scaleX, scaleY, scaleZ }
+                                 : juce::Vector3D<float>{ 1.0f, 1.0f, 1.0f };
+    return result;
+}
+
+NodeTransform NodeTransformIgnoringScale(const cgltf_node& node) {
+    return ReadNodeTransform(node, false);
+}
+
+NodeTransform NodeTransformPreservingScale(const cgltf_node& node) {
+    return ReadNodeTransform(node, true);
+}
+
+juce::Matrix3D<float> RootParentBindTransform(const cgltf_node& node,
+                                              const std::unordered_map<const cgltf_node*, int>& jointIndexByNode) {
+    std::vector<const cgltf_node*> ancestors;
+    for (const cgltf_node* parent = node.parent; parent != nullptr; parent = parent->parent) {
+        if (jointIndexByNode.find(parent) != jointIndexByNode.end()) {
+            break;
+        }
+        ancestors.push_back(parent);
+    }
+
+    juce::Matrix3D<float> result;
+    for (auto it = ancestors.rbegin(); it != ancestors.rend(); ++it) {
+        result = result * NodeTransformPreservingScale(**it).matrix;
+    }
+    return result;
+}
+
+bool IsLegacyBlenderConversionRoot(const cgltf_data& data, const cgltf_node& node) {
+    // Blender's older MakeHuman/FBX path can emit metre-sized Z-up vertices
+    // below one glTF conversion wrapper (+90 degrees around X, .1 scale).
+    // This is source export baggage, not authored scene placement. Keep the
+    // test deliberately narrow so a normal Blender scene root is untouched.
+    if (data.asset.generator == nullptr || std::strstr(data.asset.generator, "Blender I/O") == nullptr ||
+        node.parent != nullptr || node.has_rotation == 0 || node.has_scale == 0) {
+        return false;
+    }
+    constexpr float epsilon = 0.0005f;
+    const auto near = [](float left, float right) { return std::abs(left - right) < epsilon; };
+    const float expected = std::sqrt(0.5f);
+    return near(node.rotation[0], expected) && near(node.rotation[1], 0.0f) &&
+           near(node.rotation[2], 0.0f) && near(node.rotation[3], expected) &&
+           near(node.scale[0], 0.1f) && near(node.scale[1], 0.1f) && near(node.scale[2], 0.1f);
+}
+
 // Flattens one cgltf_skin's node-graph joints into LoadedSkin's
-// cache-friendly array. A joint's parentIndex only points at another
-// joint WITHIN this same skin -- if a joint's real glTF parent isn't
-// itself one of the skin's joints (e.g. it's the skeleton root sitting
-// just outside the joint list), it's treated as a root (-1) here, since
-// there's no other joint transform to compose it with anyway.
+// cache-friendly array. If a skin root has authored non-joint ancestors,
+// keep that ancestor chain on the root joint so the runtime palette remains
+// in the same bind space as the inverse bind matrices.
 LoadedSkin ExtractSkin(const cgltf_skin& skin) {
     LoadedSkin loadedSkin;
     loadedSkin.joints.reserve(skin.joints_count);
@@ -50,35 +158,28 @@ LoadedSkin ExtractSkin(const cgltf_skin& skin) {
             }
         }
 
-        float localMatrix[16];
-        cgltf_node_transform_local(node, localMatrix);
-        joint.localBindTransform = juce::Matrix3D<float>(localMatrix);
-
-        // node->translation/rotation/scale are populated by cgltf with
-        // the correct glTF-spec defaults regardless of whether the node
-        // authored them explicitly -- EXCEPT when the node instead
-        // authors a raw `matrix` (has_matrix true), in which case these
-        // stay at identity rather than being decomposed from it. glTF
-        // exporters overwhelmingly author animated joints as TRS, not
-        // matrix, so this is accepted as a known limitation rather than
-        // implemented (matrix decomposition) for a case that's rare in
-        // practice.
-        joint.bindTranslation = { node->translation[0], node->translation[1], node->translation[2] };
-        joint.bindRotation[0] = node->rotation[0];
-        joint.bindRotation[1] = node->rotation[1];
-        joint.bindRotation[2] = node->rotation[2];
-        joint.bindRotation[3] = node->rotation[3];
-        joint.bindScale = { node->scale[0], node->scale[1], node->scale[2] };
+        const auto nodeTransform = NodeTransformPreservingScale(*node);
+        joint.localBindTransform = nodeTransform.matrix;
+        if (joint.parentIndex < 0) {
+            joint.rootParentBindTransform = RootParentBindTransform(*node, jointIndexByNode);
+        }
+        joint.bindTranslation = nodeTransform.translation;
+        joint.bindRotation[0] = nodeTransform.rotation[0];
+        joint.bindRotation[1] = nodeTransform.rotation[1];
+        joint.bindRotation[2] = nodeTransform.rotation[2];
+        joint.bindRotation[3] = nodeTransform.rotation[3];
+        joint.bindScale = nodeTransform.scale;
 
         loadedSkin.joints.push_back(joint);
     }
 
     if (skin.inverse_bind_matrices != nullptr) {
-        const cgltf_size count = juce::jmin(skin.joints_count, skin.inverse_bind_matrices->count);
-        for (cgltf_size j = 0; j < count; ++j) {
+        const auto count = juce::jmin(static_cast<std::size_t>(skin.inverse_bind_matrices->count),
+                                      loadedSkin.joints.size());
+        for (std::size_t index = 0; index < count; ++index) {
             float inverseBindMatrix[16];
-            cgltf_accessor_read_float(skin.inverse_bind_matrices, j, inverseBindMatrix, 16);
-            loadedSkin.joints[j].inverseBindMatrix = juce::Matrix3D<float>(inverseBindMatrix);
+            cgltf_accessor_read_float(skin.inverse_bind_matrices, static_cast<cgltf_size>(index), inverseBindMatrix, 16);
+            loadedSkin.joints[index].inverseBindMatrix = juce::Matrix3D<float>(inverseBindMatrix);
         }
     }
 
@@ -213,6 +314,7 @@ void ExtractNodes(const cgltf_data& data, LoadedModel& outModel) {
     }
 
     outModel.nodes.resize(data.nodes_count);
+    outModel.modelSpaceBasis = juce::Matrix3D<float>();
     for (cgltf_size n = 0; n < data.nodes_count; ++n) {
         const cgltf_node& node = data.nodes[n];
         LoadedNode loaded;
@@ -225,17 +327,26 @@ void ExtractNodes(const cgltf_data& data, LoadedModel& outModel) {
             }
         }
 
-        // Same has_matrix caveat as ExtractSkin: translation/rotation/scale
-        // stay at cgltf's identity defaults for a node authored with a raw
-        // `matrix` instead of TRS -- accepted for the same reason (rare in
-        // practice for glTF exporters).
-        loaded.localTranslation = { node.translation[0], node.translation[1], node.translation[2] };
-        loaded.localEulerRotationRadians =
-            QuaternionToEuler(node.rotation[0], node.rotation[1], node.rotation[2], node.rotation[3]);
-        loaded.localScale = { node.scale[0], node.scale[1], node.scale[2] };
+        const bool isLegacyConversionRoot = IsLegacyBlenderConversionRoot(data, node);
+        const auto nodeTransform = isLegacyConversionRoot ? NodeTransform{}
+                                                          : NodeTransformIgnoringScale(node);
+        loaded.localTranslation = nodeTransform.translation;
+        loaded.localEulerRotationRadians = QuaternionToEuler(nodeTransform.rotation[0], nodeTransform.rotation[1],
+                                                              nodeTransform.rotation[2], nodeTransform.rotation[3]);
+        loaded.localScale = { 1.0f, 1.0f, 1.0f };
 
         if (node.mesh != nullptr) {
             loaded.meshIndex = static_cast<int>(node.mesh - data.meshes);
+        }
+
+        if (isLegacyConversionRoot) {
+            // The retained vertex and skin data are Blender Z-up metres. The
+            // engine is Y-up; rotate only the final rendered model, after the
+            // skin palette, rather than altering inverse binds or individual
+            // character placement code.
+            outModel.modelSpaceBasis = juce::Matrix3D<float>::rotation(
+                { -juce::MathConstants<float>::halfPi, 0.0f, 0.0f });
+            ce::diagnostics::EngineLog::Info("GLTF", "Normalized legacy Blender coordinate wrapper on " + loaded.name + ".");
         }
 
         outModel.nodes[n] = std::move(loaded);
@@ -269,17 +380,28 @@ juce::String ExtractDjehutiAssetId(const cgltf_asset& asset) {
     return {};
 }
 
-// Reads one cgltf_texture's image URI, warning (and returning empty) for
-// an embedded/base64 image the same way the base-color extraction always
-// has -- shared so metallic-roughness/normal get the identical treatment
-// rather than a second, slightly-different copy of this check.
-juce::String ExtractTextureUri(const cgltf_texture* texture, int materialIndex, const char* slotName) {
+// Reads one cgltf_texture's URI or copies an embedded buffer-view image
+// into the imported material. Keeping the bytes avoids a temporary-file
+// extraction step for self-contained GLB source art.
+juce::String ExtractTextureUri(const cgltf_texture* texture, int materialIndex, const char* slotName,
+                               juce::MemoryBlock& embeddedBytes, juce::String& debugName) {
     if (texture == nullptr || texture->image == nullptr) return {};
     const cgltf_image& image = *texture->image;
     const juce::String uri = image.uri != nullptr ? juce::String(image.uri) : juce::String();
     if (uri.isNotEmpty() && !uri.startsWith("data:")) return uri;
-    // Embedded (buffer_view) or base64 data-URI images aren't decoded yet
-    // -- Texture2D only reads named files/entries today.
+
+    if (image.buffer_view != nullptr && image.buffer_view->buffer != nullptr && image.buffer_view->buffer->data != nullptr) {
+        const cgltf_buffer_view& view = *image.buffer_view;
+        const cgltf_buffer& buffer = *view.buffer;
+        if (view.offset <= buffer.size && view.size <= buffer.size - view.offset) {
+            const auto* bytes = static_cast<const std::uint8_t*>(buffer.data) + view.offset;
+            embeddedBytes.append(bytes, view.size);
+            debugName = image.name != nullptr ? juce::String(image.name)
+                                              : "embedded-material-" + juce::String(materialIndex) + "-" + slotName;
+            return {};
+        }
+    }
+
     ce::diagnostics::EngineLog::Warning(
         "GLTF", "Material " + juce::String(materialIndex) + " has an embedded/data-URI " + juce::String(slotName) +
                      " image; not yet supported, skipping texture.");
@@ -303,11 +425,14 @@ void ExtractModel(const cgltf_data& data, LoadedModel& outModel, std::vector<Mat
             material.metallicFactor = pbr.metallic_factor;
             material.roughnessFactor = pbr.roughness_factor;
 
-            textureUris.baseColor = ExtractTextureUri(pbr.base_color_texture.texture, static_cast<int>(m), "base color");
+            textureUris.baseColor = ExtractTextureUri(pbr.base_color_texture.texture, static_cast<int>(m), "base color",
+                                                       material.baseColorTextureBytes, material.baseColorTextureDebugName);
             textureUris.metallicRoughness =
-                ExtractTextureUri(pbr.metallic_roughness_texture.texture, static_cast<int>(m), "metallic-roughness");
+                ExtractTextureUri(pbr.metallic_roughness_texture.texture, static_cast<int>(m), "metallic-roughness",
+                                  material.metallicRoughnessTextureBytes, material.metallicRoughnessTextureDebugName);
         }
-        textureUris.normal = ExtractTextureUri(src.normal_texture.texture, static_cast<int>(m), "normal");
+        textureUris.normal = ExtractTextureUri(src.normal_texture.texture, static_cast<int>(m), "normal",
+                                                material.normalTextureBytes, material.normalTextureDebugName);
 
         outModel.materials.push_back(material);
         outMaterialTextureUris.push_back(textureUris);
