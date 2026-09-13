@@ -1,0 +1,58 @@
+{
+  "formatVersion": 1,
+  "displayName": "EditorMainMale",
+  "source": "D:\\CreationSuite-Workspaces\\Assets\\Makehuman Saves\\Player Characters\\Editor Main Male.fbx",
+  "units": "meters",
+  "blender": "3.4.1",
+  "skeleton": {
+    "family": "makehuman-game-engine-53",
+    "armature": "Game_engine",
+    "boneCount": 53,
+    "requiredBones": [
+      "Root",
+      "pelvis",
+      "head",
+      "hand_l",
+      "hand_r",
+      "foot_l",
+      "foot_r"
+    ]
+  },
+  "meshes": [
+    "editor_main_male",
+    "high-poly",
+    "male_casualsuit01",
+    "shoes01",
+    "short03"
+  ],
+  "materials": [
+    "editor_main_male",
+    "high-poly",
+    "male_casualsuit01",
+    "shoes01",
+    "short03"
+  ],
+  "actions": [],
+  "bounds": {
+    "minMeters": [
+      -0.8617734083797544,
+      -1.7206384722154966,
+      -0.13646884256630679
+    ],
+    "maxMeters": [
+      0.8617733130123213,
+      0.003468905686787065,
+      0.21311619226827436
+    ],
+    "dimensionsMeters": [
+      1.7235467213920757,
+      1.7241073779022837,
+      0.34958503483458114
+    ],
+    "source": "glb-node-world-bounds"
+  },
+  "status": "normalized-awaiting-animation-and-suite-publication",
+  "generator": "Khronos glTF Blender I/O v3.4.50",
+  "animations": [],
+  "glbSha256": "a2f56520a0a1e6bfb53c9de5f5921856621433ecc69565f633794cdb1a1ef114"
+}
