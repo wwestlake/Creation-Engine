@@ -99,7 +99,17 @@ NodeTransform NodeTransformPreservingScale(const cgltf_node& node) {
     return ReadNodeTransform(node, true);
 }
 
-juce::Matrix3D<float> RootParentBindTransform(const cgltf_node& node,
+bool IsLegacyBlenderConversionRoot(const cgltf_data& data, const cgltf_node& node);
+
+// `data` is needed only to recognize (and neutralize) a legacy Blender
+// conversion wrapper ancestor -- see the isLegacyConversionRoot branch
+// below, which must match ExtractNodes' own neutralization exactly, or the
+// skin's bind pose and the mesh's node-hierarchy placement end up in two
+// different coordinate spaces (the wrapper's rotation/scale gets baked into
+// the bind pose here AND re-applied once more via outModel.modelSpaceBasis
+// at render time -- this is what caused Blender-exported skinned
+// characters' limbs to render detached from the body).
+juce::Matrix3D<float> RootParentBindTransform(const cgltf_data& data, const cgltf_node& node,
                                               const std::unordered_map<const cgltf_node*, int>& jointIndexByNode) {
     std::vector<const cgltf_node*> ancestors;
     for (const cgltf_node* parent = node.parent; parent != nullptr; parent = parent->parent) {
@@ -111,6 +121,12 @@ juce::Matrix3D<float> RootParentBindTransform(const cgltf_node& node,
 
     juce::Matrix3D<float> result;
     for (auto it = ancestors.rbegin(); it != ancestors.rend(); ++it) {
+        // Same neutralization ExtractNodes applies to this same node: treat
+        // it as identity here too, since outModel.modelSpaceBasis already
+        // corrects for its rotation/scale once, globally, at render time.
+        if (IsLegacyBlenderConversionRoot(data, **it)) {
+            continue;
+        }
         result = result * NodeTransformPreservingScale(**it).matrix;
     }
     return result;
@@ -137,7 +153,7 @@ bool IsLegacyBlenderConversionRoot(const cgltf_data& data, const cgltf_node& nod
 // cache-friendly array. If a skin root has authored non-joint ancestors,
 // keep that ancestor chain on the root joint so the runtime palette remains
 // in the same bind space as the inverse bind matrices.
-LoadedSkin ExtractSkin(const cgltf_skin& skin) {
+LoadedSkin ExtractSkin(const cgltf_data& data, const cgltf_skin& skin) {
     LoadedSkin loadedSkin;
     loadedSkin.joints.reserve(skin.joints_count);
 
@@ -161,7 +177,7 @@ LoadedSkin ExtractSkin(const cgltf_skin& skin) {
         const auto nodeTransform = NodeTransformPreservingScale(*node);
         joint.localBindTransform = nodeTransform.matrix;
         if (joint.parentIndex < 0) {
-            joint.rootParentBindTransform = RootParentBindTransform(*node, jointIndexByNode);
+            joint.rootParentBindTransform = RootParentBindTransform(data, *node, jointIndexByNode);
         }
         joint.bindTranslation = nodeTransform.translation;
         joint.bindRotation[0] = nodeTransform.rotation[0];
@@ -545,7 +561,7 @@ void ExtractModel(const cgltf_data& data, LoadedModel& outModel, std::vector<Mat
         const cgltf_node& node = data.nodes[nodeIndex];
         if (node.skin != nullptr) {
             foundSkin = node.skin;
-            outModel.skin = ExtractSkin(*node.skin);
+            outModel.skin = ExtractSkin(data, *node.skin);
             ce::diagnostics::EngineLog::Info(
                 "GLTF", "Extracted skin: " + juce::String(static_cast<int>(outModel.skin->joints.size())) + " joint(s).");
             break;
