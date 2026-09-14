@@ -37,6 +37,7 @@ struct LoadedJoint {
     int parentIndex = -1; // index into LoadedSkin::joints, or -1 for a root joint.
     juce::Matrix3D<float> inverseBindMatrix; // mesh-space -> this joint's space, at bind pose.
     juce::Matrix3D<float> localBindTransform; // this joint's transform relative to its parent, at bind pose.
+    juce::Matrix3D<float> rootParentBindTransform; // non-joint ancestor chain for root joints, otherwise identity.
 
     // Same bind pose as localBindTransform above, but decomposed into TRS
     // rather than pre-composed -- AI5's animation channels only ever
@@ -65,17 +66,17 @@ struct LoadedSkin {
 // A glTF material's PBR metallic-roughness inputs, translated into the
 // same terms Material (Source/Render/Scene/Material.h) already uses.
 //
-// Exactly one of baseColorTexturePath / baseColorTextureVirtualPath is
-// ever populated, matching whichever of LoadGltf/LoadGltfFromVfs was
-// used — mirrors ShaderComposer's disk-vs-VFS duality rather than
-// picking one representation and losing information the other mode
-// needs.
+// A texture can be an external disk/VFS entry or embedded in the glTF/GLB
+// itself. Embedded bytes retain the authored material without requiring a
+// transient extraction file.
 struct LoadedMaterial {
     juce::Vector3D<float> baseColorFactor{ 1.0f, 1.0f, 1.0f };
     float metallicFactor = 1.0f;
     float roughnessFactor = 1.0f;
     juce::File baseColorTexturePath;          // set by LoadGltf (disk mode); invalid if unset.
     juce::String baseColorTextureVirtualPath; // set by LoadGltfFromVfs (VFS mode); empty if unset.
+    juce::MemoryBlock baseColorTextureBytes;  // set for buffer-view images in .glb/.gltf.
+    juce::String baseColorTextureDebugName;
 
     // glTF's metallicRoughnessTexture: G channel = roughness, B channel =
     // metallic (glTF spec, "Metal-Roughness Material") -- the same texture
@@ -83,6 +84,8 @@ struct LoadedMaterial {
     // into. Same disk-vs-VFS duality as baseColorTexturePath above.
     juce::File metallicRoughnessTexturePath;
     juce::String metallicRoughnessTextureVirtualPath;
+    juce::MemoryBlock metallicRoughnessTextureBytes;
+    juce::String metallicRoughnessTextureDebugName;
 
     // glTF's normalTexture -- a tangent-space normal map. Extracted so the
     // importer's generated Material Graph can at least present a Texture
@@ -97,6 +100,8 @@ struct LoadedMaterial {
     // field's presence implies is already solved.
     juce::File normalTexturePath;
     juce::String normalTextureVirtualPath;
+    juce::MemoryBlock normalTextureBytes;
+    juce::String normalTextureDebugName;
 };
 
 // One node in the glTF file's scene graph, flattened the same way
@@ -149,6 +154,11 @@ struct LoadedModel {
     // what to do with one node the same way it decides for many.
     std::vector<LoadedNode> nodes;
 
+    // Import-owned model-space basis, applied after any skeletal deformation.
+    // This is identity for conforming assets. It exists for explicitly
+    // recognized legacy source wrappers, never as a player/camera workaround.
+    juce::Matrix3D<float> modelSpaceBasis;
+
     // Djehuti Bridge engine-side handoff: the stable engine asset id
     // (e.g. "asset:<uuid>") an external export tool round-trips back into
     // this file's top-level asset.extras on a re-export, so a reimport
@@ -160,10 +170,9 @@ struct LoadedModel {
 };
 
 // Parses gltfFile (.gltf with a sibling .bin, or .glb) via cgltf and
-// extracts static mesh + PBR material data. Only external image URIs are
-// resolved for textures right now — base64-embedded or buffer_view-
-// embedded images are logged and skipped, not yet supported. Returns
-// false (and logs why) on failure.
+// extracts static mesh + PBR material data. External image URIs and
+// buffer-view embedded images are both supported. Returns false (and logs
+// why) on failure.
 bool LoadGltf(const juce::File& gltfFile, LoadedModel& outModel);
 
 // Same extraction, but the .gltf/.glb bytes — and any externally

@@ -11,6 +11,7 @@
 #include "engine/gameplay_components.h"
 #include "Assets/EngineAssetPack.h"
 #include "Assets/ProjectContentAssetStore.h"
+#include "Diagnostics/EngineLog.h"
 #include "Render/Import/GltfLoader.h"
 #include "Render/Scene/Animation.h"
 #include "Scene/AnimationSampler.h"
@@ -280,6 +281,24 @@ juce::Vector3D<float> ViewportComponent::SpawnPosition(float distance) const {
 void ViewportComponent::ResolveProjectAssets(const creation::assets::ProjectSession& session,
                                              const creation::suite::SuiteSettings& settings)
 {
+    // Project content is CPU data until Mesh::Upload runs under a current
+    // OpenGL context. Startup can deserialize the last scene before JUCE
+    // creates that context, so defer instead of issuing a no-op upload and
+    // leaving the scene graph populated but the viewport empty.
+    if (!glReady_.load(std::memory_order_acquire)) {
+        const std::lock_guard<std::mutex> lock(pendingAssetResolveMutex_);
+        pendingProjectSession_ = &session;
+        pendingSuiteSettings_ = &settings;
+        MarkFrameSnapshotDirty();
+        return;
+    }
+
+    {
+        const std::lock_guard<std::mutex> lock(pendingAssetResolveMutex_);
+        pendingProjectSession_ = nullptr;
+        pendingSuiteSettings_ = nullptr;
+    }
+
     // nodeIndex mirrors MeshAssetReference::nodeIndex -- -1 means "whole
     // model / first primitive" (today's exact single-mesh behavior); >= 0
     // addresses one part of a multi-part model (docs/OBJECT_MODEL.md).
@@ -350,16 +369,41 @@ void ViewportComponent::ResolveProjectAssets(const creation::assets::ProjectSess
         RunOnGLThread([this, &group, &model] {
             for (const int nodeIndex : group.nodeIndices)
             {
-                if (nodeIndex >= 0)
-                    assetCatalog_.AddNodeFromModel(scene::AssetCatalog::NodeAssetKey(group.id, group.versionId, nodeIndex),
-                                                   model, nodeIndex);
-                else
-                    assetCatalog_.AddFromModel(group.id, model);
+                const bool added = nodeIndex >= 0
+                    ? assetCatalog_.AddNodeFromModel(scene::AssetCatalog::NodeAssetKey(group.id, group.versionId, nodeIndex),
+                                                     model, nodeIndex)
+                    : assetCatalog_.AddFromModel(group.id, model);
+                if (!added) {
+                    diagnostics::EngineLog::Error(
+                        "Render",
+                        "Could not create GPU mesh for " + group.id +
+                            (nodeIndex >= 0 ? " node " + juce::String(nodeIndex) : "."));
+                }
             }
         }, true);
         juce::String releaseError;
         creation::assets::AssetMaterializer::releaseLease(lease, releaseError);
     }
+
+    // A scene load or project-asset resolution changes the set of meshes
+    // available to the renderer. In edit mode snapshots are event-driven,
+    // so this must explicitly request the first post-load publication.
+    MarkFrameSnapshotDirty();
+}
+
+void ViewportComponent::resolvePendingProjectAssetsOnMessageThread()
+{
+    const creation::assets::ProjectSession* session = nullptr;
+    const creation::suite::SuiteSettings* settings = nullptr;
+    {
+        const std::lock_guard<std::mutex> lock(pendingAssetResolveMutex_);
+        session = pendingProjectSession_;
+        settings = pendingSuiteSettings_;
+        pendingProjectSession_ = nullptr;
+        pendingSuiteSettings_ = nullptr;
+    }
+    if (session != nullptr && settings != nullptr)
+        ResolveProjectAssets(*session, *settings);
 }
 
 bool ViewportComponent::isInterestedInDragSource(const SourceDetails& dragSourceDetails)
@@ -585,6 +629,10 @@ void ViewportComponent::mouseDown(const juce::MouseEvent& event)
 
 void ViewportComponent::mouseDrag(const juce::MouseEvent& event)
 {
+    // Right mouse belongs exclusively to FreeCamera. Without this guard its
+    // first movement was treated as a fresh editor pointer press, selecting
+    // whatever happened to sit under the fly-navigation cursor.
+    if (!event.mods.isLeftButtonDown() || event.mods.isRightButtonDown()) return;
     handleDesktopPointer(event.position, true);
 }
 
@@ -1026,10 +1074,18 @@ void ViewportComponent::newOpenGLContextCreated() {
     std::cout << "[render] newOpenGLContextCreated: GL_VERSION="
               << reinterpret_cast<const char*>(glGetString(GL_VERSION)) << std::endl;
 
-    // OpenXR is created only after JUCE has made this OpenGL context current.
-    // tryInitializeOpenXR also retries later when Quest Link wakes after the
-    // editor, while keeping a headset-free desktop launch valid.
-    tryInitializeOpenXR();
+    // Continuous repainting is needed for camera and VR motion, but it must
+    // pace against presentation. Without a swap interval the desktop editor
+    // spins this render thread as fast as the driver permits, consuming a
+    // core while idle and starving the message thread that owns the tools.
+    if (!openGLContext_.setSwapInterval(1))
+        std::cout << "[render] warning: driver rejected the requested swap interval; desktop frame pacing is unavailable."
+                  << std::endl;
+
+    // OpenXR is created only after JUCE has made this OpenGL context current
+    // and only when the author explicitly enters VR editor mode. A connected
+    // headset must not turn normal desktop rendering into a blocking stereo
+    // presentation loop.
 
     shaderComposer_ = std::make_unique<ShaderComposer>(juce::File(CE_SHADER_SOURCE_DIR));
 
@@ -1051,10 +1107,23 @@ void ViewportComponent::newOpenGLContextCreated() {
     LogGLErrors("catalog load + grid");
 
     lastFrameTimeSeconds_ = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+    glReady_.store(true, std::memory_order_release);
+    juce::Component::SafePointer<ViewportComponent> safeThis(this);
+    juce::MessageManager::callAsync([safeThis] {
+        if (safeThis != nullptr)
+            safeThis->resolvePendingProjectAssetsOnMessageThread();
+    });
     std::cout << "[render] newOpenGLContextCreated: done" << std::endl;
 }
 
 void ViewportComponent::PublishFrameSnapshot() {
+    // Nothing in the stopped editor animates or changes its render state on
+    // a timer. Rebuilding the complete snapshot here anyway held the World
+    // registry lock for every mesh/skeleton thirty times a second and made
+    // ordinary selection and dragging feel sticky.
+    if (!isPlaying_ && !frameSnapshotDirty_)
+        return;
+
     const double nowSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0;
     const float deltaSeconds = lastSnapshotTimeSeconds_ > 0.0
         ? static_cast<float>(nowSeconds - lastSnapshotTimeSeconds_) : 0.0f;
@@ -1131,6 +1200,17 @@ void ViewportComponent::PublishFrameSnapshot() {
             } else {
                 world_.Registry().emplace<scene::MeshRenderer>(entity, scene::MeshRenderer{ asset.mesh, asset.material });
             }
+
+            if (reference.nodeIndex >= 0) {
+                auto hierarchy = assetCatalog_.FindModelHierarchy(sourceAssetKey);
+                if (!hierarchy.has_value() && reference.packId.isNotEmpty()) {
+                    hierarchy = assetCatalog_.FindModelHierarchy(reference.assetId);
+                }
+                if (hierarchy.has_value()) {
+                    world_.Registry().emplace_or_replace<scene::ImportedModelSpace>(
+                        entity, scene::ImportedModelSpace{ hierarchy->modelSpaceBasis });
+                }
+            }
         }
     }
 
@@ -1151,6 +1231,9 @@ void ViewportComponent::PublishFrameSnapshot() {
         // transparent and parent objects establish the coordinate space
         // for descendants.
         renderable.worldTransform = scene::WorldModelMatrix(world_.Registry(), entity);
+        if (const auto* imported = world_.Registry().try_get<const scene::ImportedModelSpace>(entity)) {
+            renderable.worldTransform = renderable.worldTransform * imported->basis;
+        }
         renderable.mesh = renderer.mesh;
         renderable.material = renderer.material;
 
@@ -1264,12 +1347,22 @@ void ViewportComponent::PublishFrameSnapshot() {
 
     const std::lock_guard<std::mutex> snapshotLock(snapshotMutex_);
     currentSnapshot_ = std::move(snapshot);
+    frameSnapshotDirty_ = false;
 }
 
 void ViewportComponent::renderOpenGL() {
-    tryInitializeOpenXR();
+    const bool vrEnabled = vrEditorEnabled_.load(std::memory_order_acquire);
+    if (vrEnabled) {
+        tryInitializeOpenXR();
+    } else if (openXRProvider_ != nullptr) {
+        // This runs on the GL/render thread, the same owner that created
+        // the session and its framebuffer objects.
+        openXRProvider_->shutdown();
+        openXRProvider_.reset();
+        nextOpenXRRetrySeconds_ = 0.0;
+    }
     bool vrFrameActive = false;
-    if (openXRProvider_ != nullptr) {
+    if (vrEnabled && openXRProvider_ != nullptr) {
         vrFrameActive = openXRProvider_->beginFrame(vrFrame_);
     }
     // Must be set every frame, not once at context creation: JUCE's own
@@ -1586,6 +1679,8 @@ void ViewportComponent::renderOpenGL() {
 
 void ViewportComponent::tryInitializeOpenXR()
 {
+    if (!vrEditorEnabled_.load(std::memory_order_acquire))
+        return;
     if (openXRProvider_ != nullptr)
         return;
 
@@ -1608,6 +1703,7 @@ void ViewportComponent::tryInitializeOpenXR()
 }
 
 void ViewportComponent::openGLContextClosing() {
+    glReady_.store(false, std::memory_order_release);
     if (openXRProvider_ != nullptr) {
         openXRProvider_->shutdown();
         openXRProvider_.reset();

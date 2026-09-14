@@ -16,7 +16,9 @@ public:
     };
 
     static constexpr const char* packId = "com.lagdaemon.creation-engine";
-    static constexpr const char* version = "1.0.8";
+    // Asset packs are immutable once published to the Suite VFS. Bump this
+    // whenever shipped content changes so a client cannot reuse stale files.
+    static constexpr const char* version = "1.0.12";
 
     static bool ensureInstalled(juce::String& errorMessage);
     static bool readDefaultScene(juce::MemoryBlock& sceneData, juce::String& errorMessage);

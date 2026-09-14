@@ -63,7 +63,10 @@ class MainComponent final : public juce::Component,
                             public juce::DragAndDropContainer
 {
 public:
+    using StartupProgressCallback = std::function<void(const juce::String& statusText, float progress)>;
+
     MainComponent();
+    explicit MainComponent(StartupProgressCallback startupProgressCallback);
     ~MainComponent() override;
 
     void paint(juce::Graphics&) override;
@@ -161,13 +164,10 @@ private:
     // tail (ResolveProjectAssets/prepareLevel/content-panel rewiring/
     // saveAppSettings).
     //
-    // Reads games_/lastOpenedGameId/lastOpenedSceneId once and resolves
-    // "the Game/Scene that should be open right now." Unlike the old
-    // openActiveGame, a last-opened game/scene that isn't found does NOT
-    // fall back to games.getFirst()/scenes.getFirst() -- it resolves to
-    // "open nothing," a real, reachable state. Returns false only for a
-    // genuine failure (no project active); "nothing was last-opened" is
-    // not a failure, it returns true having opened nothing.
+    // Restores the exact Game/Scene most recently open for the active Suite
+    // project. Project recency is never allowed to leak across projects: if
+    // this project has no saved active document, it deliberately opens no
+    // Game or Scene rather than selecting an arbitrary available one.
     bool LoadLastOpenedGameAndScene(juce::String& errorMessage);
     // Does the actual load once a specific game/scene have been resolved
     // (by LoadLastOpenedGameAndScene, or directly by selectGame/
@@ -179,10 +179,13 @@ private:
                           juce::String& errorMessage);
     void selectGame(const juce::String& gameId);
     void selectScene(const juce::String& sceneId);
+    void showOpenGameDialog();
+    void showOpenSceneDialog();
     void createGame();
     void createScene();
     void RenameGame(const juce::String& gameId);
     void RenameScene(const juce::String& gameId, const juce::String& sceneId);
+
 
     // Imports the template's starterModelAssetId (if any) from the Engine
     // Pack and places it at the current scene's origin -- the shared tail
@@ -193,6 +196,8 @@ private:
     void saveAppSettings();
     void loadAppSettings();
     void SetEditorAvatar(const juce::String& assetId);
+    void ReportStartupProgress(const juce::String& statusText, float progress);
+    void FinishStartupProgress(const juce::String& statusText);
     // Called right after projectSession_ becomes valid (new project,
     // opened project, or restored last-opened project) so podCatalog_
     // reflects whatever Pods that project has already saved.
@@ -220,6 +225,15 @@ private:
     creation::suite::SuiteSettings suiteSettings_;
     creation::suite::SuiteSettingsStore suiteSettingsStore_;
     creation::assets::ProjectSession projectSession_;
+
+    // The VFS service is launched on demand. At cold startup it can register
+    // just after this component's first project-open attempt, so retry a
+    // bounded number of times instead of leaving the editor in a dead shell.
+    bool startupProjectRetryPending_ = false;
+    int startupProjectRetryAttempts_ = 0;
+    double nextStartupProjectRetrySeconds_ = 0.0;
+    bool startupReadyReported_ = false;
+    StartupProgressCallback startupProgressCallback_;
 
     // Makes this process discoverable to CreationSuiteVfsService's idle
     // check (suiteHasAnyOtherLiveApp() in the service's Main.cpp) --

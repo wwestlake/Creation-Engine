@@ -70,6 +70,13 @@ bool readFile(const juce::File& file, juce::MemoryBlock& data, juce::String& err
     error = "Could not read Asset Pack file: " + file.getFullPathName();
     return false;
 }
+
+juce::String normalizeTextLineEndings(const juce::MemoryBlock& data)
+{
+    return juce::String::createStringFromData(data.getData(), static_cast<int>(data.getSize()))
+        .replace("\r\n", "\n")
+        .replace("\r", "\n");
+}
 } // namespace
 
 juce::String AssetPackStore::vfsRoot(const juce::String& id, const juce::String& version)
@@ -120,7 +127,11 @@ bool AssetPackStore::installDirectory(const juce::File& sourceRoot, Manifest& ma
     juce::MemoryBlock existing;
     if (client.readEntry(root + "/pack.json", existing))
     {
-        if (existing == sourceManifest) return true;
+        // The VFS must never replace a pack at an existing id/version.
+        // Repository checkout and Windows packaging can differ only by text
+        // line endings, though, so normalize that transport artifact before
+        // declaring two otherwise identical manifests to be different packs.
+        if (existing == sourceManifest || normalizeTextLineEndings(existing) == normalizeTextLineEndings(sourceManifest)) return true;
         error = "A different Asset Pack already occupies " + manifest.id + " " + manifest.version + ".";
         return false;
     }

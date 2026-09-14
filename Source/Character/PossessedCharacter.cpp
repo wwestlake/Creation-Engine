@@ -46,7 +46,7 @@ void PossessedCharacter::Update(ce::engine::World& world, ce::physics::PhysicsWo
         const float sinYaw = std::sin(forwardYawRadians);
         const float cosYaw = std::cos(forwardYawRadians);
         worldX = (normalizedForward * sinYaw + normalizedRight * cosYaw) * speed;
-        worldZ = (normalizedForward * cosYaw - normalizedRight * sinYaw) * speed;
+        worldZ = (-normalizedForward * cosYaw + normalizedRight * sinYaw) * speed;
     }
 
     physics.UpdateCharacter(world, entity, worldX, worldZ, jumpPressed ? kJumpSpeed : 0.0f, dt);

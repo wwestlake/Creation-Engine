@@ -261,6 +261,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Project/StarterGameTemplates.h
     Source/Views/NewGameDialog.h
     Source/Views/NewGameDialog.cpp
+    Source/Views/OpenDocumentDialog.h
+    Source/Views/OpenDocumentDialog.cpp
     Source/Views/EditorAvatarPanel.h
     Source/Views/EditorAvatarPanel.cpp
     Source/Assets/EngineAssetPack.h
@@ -280,6 +282,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Input/InputBindingDocumentStore.cpp
     Source/Input/InputActionSystem.h
     Source/Input/InputActionSystem.cpp
+    Source/Input/RawMouseInput.h
+    Source/Input/RawMouseInput.cpp
     Source/Interaction/EditorInteraction.h
     Source/Interaction/EditorInteraction.cpp
     Source/Branding.h
@@ -392,6 +396,8 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Scene/AssetPlacement.cpp
     Source/Scene/AnimationSampler.h
     Source/Scene/AnimationSampler.cpp
+    Source/Animation/ProceduralLocomotion.h
+    Source/Animation/ProceduralLocomotion.cpp
     Source/Scene/AnimatorControl.h
     Source/Scene/AnimatorControl.cpp
     Source/Scene/AnimationSlicer.h
@@ -478,6 +484,7 @@ add_executable(CreationEngineFrustPluginSmoke
     Source/Frust/EngineNodeLibraryLoader.cpp
     Source/Input/InputActionSystem.cpp
     Source/Input/InputBindingDocumentStore.cpp
+    Source/Assets/AssetPackStore.cpp
     Source/Physics/PhysicsWorld.cpp
     Source/Scene/AnimatorControl.cpp
 )
@@ -522,6 +529,7 @@ add_executable(CreationEngineObjectBehaviorSmoke
     Source/Frust/EngineNodeLibraryLoader.cpp
     Source/Input/InputActionSystem.cpp
     Source/Input/InputBindingDocumentStore.cpp
+    Source/Assets/AssetPackStore.cpp
     Source/Physics/PhysicsWorld.cpp
     Source/Scene/AnimatorControl.cpp
 )
@@ -674,6 +682,53 @@ target_include_directories(CreationEngineCharacterControllerSmoke PRIVATE Source
 target_link_libraries(CreationEngineCharacterControllerSmoke PRIVATE Jolt::Jolt engine_core)
 add_test(NAME creation_engine_character_controller_smoke COMMAND CreationEngineCharacterControllerSmoke)
 
+# DefaultScene is authored starter content, not a runtime auto-collider
+# exception. Keep its visible geometry and explicit static collision setup in
+# lockstep so a newly created Game always gives a possessed character ground.
+add_executable(CreationEngineDefaultScenePhysicsSmoke
+    tests/DefaultScenePhysicsSmoke.cpp
+)
+target_compile_definitions(CreationEngineDefaultScenePhysicsSmoke PRIVATE
+    CE_DEFAULT_SCENE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/EnginePack/scenes/DefaultScene.xml"
+)
+add_test(NAME creation_engine_default_scene_physics_smoke COMMAND CreationEngineDefaultScenePhysicsSmoke)
+
+# Deterministic, renderer-independent foundation for grounded procedural
+# locomotion. Jolt integration consumes these results in the runtime layer.
+add_executable(CreationEngineProceduralLocomotionSmoke
+    tests/ProceduralLocomotionSmoke.cpp
+    Source/Animation/ProceduralLocomotion.cpp
+)
+target_include_directories(CreationEngineProceduralLocomotionSmoke PRIVATE Source)
+add_test(NAME creation_engine_procedural_locomotion_smoke COMMAND CreationEngineProceduralLocomotionSmoke)
+
+# Manual diagnostic CLI, not a ctest -- pass a real .fbx path as argv[1] to
+# see exactly what FbxLoader extracted from it (mesh/material/skeleton/
+# animation counts) without going through the editor's Import Hub UI.
+# A real juce_add_console_app (like CreationEngineServer below), not a plain
+# add_executable, because FbxLoader.h/EngineLog.h use <JuceHeader.h> --
+# unlike InputActionSystem.h and friends, they were never written for the
+# lean direct-module-header smoke targets.
+juce_add_console_app(CreationEngineFbxImportInspect
+    PRODUCT_NAME "Djehuti FBX Import Inspect"
+    COMPANY_NAME "LagDaemon Software"
+)
+juce_generate_juce_header(CreationEngineFbxImportInspect)
+target_sources(CreationEngineFbxImportInspect PRIVATE
+    tests/FbxImportInspect.cpp
+    Source/Render/Import/FbxLoader.cpp
+    Source/Diagnostics/EngineLog.cpp
+)
+target_include_directories(CreationEngineFbxImportInspect PRIVATE Source)
+target_link_libraries(CreationEngineFbxImportInspect PRIVATE
+    creation_engine_ufbx
+    creation_suite_asset_system
+    juce::juce_core
+    juce::juce_events
+    juce::juce_graphics
+    juce::juce_opengl
+)
+
 # --- Dedicated server executable ------------------------------------------
 # Headless build: no rendering or client-only assets. Only juce_core and
 # juce_events provide cross-platform utilities for the server shell.
@@ -716,6 +771,7 @@ target_compile_definitions(CreationEngineServer PRIVATE
 )
 
 target_link_libraries(CreationEngineServer PRIVATE
+    Jolt::Jolt
     engine_core
     node_system
     creation_suite_asset_system

@@ -6,6 +6,8 @@
 #include "Scene/Components.h"
 #include "Scene/EngineSceneSerializer.h"
 
+#include <iterator>
+
 namespace ce::project
 {
 namespace
@@ -210,6 +212,73 @@ void AssignPackagedInputMapping(GameDocumentInfo& game)
     game.inputMappingAssetId = {};
     game.inputMappingAssetVersionId = {};
 }
+
+// Version 1.0.8's DefaultScene rendered eleven visible starter objects but
+// authored no physics components for them. This intentionally narrow data
+// migration recognizes only that complete, untouched layout; it never turns
+// arbitrary mesh assets or partially configured designer scenes into bodies.
+bool UpgradeUntouchedLegacyDefaultScenePhysics(juce::ValueTree sceneTree)
+{
+    struct StaticColliderSpec
+    {
+        const char* name;
+        const char* meshAssetId;
+        int shape;
+        float halfExtentX;
+        float halfExtentY;
+        float halfExtentZ;
+        float radius;
+    };
+
+    static constexpr StaticColliderSpec specs[] {
+        { "Floor",        "Cube",   0, 15.0f, 0.05f, 15.0f, 0.0f },
+        { "North Wall",   "Cube",   0, 15.0f, 1.25f, 0.05f, 0.0f },
+        { "South Wall",   "Cube",   0, 15.0f, 1.25f, 0.05f, 0.0f },
+        { "West Wall",    "Cube",   0, 0.05f, 1.25f, 15.0f, 0.0f },
+        { "East Wall",    "Cube",   0, 0.05f, 1.25f, 15.0f, 0.0f },
+        { "Center Block", "Cube",   0, 0.50f, 0.50f, 0.50f, 0.0f },
+        { "Blue Sphere",  "Sphere", 1, 0.00f, 0.00f, 0.00f, 0.75f },
+        { "Gold Sphere",  "Sphere", 1, 0.00f, 0.00f, 0.00f, 1.00f },
+        { "Green Block",  "Cube",   0, 0.80f, 0.80f, 0.80f, 0.0f },
+        { "Purple Block", "Cube",   0, 1.20f, 1.20f, 1.20f, 0.0f },
+        { "Orange Block", "Cube",   0, 0.60f, 0.60f, 0.60f, 0.0f },
+    };
+
+    const auto entities = sceneTree.getChildWithName("Entities");
+    if (!entities.isValid() || entities.getNumChildren() != static_cast<int>(std::size(specs)))
+        return false;
+
+    for (int index = 0; index < entities.getNumChildren(); ++index)
+    {
+        const auto entity = entities.getChild(index);
+        const auto& spec = specs[index];
+        if (!entity.hasType("Entity") || entity.getProperty("name").toString() != spec.name ||
+            entity.getProperty("meshAssetId").toString() != spec.meshAssetId ||
+            entity.getChildWithName("RigidBody").isValid() || entity.getChildWithName("Collider").isValid())
+            return false;
+    }
+
+    for (int index = 0; index < entities.getNumChildren(); ++index)
+    {
+        auto entity = entities.getChild(index);
+        const auto& spec = specs[index];
+        juce::ValueTree rigidBody("RigidBody");
+        rigidBody.setProperty("motionType", 0, nullptr); // Static
+        entity.addChild(rigidBody, -1, nullptr);
+
+        juce::ValueTree collider("Collider");
+        collider.setProperty("shape", spec.shape, nullptr);
+        collider.setProperty("halfExtentX", spec.halfExtentX, nullptr);
+        collider.setProperty("halfExtentY", spec.halfExtentY, nullptr);
+        collider.setProperty("halfExtentZ", spec.halfExtentZ, nullptr);
+        collider.setProperty("radius", spec.radius, nullptr);
+        collider.setProperty("halfHeight", 0.5f, nullptr);
+        collider.setProperty("collisionLayer", 0, nullptr);
+        collider.setProperty("isSensor", false, nullptr);
+        entity.addChild(collider, -1, nullptr);
+    }
+    return true;
+}
 } // namespace
 
 juce::String GameDocumentInfo::scenePath(const juce::String& sceneId) const
@@ -362,8 +431,9 @@ bool EngineGameDocumentStore::loadScene(creation::assets::ProjectSession& sessio
 {
     juce::ValueTree document;
     if (!ReadTree(session, game.scenePath(scene.id), document, errorMessage)) return false;
-    const auto sceneState = document.hasType("CreationEngineSceneDocument")
+    auto sceneState = document.hasType("CreationEngineSceneDocument")
         ? document.getChildWithName("CreationEngineScene") : document;
+    const bool upgradedLegacyDefaultScene = UpgradeUntouchedLegacyDefaultScenePhysics(sceneState);
     if (!ce::scene::EngineSceneSerializer::restoreScene(world, sceneState)) {
         errorMessage = "Scene data could not be restored: " + scene.name;
         return false;
@@ -400,6 +470,11 @@ bool EngineGameDocumentStore::loadScene(creation::assets::ProjectSession& sessio
     }
 
     world.ResetTick();
+    if (upgradedLegacyDefaultScene && !saveScene(session, game, scene, world, errorMessage))
+    {
+        errorMessage = "Could not persist the Default Scene collision upgrade: " + errorMessage;
+        return false;
+    }
     return true;
 }
 
