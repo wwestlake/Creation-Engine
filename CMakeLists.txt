@@ -213,7 +213,7 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/FratePodCache" Creati
 # different modes — not a separate desktop app talking to the game over a
 # socket.
 juce_add_gui_app(CreationEngineEditor
-    PRODUCT_NAME "Djehuti Engine"
+    PRODUCT_NAME "DjehutiEngine"
     COMPANY_NAME "LagDaemon Software"
     BUNDLE_ID "com.lagdaemon.creationengine"
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/icon.png"
@@ -726,7 +726,7 @@ add_test(NAME creation_engine_procedural_locomotion_smoke COMMAND CreationEngine
 # unlike InputActionSystem.h and friends, they were never written for the
 # lean direct-module-header smoke targets.
 juce_add_console_app(CreationEngineFbxImportInspect
-    PRODUCT_NAME "Djehuti FBX Import Inspect"
+    PRODUCT_NAME "DjehutiFBXImportInspect"
     COMPANY_NAME "LagDaemon Software"
 )
 juce_generate_juce_header(CreationEngineFbxImportInspect)
@@ -749,7 +749,7 @@ target_link_libraries(CreationEngineFbxImportInspect PRIVATE
 # Headless build: no rendering or client-only assets. Only juce_core and
 # juce_events provide cross-platform utilities for the server shell.
 juce_add_console_app(CreationEngineServer
-    PRODUCT_NAME "Djehuti Engine Server"
+    PRODUCT_NAME "DjehutiEngineServer"
     COMPANY_NAME "LagDaemon Software"
     BUNDLE_ID "com.lagdaemon.creationengine.server"
 )
@@ -819,17 +819,17 @@ install(TARGETS CreationEngineEditor
 )
 install(FILES README.md LICENSE DESTINATION .)
 
-set(CPACK_PACKAGE_NAME "Djehuti Engine")
+set(CPACK_PACKAGE_NAME "DjehutiEngine")
 set(CPACK_PACKAGE_VENDOR "LagDaemon Software")
 set(CPACK_PACKAGE_CONTACT "LagDaemon Software")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Djehuti Engine")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "DjehutiEngine")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_FILE_NAME "creation-engine-${CPACK_PACKAGE_VERSION}-win64")
-set(CPACK_PACKAGE_INSTALL_DIRECTORY "Djehuti Engine")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "DjehutiEngine")
 set(CPACK_GENERATOR "ZIP;WIX")
-set(CPACK_WIX_PROGRAM_MENU_FOLDER "Djehuti Engine")
-set(CPACK_PACKAGE_EXECUTABLES "Djehuti Engine" "Djehuti Engine")
-set(CPACK_CREATE_DESKTOP_LINKS "Djehuti Engine")
+set(CPACK_WIX_PROGRAM_MENU_FOLDER "DjehutiEngine")
+set(CPACK_PACKAGE_EXECUTABLES "DjehutiEngine" "Djehuti Engine")
+set(CPACK_CREATE_DESKTOP_LINKS "DjehutiEngine")
 
 include(CPack)
 
@@ -838,3 +838,25 @@ add_custom_command(TARGET CreationEngineEditor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineEditor>" "D:/CreationSuite-Workspaces/gemini-$<LOWER_CASE:$<CONFIG>>-bin/"
     COMMENT "Copying CreationEngineEditor to the shared gemini bin directory"
 )
+
+# Auto-generated output name overrides
+set_target_properties(CreationEngineInputActionSystemSmoke PROPERTIES OUTPUT_NAME "DjehutiEngineInputActionSystemSmoke")
+set_target_properties(CreationEngineFrustPluginSmoke PROPERTIES OUTPUT_NAME "DjehutiEngineFrustPluginSmoke")
+set_target_properties(CreationEngineFrustCodegenSmoke PROPERTIES OUTPUT_NAME "DjehutiEngineFrustCodegenSmoke")
+set_target_properties(CreationEngineEditor PROPERTIES OUTPUT_NAME "DjehutiEngineEditor")
+set_target_properties(CreationEngineGenericNodeCodegenSmoke PROPERTIES OUTPUT_NAME "DjehutiEngineGenericNodeCodegenSmoke")
+set_target_properties(CreationEngineObjectBehaviorSmoke PROPERTIES OUTPUT_NAME "DjehutiEngineObjectBehaviorSmoke")
+set_target_properties(CreationEngineMultiPluginRuntimeSmoke PROPERTIES OUTPUT_NAME "DjehutiEngineMultiPluginRuntimeSmoke")
+set_target_properties(CreationEngineOpenXRRuntimeSmoke PROPERTIES OUTPUT_NAME "DjehutiEngineOpenXRRuntimeSmoke")
+set_target_properties(CreationEngineDefaultScenePhysicsSmoke PROPERTIES OUTPUT_NAME "DjehutiEngineDefaultScenePhysicsSmoke")
+set_target_properties(CreationEnginePhysicsJoltLinkSmoke PROPERTIES OUTPUT_NAME "DjehutiEnginePhysicsJoltLinkSmoke")
+set_target_properties(CreationEnginePhysicsWorldSmoke PROPERTIES OUTPUT_NAME "DjehutiEnginePhysicsWorldSmoke")
+set_target_properties(CreationEngineProceduralLocomotionSmoke PROPERTIES OUTPUT_NAME "DjehutiEngineProceduralLocomotionSmoke")
+set_target_properties(CreationEngineFrustGraphSmoke PROPERTIES OUTPUT_NAME "DjehutiEngineFrustGraphSmoke")
+set_target_properties(CreationEngineFrustGenericNodeReflectionSmoke PROPERTIES OUTPUT_NAME "DjehutiEngineFrustGenericNodeReflectionSmoke")
+set_target_properties(CreationEnginePhysicsNodeCodegenSmoke PROPERTIES OUTPUT_NAME "DjehutiEnginePhysicsNodeCodegenSmoke")
+set_target_properties(CreationEngineCharacterControllerSmoke PROPERTIES OUTPUT_NAME "DjehutiEngineCharacterControllerSmoke")
+set_target_properties(CreationEngineNodeLibraryLoaderSmoke PROPERTIES OUTPUT_NAME "DjehutiEngineNodeLibraryLoaderSmoke")
+set_target_properties(creation_engine_ufbx PROPERTIES OUTPUT_NAME "djehuti_engine_ufbx")
+set_target_properties(CreationEngineF64FfiCheckSmoke PROPERTIES OUTPUT_NAME "DjehutiEngineF64FfiCheckSmoke")
+set_target_properties(CreationEngineObjectDefinitionSmoke PROPERTIES OUTPUT_NAME "DjehutiEngineObjectDefinitionSmoke")
