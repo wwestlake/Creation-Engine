@@ -461,7 +461,7 @@ if (CREATION_ENGINE_HAS_OPENXR)
         EngineCore/include
         ${CREATION_OPENXR_INCLUDE_DIR}
     )
-    target_link_libraries(CreationEngineOpenXRRuntimeSmoke PRIVATE ${CREATION_OPENXR_LOADER_LIBRARY})
+    target_link_libraries(CreationEngineOpenXRRuntimeSmoke PRIVATE ${CREATION_OPENXR_LOADER_LIBRARY} juce::juce_core juce::juce_graphics juce::juce_opengl)
     target_compile_definitions(CreationEngineOpenXRRuntimeSmoke PRIVATE CE_HAS_OPENXR=1)
     add_test(NAME creation_engine_openxr_runtime_smoke COMMAND CreationEngineOpenXRRuntimeSmoke)
 endif()
@@ -781,6 +781,10 @@ target_sources(CreationEngineServer PRIVATE
     Source/Scene/EngineSceneSerializer.h
     Source/Scene/EngineSceneSerializer.cpp
     Source/Frust/EngineFrustHost.cpp
+    Source/Input/InputActionSystem.cpp
+    Source/Input/InputBindingDocumentStore.cpp
+    Source/Physics/PhysicsWorld.cpp
+    Source/Scene/AnimatorControl.cpp
 )
 target_include_directories(CreationEngineServer PRIVATE Source)
 
