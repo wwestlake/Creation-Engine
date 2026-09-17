@@ -200,6 +200,7 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/Services" CreationSui
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/UI" CreationSuiteSharedUI)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/FrustPluginRuntime" CreationSuiteSharedFrustPluginRuntime)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/NodeLibraryLoader" CreationSuiteSharedNodeLibraryLoader)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/FratePodCache" CreationSuiteSharedFratePodCache)
 
 # --- Shared, juce_core-only libraries -------------------------------------
 # Not framework-agnostic like the two above (needs juce::juce_core for
