@@ -832,3 +832,9 @@ set(CPACK_PACKAGE_EXECUTABLES "Djehuti Engine" "Djehuti Engine")
 set(CPACK_CREATE_DESKTOP_LINKS "Djehuti Engine")
 
 include(CPack)
+
+add_custom_command(TARGET CreationEngineEditor POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/gemini-$<LOWER_CASE:$<CONFIG>>-bin"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineEditor>" "D:/CreationSuite-Workspaces/gemini-$<LOWER_CASE:$<CONFIG>>-bin/"
+    COMMENT "Copying CreationEngineEditor to the shared gemini bin directory"
+)
