@@ -1,4 +1,4 @@
-#include "Frust/EngineNodeLibraryLoader.h"
+#include <creation/frust/NodeLibraryLoader.h>
 
 #include <iostream>
 #include <set>
@@ -34,7 +34,7 @@ int main()
 
     NodeLibraryRegistry registry;
     std::string error;
-    if (!ce::frust::RegisterPluginNodeLibraries({ manifest }, registry, noCapabilities, error)) {
+    if (!creation::frust::RegisterPluginNodeLibraries({ manifest }, registry, noCapabilities, error)) {
         std::cerr << "Could not load plugin node library: " << error << '\n';
         return 1;
     }
@@ -55,7 +55,7 @@ int main()
     }
 
     const PluginRuntime::NodeLibraryManifest malformed { "engine.bad", R"json({"id":"engine.bad","target":"behavior","nodes":[{}]})json" };
-    if (ce::frust::RegisterPluginNodeLibraries({ malformed }, registry, noCapabilities, error) ||
+    if (creation::frust::RegisterPluginNodeLibraries({ malformed }, registry, noCapabilities, error) ||
         error.find("needs typeName") == std::string::npos) {
         std::cerr << "Malformed node-library metadata was accepted.\n";
         return 1;
@@ -79,7 +79,7 @@ int main()
             }]
         })json"
     };
-    if (!ce::frust::RegisterPluginNodeLibraries({ genericManifest }, registry, noCapabilities, error)) {
+    if (!creation::frust::RegisterPluginNodeLibraries({ genericManifest }, registry, noCapabilities, error)) {
         std::cerr << "Could not load node library with \"any\"-typed pins: " << error << '\n';
         return 1;
     }

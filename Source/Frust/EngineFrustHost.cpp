@@ -1,5 +1,5 @@
 #include "Frust/EngineFrustHost.h"
-#include "Frust/EngineNodeLibraryLoader.h"
+#include <creation/frust/NodeLibraryLoader.h>
 
 #include <algorithm>
 
@@ -338,7 +338,7 @@ bool EngineFrustHost::registerNodeLibraries(const std::string& key, std::string&
         "engine.entity.query",
         "engine.asset.query",
     };
-    return RegisterPluginNodeLibraries(runtime.nodeLibraries(key), nodeLibraries_, kSupportedCapabilities, error);
+    return creation::frust::RegisterPluginNodeLibraries(runtime.nodeLibraries(key), nodeLibraries_, kSupportedCapabilities, error);
 }
 
 std::int64_t EngineFrustHost::currentTick()
