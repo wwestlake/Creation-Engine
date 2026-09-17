@@ -41,7 +41,7 @@ enum class EngineFrustEvent : std::int64_t
 class EngineFrustHost final
 {
 public:
-    explicit EngineFrustHost(engine::World& world);
+    explicit EngineFrustHost(engine::World& world, bool isServer = false);
     ~EngineFrustHost();
 
     EngineFrustHost(const EngineFrustHost&) = delete;
@@ -92,11 +92,13 @@ public:
     // after a save).
     bool RefreshComboEventNodes(const std::vector<std::string>& comboNames, std::string& error);
     [[nodiscard]] bool isLoaded() const noexcept;
+    [[nodiscard]] bool isServer() const noexcept { return serverMode; }
     [[nodiscard]] bool isObjectBehaviorLoaded(const std::string& podId) const noexcept;
     [[nodiscard]] const node_system::NodeLibraryRegistry& nodeLibraries() const noexcept { return nodeLibraries_; }
 
 private:
     static std::int64_t currentTick();
+    static std::int64_t runtimeIsServer();
     static std::int64_t firstTransformEntity();
     static std::int64_t currentObjectEntity();
     // Cross-entity reference by placed-instance name (ce::scene::Name) --
@@ -229,6 +231,7 @@ private:
         double distance = 0.0;
         double normalX = 0.0, normalY = 0.0, normalZ = 0.0;
     } lastRaycastHit_;
+    bool serverMode = false;
     std::unordered_map<std::int64_t, ObjectLifecycle> objectLifecycles;
 };
 } // namespace ce::frust
