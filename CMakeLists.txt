@@ -199,6 +199,8 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/CharacterSystem" Crea
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/Services" CreationSuiteSharedServices)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/UI" CreationSuiteSharedUI)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/FrustPluginRuntime" CreationSuiteSharedFrustPluginRuntime)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/NodeLibraryLoader" CreationSuiteSharedNodeLibraryLoader)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/FratePodCache" CreationSuiteSharedFratePodCache)
 
 # --- Shared, juce_core-only libraries -------------------------------------
 # Not framework-agnostic like the two above (needs juce::juce_core for
@@ -275,8 +277,6 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Frust/PodCatalog.cpp
     Source/Frust/EngineFrustHost.h
     Source/Frust/EngineFrustHost.cpp
-    Source/Frust/EngineNodeLibraryLoader.h
-    Source/Frust/EngineNodeLibraryLoader.cpp
     Source/Input/InputBindingTypes.h
     Source/Input/InputBindingDocumentStore.h
     Source/Input/InputBindingDocumentStore.cpp
@@ -461,6 +461,7 @@ target_link_libraries(CreationEngineEditor PRIVATE
     creation_suite_ui
     creation_suite_ui_assets
     creation_suite_frust_plugin_runtime
+    node_library_loader
     creation_engine_ufbx
     CreationDock
     creation_suite_node_editor_ui
@@ -481,7 +482,6 @@ target_link_libraries(CreationEngineEditor PRIVATE
 add_executable(CreationEngineFrustPluginSmoke
     tests/EngineFrustPluginSmoke.cpp
     Source/Frust/EngineFrustHost.cpp
-    Source/Frust/EngineNodeLibraryLoader.cpp
     Source/Input/InputActionSystem.cpp
     Source/Input/InputBindingDocumentStore.cpp
     Source/Assets/AssetPackStore.cpp
@@ -503,6 +503,7 @@ target_link_libraries(CreationEngineFrustPluginSmoke PRIVATE
     node_system
     creation_suite_asset_system
     creation_suite_frust_plugin_runtime
+    node_library_loader
     juce::juce_core
     juce::juce_gui_basics
 )
@@ -526,7 +527,6 @@ add_test(NAME creation_engine_multi_plugin_runtime_smoke COMMAND CreationEngineM
 add_executable(CreationEngineObjectBehaviorSmoke
     tests/EngineObjectBehaviorSmoke.cpp
     Source/Frust/EngineFrustHost.cpp
-    Source/Frust/EngineNodeLibraryLoader.cpp
     Source/Input/InputActionSystem.cpp
     Source/Input/InputBindingDocumentStore.cpp
     Source/Assets/AssetPackStore.cpp
@@ -540,6 +540,7 @@ target_link_libraries(CreationEngineObjectBehaviorSmoke PRIVATE
     node_system
     creation_suite_asset_system
     creation_suite_frust_plugin_runtime
+    node_library_loader
     juce::juce_core
     juce::juce_graphics
     juce::juce_gui_basics
@@ -591,12 +592,12 @@ add_test(NAME creation_engine_frust_graph_smoke COMMAND CreationEngineFrustGraph
 
 add_executable(CreationEngineNodeLibraryLoaderSmoke
     tests/EngineNodeLibraryLoaderSmoke.cpp
-    Source/Frust/EngineNodeLibraryLoader.cpp
 )
 target_include_directories(CreationEngineNodeLibraryLoaderSmoke PRIVATE Source)
 target_link_libraries(CreationEngineNodeLibraryLoaderSmoke PRIVATE
     node_system
     creation_suite_frust_plugin_runtime
+    node_library_loader
     juce::juce_core
 )
 add_test(NAME creation_engine_node_library_loader_smoke COMMAND CreationEngineNodeLibraryLoaderSmoke)
