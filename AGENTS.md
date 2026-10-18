@@ -9,7 +9,7 @@ App-specific repositories under `apps/` may also have their own `AGENTS.md` file
 - this top-level suite policy
 - the app-local policy
 
-If they conflict, stop and ask the user which rule should govern the task.
+Follow current user instructions and the umbrella's October 17 shared-workspace and task-completion policy. It supersedes the former per-agent workspace, branch, and build-drop arrangement.
 
 ## Do It Right Rule
 
@@ -46,15 +46,9 @@ This workspace is a development/evaluation environment by default.
 
 ## Multi-Agent Rule
 
-Do not use the same writable checkout as another agent.
+Owner decision, October 17, 2026: this app's submodule checkout is shared by all LLMs under `D:\CreationSuite-Workspaces\DjehutiSuite`. Follow the umbrella `AGENTS.md` and `docs/MULTI_AGENT_WORKFLOW.md` for shared-workspace, feature-branch, build-output, and assignment-closeout policy. The former per-LLM clones/worktrees and binary drop areas are retired.
 
-If multiple agents need to work in parallel, each agent MUST use their designated workspace directory or git worktree:
-
-- **Gemini Workspace**: `D:\000 Creation Suite` (Branch prefix: `gemini/...`)
-- **Claude Workspace**: `D:\CreationSuite-Workspaces\CreationSuite-Claude` (Branch prefix: `claude/...`)
-- **Codex Workspace**: `D:\CreationSuite-Workspaces\CreationSuite-Codex` (Branch prefix: `codex/...`)
-
-Never assume that untracked files, half-finished edits, or local build outputs in a shared checkout are safe to build on.
+Coordinate one writable owner per repository and one active build at a time. Hand off the existing checkout and working state. Do not create another clone/build area to switch LLMs, change branches underneath an active owner, or discard another agent's edits.
 
 ## Secrets Directory Rule
 
@@ -64,50 +58,17 @@ The `Secrets/` directory contains critical credentials and private keys.
 
 ### Branch Ownership Check
 
-Before committing anything, check `git rev-parse --abbrev-ref HEAD`. Branch names in this workspace follow an owner/topic convention (`codex/...`, `claude/...`, `gemini/...`, etc.) — if the current branch's prefix names a different agent, **that branch is not yours to commit on**, regardless of who happens to have it checked out right now.
-
-- If the checked-out branch belongs to another agent, create and switch to your own branch (matching your own name prefix) before making any commit — do not commit to someone else's named branch just because it was already checked out.
-- This applies even for small, low-risk changes (a doc fix, a wiki edit) — branch ownership isn't scaled by risk, same as the Push Authorization Rule below.
-- This rule exists because it was already violated: work happened for an entire session directly on `codex/suite-save-20260729` — a Codex-owned branch by naming convention — without it ever being handed off.
+Before editing or committing, inspect the current branch and working tree. A shared checkout retains the previous agent's state; an agent prefix is descriptive, not permission to switch away while that agent is active. Continue another agent's feature branch only through an explicit handoff. Start a new task branch only after the repository is available and its existing work is accounted for.
 
 ## Integration Rule
 
-Only one actor (the User) acts as the primary integrator.
+Serialize integration within each repository. The agent completing the authorized assignment performs its commit/push/merge/default-branch push under the umbrella's Task Branch and Completion Rule; do not park finished work awaiting a separate integration assignment unless the user directs that.
 
-### Pull Request Review Rule
-
-From now on, agents MUST NOT merge feature branches directly into `main` or `master`.
-
-- All feature work must be committed and pushed to a named agent branch (`gemini/...`, `claude/...`, `codex/...`).
-- To land changes into `main`/`master`, the agent MUST create the GitHub Pull Request (`gh pr create`) and output the exact PR link (`https://github.com/.../pull/<N>`) for user review.
-- The user will personally review, approve, and merge the Pull Request on GitHub.
-
-The integrator is the only one who should:
-
-- merge branches into `main`/`master`
-- resolve conflicts
-- update umbrella-repo submodule pointers
-- declare work fully landed
-
-If you are not explicitly the integrator, stop at a clean branch and report:
-
-- repo
-- branch
-- files touched
-- what was verified
-- what remains risky or blocked
+For submodule work, finish and push the app's default-branch merge first. Then explicitly stage, commit, merge, and push the matching umbrella gitlink update. Coordinate umbrella ownership before changing that checkout. Keep unrelated edits and gitlinks out of the commit.
 
 ### Push Authorization Rule
 
-`git push` is never inferred. It requires an explicit, in-the-moment instruction to push, from the user, in that exact conversation — not:
-
-- a request that would merely be *satisfied* by something existing on the remote (e.g. "give me a link to that file" does not mean "push it")
-- a prior approval to push something else, earlier or elsewhere
-- the fact that a task feels finished or ready
-
-If completing a request seems to require a push and you are not the designated integrator for that repo, **stop and say so explicitly** before doing it: name the repo/branch, say a push is needed to accomplish the request, and ask. Do not act first and explain afterward. This applies even to low-risk-looking pushes (a single new doc file, a wiki page) — risk level does not change the authorization requirement.
-
-This rule exists because it was already violated: a request for "a link I can paste into a ticket" was read as implicit permission to commit and push, which it was not, and the resulting push also carried unrelated staged submodule-pointer changes along with it (see Commit Scope Rule below).
+The standing workflow authorizes pushing and merging the work in an assigned implementation task. Do not ask again merely because an old policy required per-action approval. This does not authorize unrelated repositories, deployments, credential changes, destructive cleanup, force-pushes, or new features. Stop and report a real authorization or repository-protection blocker when one remains.
 
 ## Commit Scope Rule
 
@@ -121,9 +82,7 @@ Before running `git commit` in ANY repo in this workspace — the umbrella repo,
 
 ## Build Rule
 
-Avoid sharing scratch build folders across multiple active agents.
-
-If an app repo has a fixed build-directory rule in its own `AGENTS.md`, respect it. If that makes safe parallel writable work impossible in that checkout, use a separate worktree or do not parallelize that repo.
+Reuse the project's canonical build directory and outputs across all LLMs. Coordinate access and run one build at a time; do not create per-agent build folders, separate checkouts, or binary drops as the default answer to contention. Hand off or wait for the existing build owner.
 
 ### Build Configuration Rule
 
@@ -182,4 +141,4 @@ Always use GitHub Issues and the official GitHub Project Board (**Creation Suite
 
 For the full concurrency and handoff process, read:
 
-- [docs/MULTI_AGENT_WORKFLOW.md](docs/MULTI_AGENT_WORKFLOW.md)
+- [Suite multi-agent workflow](../../docs/MULTI_AGENT_WORKFLOW.md)
