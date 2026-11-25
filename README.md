@@ -20,54 +20,41 @@ The product scope lives in [docs/CAPABILITIES.md](docs/CAPABILITIES.md).
 - `Source/Frust/` owns the Engine-side FRust host and its native capabilities.
 - `third_party/` contains submodules, including FRustLang.
 
-## Dependencies
+## Building on Windows
 
-- **JUCE**: set `JUCE_DIR` to a local JUCE checkout.
-- [`entt`](https://github.com/skypjack/entt): entity-component storage.
-- **LLVM**, **Bison**, and **Flex**: required by the FRust compiler/plugin
-  host supplied through the FRustLang submodule.
+Use the Engine submodule in the shared Creation Suite checkout and initialize
+the Suite's submodules recursively. Engine needs CMake 3.22 or newer,
+Visual Studio 2022 with C++20 support, and a local JUCE checkout.
 
-Clone with dependencies:
+Use the existing LLVM, OpenXR, ixwebsocket, zlib, and Jolt installations.
+OpenXR defaults to `openxr-deps/x64-windows` next to the Suite checkout.
+ixwebsocket and zlib default to the VfsService dependency tree. Jolt defaults
+to the Suite's isolated `third_party/jolt-vcpkg` installation.
 
-```bash
-git clone --recurse-submodules <repo-url>
-```
-
-Or initialize them in an existing checkout:
-
-```bash
-git submodule update --init --recursive
-```
-
-## Building
-
-Requires CMake 3.22+, Visual Studio 2022, and C++20.
-
-The FRustLang submodule's own compiler build needs Flex and Bison. On a
-**fresh checkout on a new machine/workspace**, CMake will not find them on
-its own -- pass their location explicitly on first configure (only needed
-once; it's cached after that):
+From the Engine directory, set the PowerShell variables below to the paths
+of the installed dependencies. Both LLVM arguments point into the same
+installed tree.
 
 ```powershell
-$env:JUCE_DIR = "D:\JUCE2\JUCE"
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
-    -DFLEX_EXECUTABLE="D:/tools/winflexbison/win_flex.exe" `
-    -DBISON_EXECUTABLE="D:/tools/winflexbison/win_bison.exe" `
-    -DFRUST_WINFLEXBISON_DIR="D:/tools/winflexbison"
-cmake --build build --config Debug --parallel 1 -- /m:1 /p:LinkIncremental=false
+    "-DJUCE_DIR=$juceRoot" `
+    "-DCREATION_ENGINE_LLVM_DIR=$llvmRoot/share/llvm" `
+    "-DFRUST_VCPKG_INSTALLED_DIR=$llvmRoot" `
+    "-DFLEX_EXECUTABLE=$winFlexBisonRoot/win_flex.exe" `
+    "-DBISON_EXECUTABLE=$winFlexBisonRoot/win_bison.exe" `
+    "-DFRUST_WINFLEXBISON_DIR=$winFlexBisonRoot" `
+    "-DCREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT=$ixWebSocketRoot" `
+    "-DCREATION_ENGINE_ZLIB_VCPKG_ROOT=$zlibRoot" `
+    "-DJolt_DIR=$joltRoot/share/Jolt"
 ```
 
-Adjust the `D:/tools/winflexbison` path to wherever WinFlexBison actually
-lives on that machine. This mirrors the `windows-vcpkg` CMake preset already
-defined in `third_party/FrustLang/projects/01_language_paradigms/02_functional/CMakePresets.json`
-for FRustLang's own standalone build -- that preset is not consulted when
-building Creation Engine itself (CreationEngine configures at its own root,
-not through FRustLang's preset file), which is why this has to be repeated
-here explicitly for every fresh Creation Engine checkout.
+The ixwebsocket and zlib package roots must each contain `lib` and `debug/lib`.
+For OpenXR installed elsewhere, pass `-DCREATION_OPENXR_SHARED_DEPS_ROOT`
+with its SDK root.
 
-The Engine CMake project discovers the FRustLang submodule and builds the
-shared FRust plugin runtime. A built editor copies `EngineLifecycle.frust`
-beside the executable in its `plugins` directory.
+For routine Debug editor builds, run `.\scripts\Build-EditorIncremental.ps1`.
+The Windows executable, bundled plugins, and assets are placed in
+`build/CreationEngineEditor_artefacts/Debug`.
 
 ## Status
 

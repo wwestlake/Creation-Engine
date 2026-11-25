@@ -3,26 +3,10 @@ cmake_minimum_required(VERSION 3.22)
 set(CREATION_ENGINE_VERSION "0.0.1" CACHE STRING "Djehuti Engine product version")
 project(CreationEngine VERSION ${CREATION_ENGINE_VERSION} LANGUAGES C CXX)
 
-# Each suite agent works from its own workspace, D:/CreationSuite-Workspaces/
-# CreationSuite-<Agent>/apps/CreationEngine (see AGENTS.md's Multi-Agent
-# Rule) -- derive <Agent> from that path rather than hardcoding one agent's
-# name, so the POST_BUILD copy below always lands in the bin directory that
-# actually matches whoever is building.
-get_filename_component(CREATION_ENGINE_WORKSPACE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
-get_filename_component(CREATION_ENGINE_WORKSPACE_NAME "${CREATION_ENGINE_WORKSPACE_DIR}" NAME)
-string(REGEX REPLACE "^CreationSuite-" "" CREATION_ENGINE_AGENT_NAME "${CREATION_ENGINE_WORKSPACE_NAME}")
-string(TOLOWER "${CREATION_ENGINE_AGENT_NAME}" CREATION_ENGINE_AGENT_NAME)
-if (NOT CREATION_ENGINE_AGENT_NAME)
-    set(CREATION_ENGINE_AGENT_NAME "dev")
-endif()
+get_filename_component(CREATION_ENGINE_SUITE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 
-# Shared across every suite agent workspace -- not vcpkg-managed, a single
-# manually-provisioned OpenXR SDK all three workspaces are meant to build
-# against. Passed as a HINTS path so a plain `cmake -S . -B build` finds it
-# with no extra flags in any workspace; still overridable via
-# -DCREATION_OPENXR_INCLUDE_DIR/-DCREATION_OPENXR_LOADER_LIBRARY if it's ever
-# provisioned somewhere else.
-set(CREATION_OPENXR_SHARED_DEPS_ROOT "D:/CreationSuite-Workspaces/openxr-deps/x64-windows")
+set(CREATION_OPENXR_SHARED_DEPS_ROOT "${CREATION_ENGINE_SUITE_DIR}/../openxr-deps/x64-windows"
+    CACHE PATH "Prebuilt OpenXR SDK root")
 find_path(CREATION_OPENXR_INCLUDE_DIR NAMES openxr/openxr.h
     HINTS "${CREATION_OPENXR_SHARED_DEPS_ROOT}/include")
 find_library(CREATION_OPENXR_LOADER_LIBRARY NAMES openxr_loader
@@ -36,8 +20,8 @@ find_library(CREATION_OPENXR_LOADER_LIBRARY NAMES openxr_loader
 if (NOT CREATION_OPENXR_INCLUDE_DIR OR NOT CREATION_OPENXR_LOADER_LIBRARY)
     message(FATAL_ERROR
         "Djehuti Engine requires the OpenXR SDK and did not find it. "
-        "Expected it at ${CREATION_OPENXR_SHARED_DEPS_ROOT} (shared across "
-        "every suite agent workspace). If it has moved, reconfigure with "
+        "Expected it at ${CREATION_OPENXR_SHARED_DEPS_ROOT}. If it has moved, reconfigure with "
+        "-DCREATION_OPENXR_SHARED_DEPS_ROOT=<sdk-root> or set "
         "-DCREATION_OPENXR_INCLUDE_DIR=<path>/include "
         "-DCREATION_OPENXR_LOADER_LIBRARY=<path>/lib/openxr_loader.lib.")
 endif()
@@ -77,68 +61,35 @@ if (NOT EXISTS "${CREATION_ENGINE_LLVM_DIR}/LLVMConfig.cmake")
 endif()
 set(LLVM_DIR "${CREATION_ENGINE_LLVM_DIR}" CACHE PATH "" FORCE)
 
-# Djehuti Bridge engine-side handoff (DjehutiImportWatcher): a WebSocket
-# CLIENT connection to services/VfsService's existing entryChanged
-# broadcast. Deliberately NOT added to this app's own vcpkg.json --
-# `vcpkg install` reconciles the WHOLE manifest (including `llvm` above),
-# which triggered a real, wasteful full LLVM rebuild the one time this was
-# tried (see AGENTS.md's "LLVM / vcpkg Build Rule": never run vcpkg
-# install here without an explicit yes). Instead, this reuses
-# services/VfsService's OWN already-built ixwebsocket (and its zlib
-# dependency, needed for permessage-deflate) directly -- same manual
-# find_path/find_library pattern already used for openxr-loader above,
-# just pointed at a sibling project's vcpkg_installed tree instead of an
-# external SDK location. Build services/VfsService at least once first so
-# these exist.
+# The Bridge watcher uses VfsService's WebSocket client dependency. Both
+# libraries can also be supplied as existing standalone package trees.
 set(CREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../services/VfsService/build/vcpkg_installed/x64-windows")
-find_path(CREATION_ENGINE_IXWEBSOCKET_INCLUDE_DIR NAMES ixwebsocket/IXWebSocket.h
-    HINTS "${CREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT}/include")
-find_library(CREATION_ENGINE_IXWEBSOCKET_LIBRARY_RELEASE NAMES ixwebsocket
-    HINTS "${CREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT}/lib")
-find_library(CREATION_ENGINE_IXWEBSOCKET_LIBRARY_DEBUG NAMES ixwebsocket
-    HINTS "${CREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT}/debug/lib")
-find_library(CREATION_ENGINE_ZLIB_LIBRARY_RELEASE NAMES z
-    HINTS "${CREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT}/lib")
-find_library(CREATION_ENGINE_ZLIB_LIBRARY_DEBUG NAMES zd
-    HINTS "${CREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT}/debug/lib")
-
-if (NOT CREATION_ENGINE_IXWEBSOCKET_INCLUDE_DIR OR NOT CREATION_ENGINE_IXWEBSOCKET_LIBRARY_RELEASE OR NOT CREATION_ENGINE_IXWEBSOCKET_LIBRARY_DEBUG)
+    "${CREATION_ENGINE_SUITE_DIR}/services/VfsService/build/vcpkg_installed/x64-windows"
+    CACHE PATH "Prebuilt ixwebsocket package root")
+set(CREATION_ENGINE_ZLIB_VCPKG_ROOT "${CREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT}"
+    CACHE PATH "Prebuilt zlib package root")
+set(ZLIB_ROOT "${CREATION_ENGINE_ZLIB_VCPKG_ROOT}")
+find_library(ZLIB_LIBRARY_RELEASE NAMES z zlib zlibstatic
+    PATHS "${ZLIB_ROOT}/lib" NO_DEFAULT_PATH)
+find_library(ZLIB_LIBRARY_DEBUG NAMES zd zlibd zlibstaticd
+    PATHS "${ZLIB_ROOT}/debug/lib" NO_DEFAULT_PATH)
+find_package(ZLIB MODULE REQUIRED)
+if (NOT ZLIB_LIBRARY_DEBUG OR NOT ZLIB_LIBRARY_RELEASE)
     message(FATAL_ERROR
-        "Djehuti Engine requires ixwebsocket (reused from services/VfsService's "
-        "own vcpkg_installed tree, not vendored separately here) for the "
-        "Djehuti Bridge import watcher, and did not find it at "
-        "${CREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT}. Build services/VfsService "
-        "at least once first (its own CMake configure installs this).")
+        "Djehuti Engine requires the zlib Debug and Release libraries. "
+        "Set -DCREATION_ENGINE_ZLIB_VCPKG_ROOT to the prebuilt package root.")
 endif()
+find_package(ixwebsocket CONFIG REQUIRED
+    PATHS "${CREATION_ENGINE_IXWEBSOCKET_VCPKG_ROOT}" NO_DEFAULT_PATH)
+set_target_properties(ixwebsocket::ixwebsocket PROPERTIES
+    MAP_IMPORTED_CONFIG_RELWITHDEBINFO Release
+    MAP_IMPORTED_CONFIG_MINSIZEREL Release
+)
 
-# Jolt Physics: same LLVM/vcpkg-manifest-safety reasoning as ixwebsocket above
-# -- NEVER added to this app's own vcpkg.json, since `vcpkg install` there
-# reconciles the whole manifest and would touch the LLVM install root. Jolt
-# is vendored into a completely separate, isolated vcpkg install
-# (third_party/jolt-vcpkg/vcpkg_installed), installed via classic mode
-# (`vcpkg install joltphysics:x64-windows --classic --x-install-root=...`),
-# never touching any manifest at all. Unlike ixwebsocket/OpenXR above, this
-# uses find_package (not manual find_path/find_library): Jolt's own
-# vcpkg-generated Jolt::Jolt imported target carries required
-# INTERFACE_COMPILE_DEFINITIONS (JPH_USE_CPU_COMPUTE, JPH_OBJECT_STREAM,
-# JPH_FLOATING_POINT_EXCEPTIONS_ENABLED, etc.) that MUST match between the
-# prebuilt static library and every consuming translation unit -- hand-
-# duplicating those via manual find_library would risk a silent ABI/struct-
-# layout mismatch, exactly the class of bug Jolt's own build docs warn
-# about.
-set(CREATION_ENGINE_JOLT_VCPKG_ROOT
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/jolt-vcpkg/vcpkg_installed/x64-windows")
-if (NOT EXISTS "${CREATION_ENGINE_JOLT_VCPKG_ROOT}/share/Jolt/JoltConfig.cmake")
-    message(FATAL_ERROR
-        "Djehuti Engine requires Jolt Physics and did not find it at "
-        "${CREATION_ENGINE_JOLT_VCPKG_ROOT}. Install it into that isolated "
-        "root with: D:/vcpkg/vcpkg.exe install joltphysics:x64-windows "
-        "--classic --x-install-root=\"${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/jolt-vcpkg/vcpkg_installed\" "
-        "-- do NOT add joltphysics to this app's own vcpkg.json (see the "
-        "LLVM / vcpkg Build Rule above).")
-endif()
-list(APPEND CMAKE_PREFIX_PATH "${CREATION_ENGINE_JOLT_VCPKG_ROOT}")
+# Jolt's exported target provides the compile definitions needed for the
+# prebuilt library's ABI.
+set(Jolt_DIR "${CREATION_ENGINE_SUITE_DIR}/third_party/jolt-vcpkg/vcpkg_installed/x64-windows/share/Jolt"
+    CACHE PATH "Directory containing the prebuilt JoltConfig.cmake")
 find_package(Jolt CONFIG REQUIRED)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -200,7 +151,6 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/Services" CreationSui
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/UI" CreationSuiteSharedUI)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/FrustPluginRuntime" CreationSuiteSharedFrustPluginRuntime)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/NodeLibraryLoader" CreationSuiteSharedNodeLibraryLoader)
-add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/FratePodCache" CreationSuiteSharedFratePodCache)
 
 # --- Shared, juce_core-only libraries -------------------------------------
 # Not framework-agnostic like the two above (needs juce::juce_core for
@@ -220,37 +170,38 @@ juce_add_gui_app(CreationEngineEditor
     ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/icon.png"
 )
 
-# Mirrors the built executable into the workspace-level shared bin
-# directory (D:\CreationSuite-Workspaces\<agent>-<config>-bin) so it's
-# reachable at a stable path without needing OS symlink privileges.
-# Every suite agent does this for its own repo -- see AGENTS.md.
+# Keep the bundled plugins and assets beside the editor executable.
 add_custom_command(TARGET CreationEngineEditor POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineEditor>" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/EngineLifecycle.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodes.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodesLibrary.frust" "$<TARGET_FILE_DIR:CreationEngineEditor>/plugins/"
-    # The shared bin mirror above (line ~122) never got this same
-    # plugins/ treatment EnginePack gets below -- meaning EngineFrustHost::
-    # loadBundled() has been silently failing (plugins/EngineLifecycle.frust
-    # "not found beside the executable") for every run launched from the
-    # shared claude-debug-bin path, since that check requires ALL of
-    # plugins/{EngineLifecycle,CoreNodes}.frust to exist right beside the
-    # exe. Found while wiring FRust-driven material parameters -- the host
-    # function was never being reached at all.
-    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/plugins"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/EngineLifecycle.frust" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/plugins/"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodes.frust" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/plugins/"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodesLibrary.frust" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/plugins/"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/EnginePack" "$<TARGET_FILE_DIR:CreationEngineEditor>/EnginePack"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/EnginePack" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/EnginePack"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/models" "$<TARGET_FILE_DIR:CreationEngineEditor>/EnginePack/models"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/models" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/EnginePack/models"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/packages" "$<TARGET_FILE_DIR:CreationEngineEditor>/EnginePack/packages"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets/packages" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/EnginePack/packages"
-    COMMENT "Copying CreationEngineEditor to the shared ${CREATION_ENGINE_AGENT_NAME} bin directory"
 )
+
+if(WIN32)
+    # Prebuilt import libraries can have their DLLs in the sibling bin directory.
+    function(creation_engine_stage_package_dlls library config)
+        get_filename_component(library_dir "${library}" DIRECTORY)
+        get_filename_component(library_name "${library}" NAME_WE)
+        foreach(dll_name IN ITEMS "${library_name}.dll" ${ARGN})
+            set(dll "${library_dir}/../bin/${dll_name}")
+            if(EXISTS "${dll}")
+                set(copy_command "${CMAKE_COMMAND}" -E copy_if_different
+                    "${dll}" "$<TARGET_FILE_DIR:CreationEngineEditor>")
+                add_custom_command(TARGET CreationEngineEditor POST_BUILD
+                    COMMAND "$<${config}:${copy_command}>"
+                    COMMAND_EXPAND_LISTS
+                    VERBATIM)
+            endif()
+        endforeach()
+    endfunction()
+    creation_engine_stage_package_dlls("${CREATION_OPENXR_LOADER_LIBRARY}" 1 jsoncpp.dll)
+    creation_engine_stage_package_dlls("${ZLIB_LIBRARY_DEBUG}" "$<CONFIG:Debug>")
+    creation_engine_stage_package_dlls("${ZLIB_LIBRARY_RELEASE}" "$<NOT:$<CONFIG:Debug>>")
+endif()
 
 juce_generate_juce_header(CreationEngineEditor)
 
@@ -427,7 +378,6 @@ target_include_directories(CreationEngineEditor PRIVATE
     Source
     third_party
     "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/JuceDocking"
-    ${CREATION_ENGINE_IXWEBSOCKET_INCLUDE_DIR}
 )
 
 if (CREATION_ENGINE_HAS_OPENXR)
@@ -480,10 +430,8 @@ target_link_libraries(CreationEngineEditor PRIVATE
     creation_engine_ufbx
     CreationDock
     creation_suite_node_editor_ui
-    $<$<CONFIG:Debug>:${CREATION_ENGINE_IXWEBSOCKET_LIBRARY_DEBUG}>
-    $<$<NOT:$<CONFIG:Debug>>:${CREATION_ENGINE_IXWEBSOCKET_LIBRARY_RELEASE}>
-    $<$<CONFIG:Debug>:${CREATION_ENGINE_ZLIB_LIBRARY_DEBUG}>
-    $<$<NOT:$<CONFIG:Debug>>:${CREATION_ENGINE_ZLIB_LIBRARY_RELEASE}>
+    ixwebsocket::ixwebsocket
+    ZLIB::ZLIB
     juce::juce_gui_extra
     juce::juce_opengl
     juce::juce_audio_basics
@@ -666,7 +614,7 @@ target_compile_definitions(CreationEngineF64FfiCheckSmoke PRIVATE
 add_test(NAME creation_engine_f64_ffi_check_smoke COMMAND CreationEngineF64FfiCheckSmoke)
 
 # Phase 1 of the Jolt vendoring plan -- prove Jolt links and runs at all,
-# isolated from any engine wrapper code. See CREATION_ENGINE_JOLT_VCPKG_ROOT
+# isolated from any engine wrapper code. See Jolt_DIR
 # above.
 add_executable(CreationEnginePhysicsJoltLinkSmoke
     tests/PhysicsJoltLinkSmoke.cpp
@@ -754,18 +702,12 @@ juce_add_console_app(CreationEngineServer
     BUNDLE_ID "com.lagdaemon.creationengine.server"
 )
 
-# Mirrors the built executable into the workspace-level shared bin
-# directory (D:\CreationSuite-Workspaces\<agent>-<config>-bin) so it's
-# reachable at a stable path without needing OS symlink privileges.
-# Every suite agent does this for its own repo -- see AGENTS.md.
+# Keep the bundled plugins beside the server executable.
 add_custom_command(TARGET CreationEngineServer POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineServer>" "D:/CreationSuite-Workspaces/${CREATION_ENGINE_AGENT_NAME}-$<LOWER_CASE:$<CONFIG>>-bin/"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:CreationEngineServer>/plugins"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/EngineLifecycle.frust" "$<TARGET_FILE_DIR:CreationEngineServer>/plugins/EngineLifecycle.frust"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodes.frust" "$<TARGET_FILE_DIR:CreationEngineServer>/plugins/CoreNodes.frust"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/BuiltInPlugins/CoreNodesLibrary.frust" "$<TARGET_FILE_DIR:CreationEngineServer>/plugins/CoreNodesLibrary.frust"
-    COMMENT "Copying CreationEngineServer to the shared ${CREATION_ENGINE_AGENT_NAME} bin directory"
 )
 
 juce_generate_juce_header(CreationEngineServer)
@@ -832,12 +774,6 @@ set(CPACK_PACKAGE_EXECUTABLES "DjehutiEngine" "Djehuti Engine")
 set(CPACK_CREATE_DESKTOP_LINKS "DjehutiEngine")
 
 include(CPack)
-
-add_custom_command(TARGET CreationEngineEditor POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "D:/CreationSuite-Workspaces/gemini-$<LOWER_CASE:$<CONFIG>>-bin"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CreationEngineEditor>" "D:/CreationSuite-Workspaces/gemini-$<LOWER_CASE:$<CONFIG>>-bin/"
-    COMMENT "Copying CreationEngineEditor to the shared gemini bin directory"
-)
 
 # Auto-generated output name overrides
 set_target_properties(CreationEngineInputActionSystemSmoke PROPERTIES OUTPUT_NAME "DjehutiEngineInputActionSystemSmoke")
