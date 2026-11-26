@@ -1,5 +1,6 @@
 #include "engine/in_memory_persistence.h"
 #include "engine/sqlite_persistence.h"
+#include "engine/rocksdb_persistence.h"
 #include "PersistenceTestDirectory.h"
 
 #include <array>
@@ -95,13 +96,17 @@ std::vector<RecordId> Ids(const QueryPage& page)
 
 struct TestBackend {
     std::optional<std::filesystem::path> directory;
+    bool rocks = false;
     std::size_t nextProvider = 0;
 
     std::unique_ptr<StorageProvider> Create()
     {
         if (!directory)
             return CreateInMemoryProvider();
-        return Take(CreateSQLiteProvider({*directory / std::to_string(++nextProvider)}));
+        auto path = *directory / std::to_string(++nextProvider);
+        if (rocks)
+            return Take(CreateRocksDBProvider({path}));
+        return Take(CreateSQLiteProvider({path}));
     }
 };
 
@@ -333,6 +338,53 @@ void CapabilitiesAndOpenClose(TestBackend& backend)
     Check(!Take(fresh->Get(key)), "A new store has no records from another store.");
 }
 
+void RetentionAndResourceLimits(TestBackend& backend)
+{
+    auto provider = backend.Create();
+    OpenSessionRequest request{{"limited"}, MakeSchema(), {}};
+    request.policy.journalRevisions = 2;
+    request.policy.openSnapshots = 1;
+    request.policy.snapshotLifetime = std::chrono::milliseconds(500);
+    request.policy.recordsPerTransaction = 1;
+    request.policy.pageEntries = 2;
+    auto session = Take(provider->OpenSession(request));
+    const RecordKey a{kMain, {"a"}};
+    const RecordKey b{kMain, {"b"}};
+    const RecordKey c{kMain, {"c"}};
+    Take(session->Commit({{Create(a, Data(1))}}));
+    Take(session->Commit({{Create(b, Data(2))}}));
+    const auto previous = Existing(*session, a).version;
+    Take(session->Commit({{Replace(a, Data(3), previous)}}));
+    auto journal = Take(session->ReadChanges({1}, 2));
+    Check(journal.historyFloor == CommitRevision{1} && journal.latestRevision == CommitRevision{3}
+          && journal.batches.size() == 2, "Retained journal must provide the exact valid cursor boundary.");
+    ExpectError(session->ReadChanges({}, 1), ErrorCode::HistoryUnavailable);
+    ExpectError(session->ReadChanges({1}, 3), ErrorCode::ResourceLimit);
+    ExpectError(session->Commit({{Create(c, Data(4)), Create({kMain, {"d"}}, Data(4))}}),
+                ErrorCode::ResourceLimit);
+    Check(!Take(session->Get(c)), "A rejected transaction must not publish records.");
+
+    QueryDescription query{kMain};
+    query.limit = 1;
+    auto pinned = Take(session->OpenSnapshot());
+    auto page = Take(pinned->Query(query));
+    Check(page.next && page.next->expiresAt, "Managed cursor requires a lifetime.");
+    ExpectError(session->OpenSnapshot(), ErrorCode::ResourceLimit);
+    std::this_thread::sleep_until(*page.next->expiresAt + std::chrono::milliseconds(10));
+    ExpectError(pinned->Get(a), ErrorCode::HistoryUnavailable);
+    query.after = page.next;
+    ExpectError(session->Query(query), ErrorCode::HistoryUnavailable);
+    Check(Existing(*session, a).data == Data(3), "Expired pins must release capacity for a fresh snapshot.");
+
+    auto archive = Take(session->Export());
+    auto target = backend.Create();
+    Take(target->Import(archive));
+    ExpectError(target->Import(archive), ErrorCode::RecordAlreadyExists);
+    auto imported = Take(target->OpenSession(request));
+    Check(Take(imported->Export()) == archive, "Logical import changed retained history or record identity.");
+    ExpectError(imported->ReadChanges({}, 1), ErrorCode::HistoryUnavailable);
+}
+
 void ConcurrentConditionalWrites(TestBackend& backend)
 {
     Fixture fixture(backend);
@@ -362,11 +414,12 @@ int main(int argc, char* argv[])
     try {
         std::optional<persistence_test::TemporaryDirectory> directory;
         TestBackend backend;
-        if (argc == 3 && std::string_view(argv[1]) == "--sqlite") {
+        if (argc == 3 && (std::string_view(argv[1]) == "--sqlite" || std::string_view(argv[1]) == "--rocksdb")) {
+            backend.rocks = std::string_view(argv[1]) == "--rocksdb";
             directory.emplace(argv[2]);
             backend.directory = directory->Path();
         } else if (argc != 1) {
-            throw std::runtime_error("Usage: persistence smoke [--sqlite BUILD_TEST_DIRECTORY]");
+            throw std::runtime_error("Usage: persistence smoke [--sqlite|--rocksdb BUILD_TEST_DIRECTORY]");
         }
         Lifecycle(backend);
         AtomicityAndJournal(backend);
@@ -374,6 +427,7 @@ int main(int argc, char* argv[])
         IndexedScalarOrdering(backend);
         CapabilitiesAndOpenClose(backend);
         ConcurrentConditionalWrites(backend);
+        RetentionAndResourceLimits(backend);
     } catch (const std::exception& error) {
         std::cerr << "Persistence smoke test failed: " << error.what() << '\n';
         return 1;

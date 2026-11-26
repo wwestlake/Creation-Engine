@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
@@ -125,6 +126,7 @@ struct QueryCursor {
     std::optional<IndexId> index;
     IndexKey key;
     RecordId id;
+    std::optional<std::chrono::steady_clock::time_point> expiresAt;
 };
 
 struct QueryDescription {
@@ -151,11 +153,13 @@ struct RecordChange {
     RecordKey key;
     std::optional<RecordVersion> previousVersion;
     std::optional<Record> record; // Post-image, absent on erase.
+    bool operator==(const RecordChange&) const = default;
 };
 
 struct ChangeBatch {
     CommitRevision revision;
     std::vector<RecordChange> changes;
+    bool operator==(const ChangeBatch&) const = default;
 };
 
 struct ChangePage {
@@ -163,6 +167,32 @@ struct ChangePage {
     // Ascending batches after the requested revision, inclusive of all changes
     // in a commit. Callers resume after the last returned batch.
     std::vector<ChangeBatch> batches;
+    // Earliest valid exclusive cursor. Earlier cursors require a fresh snapshot.
+    CommitRevision historyFloor;
+};
+
+struct PersistencePolicy {
+    std::size_t journalRevisions = 4096; // Zero keeps revision metadata only.
+    std::size_t openSnapshots = 64;
+    std::chrono::milliseconds snapshotLifetime = std::chrono::minutes(5);
+    std::size_t recordsPerTransaction = 4096;
+    std::size_t pageEntries = 4096;
+};
+
+struct ArchivedRecord {
+    CollectionKey collection;
+    Record record;
+    bool operator==(const ArchivedRecord&) const = default;
+};
+
+struct SessionArchive {
+    SessionId id;
+    SessionSchema schema;
+    CommitRevision revision;
+    CommitRevision historyFloor;
+    std::vector<ArchivedRecord> records;
+    std::vector<ChangeBatch> journal;
+    bool operator==(const SessionArchive&) const = default;
 };
 
 enum class Capability {
@@ -190,6 +220,7 @@ enum class ErrorCode {
     UniqueConstraint,
     RevisionExhausted,
     HistoryUnavailable,
+    ResourceLimit,
     StorageFailure
 };
 
@@ -229,23 +260,39 @@ public:
 // owns its view, which remains valid across later commits and close.
 class Session {
 public:
-    virtual ~Session() = default;
+    virtual ~Session();
     virtual Status Close() = 0;
-    virtual Result<std::unique_ptr<ReadSnapshot>> OpenSnapshot() const = 0;
+    Result<std::unique_ptr<ReadSnapshot>> OpenSnapshot() const;
     // A successful batch advances the revision once. Records, required indexes,
     // and journal entries become visible together. A rejected batch changes none.
-    virtual Result<CommitRevision> Commit(const Transaction& transaction) = 0;
-    virtual Result<ChangePage> ReadChanges(CommitRevision after, std::size_t limit) const = 0;
+    Result<CommitRevision> Commit(const Transaction& transaction);
+    Result<ChangePage> ReadChanges(CommitRevision after, std::size_t limit) const;
+    // Capture the records and retained journal at one consistent revision.
+    virtual Result<SessionArchive> Export() const = 0;
 
     Result<std::optional<Record>> Get(const RecordKey& key) const;
     Result<std::vector<std::optional<Record>>> GetMany(std::span<const RecordKey> keys) const;
     Result<QueryPage> Query(const QueryDescription& query) const;
+
+protected:
+    explicit Session(PersistencePolicy policy);
+    const PersistencePolicy& Policy() const noexcept { return policy_; }
+
+private:
+    virtual Result<std::unique_ptr<ReadSnapshot>> CaptureSnapshot() const = 0;
+    virtual Result<CommitRevision> Apply(const Transaction& transaction) = 0;
+    virtual Result<ChangePage> CaptureChanges(CommitRevision after, std::size_t limit) const = 0;
+
+    struct SnapshotRegistry;
+    const PersistencePolicy policy_;
+    std::unique_ptr<SnapshotRegistry> snapshots_;
 };
 
 struct OpenSessionRequest {
     SessionId id;
     SessionSchema schema;
     CapabilitySet requiredCapabilities;
+    PersistencePolicy policy;
 };
 
 class StorageProvider {
@@ -255,5 +302,7 @@ public:
     // Open an existing session with a matching schema or initialize a new one.
     // A provider grants only one open writer for a particular session ID.
     virtual Result<std::unique_ptr<Session>> OpenSession(const OpenSessionRequest& request) = 0;
+    // Import into a new session atomically. Existing sessions are protected.
+    virtual Status Import(const SessionArchive& archive) = 0;
 };
 } // namespace ce::persistence

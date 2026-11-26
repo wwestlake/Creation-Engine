@@ -147,7 +147,7 @@ find_package(Threads REQUIRED)
 add_subdirectory(EngineCore)
 
 add_executable(CreationEnginePersistenceSmoke tests/PersistenceSmoke.cpp)
-target_link_libraries(CreationEnginePersistenceSmoke PRIVATE engine_sqlite_persistence Threads::Threads)
+target_link_libraries(CreationEnginePersistenceSmoke PRIVATE engine_sqlite_persistence engine_rocksdb_persistence Threads::Threads)
 add_test(NAME creation_engine_persistence_smoke COMMAND CreationEnginePersistenceSmoke)
 add_test(NAME creation_engine_sqlite_conformance
     COMMAND CreationEnginePersistenceSmoke --sqlite "${CMAKE_CURRENT_BINARY_DIR}/Testing")
@@ -160,6 +160,25 @@ add_test(NAME creation_engine_sqlite_recovery
         "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/Testing"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/SQLitePersistenceRecovery.cmake")
 set_tests_properties(creation_engine_sqlite_conformance creation_engine_sqlite_recovery PROPERTIES TIMEOUT 90)
+
+add_test(NAME creation_engine_rocksdb_conformance
+    COMMAND CreationEnginePersistenceSmoke --rocksdb "${CMAKE_CURRENT_BINARY_DIR}/Testing")
+
+add_executable(CreationEngineRocksDBRecovery tests/RocksDBPersistenceRecovery.cpp)
+target_link_libraries(CreationEngineRocksDBRecovery PRIVATE engine_rocksdb_persistence engine_sqlite_persistence Threads::Threads)
+add_test(NAME creation_engine_rocksdb_recovery
+    COMMAND ${CMAKE_COMMAND}
+        "-DTEST_EXECUTABLE=$<TARGET_FILE:CreationEngineRocksDBRecovery>"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/Testing"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/RocksDBPersistenceRecovery.cmake")
+set_tests_properties(creation_engine_rocksdb_conformance creation_engine_rocksdb_recovery PROPERTIES TIMEOUT 180)
+
+add_executable(CreationEnginePersistenceBenchmark tests/PersistenceBenchmark.cpp)
+target_link_libraries(CreationEnginePersistenceBenchmark PRIVATE
+    engine_rocksdb_persistence engine_sqlite_persistence djehuti_sqlite Threads::Threads)
+if(WIN32)
+    target_link_libraries(CreationEnginePersistenceBenchmark PRIVATE Psapi)
+endif()
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/VFS" CreationSuiteSharedVFS)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/AssetSystem" CreationSuiteSharedAssetSystem)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/CharacterSystem" CreationSuiteSharedCharacterSystem)
@@ -217,6 +236,11 @@ if(WIN32)
     creation_engine_stage_package_dlls(CreationEngineEditor "${CREATION_OPENXR_LOADER_LIBRARY}" 1 jsoncpp.dll)
     creation_engine_stage_package_dlls(CreationEngineEditor "${ZLIB_LIBRARY_DEBUG}" "$<CONFIG:Debug>")
     creation_engine_stage_package_dlls(CreationEngineEditor "${ZLIB_LIBRARY_RELEASE}" "$<NOT:$<CONFIG:Debug>>")
+    foreach(persistence_target IN ITEMS CreationEnginePersistenceSmoke CreationEngineRocksDBRecovery
+                                         CreationEnginePersistenceBenchmark)
+        creation_engine_stage_package_dlls(${persistence_target} "${ZLIB_LIBRARY_DEBUG}" "$<CONFIG:Debug>")
+        creation_engine_stage_package_dlls(${persistence_target} "${ZLIB_LIBRARY_RELEASE}" "$<NOT:$<CONFIG:Debug>>")
+    endforeach()
 endif()
 
 juce_generate_juce_header(CreationEngineEditor)

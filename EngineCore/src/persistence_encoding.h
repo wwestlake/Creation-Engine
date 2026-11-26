@@ -6,11 +6,11 @@
 #include <cmath>
 #include <limits>
 
-namespace ce::persistence::sqlite_detail
+namespace ce::persistence::encoding
 {
 [[noreturn]] inline void MalformedData()
 {
-    throw OperationError{ErrorCode::StorageFailure, "Malformed persistence data in the SQLite store."};
+    throw OperationError{ErrorCode::StorageFailure, "Malformed persistence data in the store."};
 }
 
 inline void AppendInteger(Binary& bytes, std::uint64_t value)
@@ -313,4 +313,4 @@ inline std::optional<Binary> PrefixEnd(Binary bytes)
     ++bytes.back();
     return bytes;
 }
-} // namespace ce::persistence::sqlite_detail
+} // namespace ce::persistence::encoding

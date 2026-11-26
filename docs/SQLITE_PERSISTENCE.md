@@ -1,6 +1,6 @@
 # SQLite persistence provider
 
-ENG-002 adds the native `engine_sqlite_persistence` target. Link it to use `CreateSQLiteProvider` from `engine/sqlite_persistence.h`. The provider implements the same session, snapshot, query, transaction, and journal interfaces as the in-memory provider. The generic contract is unchanged. A host selects the provider and supplies a local storage directory, per-connection cache in KiB, lock timeout in milliseconds, and durability mode.
+ENG-002 adds the native `engine_sqlite_persistence` target. Link it to use `CreateSQLiteProvider` from `engine/sqlite_persistence.h`. The provider implements the same session, snapshot, query, transaction, and journal interfaces as the in-memory provider. The provider uses the shared native persistence contract. A host selects the provider and supplies a local storage directory, per-connection cache in KiB, lock timeout in milliseconds, and durability mode.
 
 ## Dependency
 
@@ -10,7 +10,7 @@ The default CMake build downloads the archive into the build tree. An offline bu
 
 ## Storage format and transactions
 
-Each configured directory contains `state.sqlite3` and can contain SQLite-managed `-wal` and `-shm` files while open. SQLite stores a Djehuti application ID and format version 1. The provider initializes an empty database and rejects foreign files or unknown versions. A session's schema and index declarations are compared at open. Migration and journal retention are future work.
+Each configured directory contains `state.sqlite3` and can contain SQLite-managed `-wal` and `-shm` files while open. SQLite stores a Djehuti application ID and format version 1. The provider initializes an empty database and rejects foreign files or unknown versions. A session's schema and index declarations are compared at open. ENG-003 adds retained journals and provider-neutral logical import and export. Opening a session still checks the declared schema against its stored definition. [Shared persistence policy](ROCKSDB_PERSISTENCE.md#common-provider-policy)
 
 The database keys records by session, namespace, collection, and opaque ID. Structured fields and binary payloads have a portable encoding. The adapter projects declared index tuples into sortable binary keys and enforces uniqueness inside SQLite. Records, required indexes, the next revision, and the journal batch commit together. Revision numbering uses SQLite's positive signed 64-bit range.
 
