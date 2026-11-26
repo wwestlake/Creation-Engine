@@ -144,6 +144,11 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/NodeEditorUI/CMakeLists.txt"
                      "${CMAKE_CURRENT_BINARY_DIR}/CreationSuiteSharedNodeEditorUI")
 endif()
 add_subdirectory(EngineCore)
+
+find_package(Threads REQUIRED)
+add_executable(CreationEnginePersistenceSmoke tests/PersistenceSmoke.cpp)
+target_link_libraries(CreationEnginePersistenceSmoke PRIVATE engine_core Threads::Threads)
+add_test(NAME creation_engine_persistence_smoke COMMAND CreationEnginePersistenceSmoke)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/VFS" CreationSuiteSharedVFS)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/AssetSystem" CreationSuiteSharedAssetSystem)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/CharacterSystem" CreationSuiteSharedCharacterSystem)
