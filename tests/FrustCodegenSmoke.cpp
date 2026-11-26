@@ -146,6 +146,9 @@ int main() {
     generatedFile.close();
 
     creation::frust::PluginRuntime runtime("creation-engine");
+    // The bundled core nodes import this host function even in this stand-alone fixture.
+    const auto isServer = +[]() -> std::int64_t { return 0; };
+    runtime.registerHostFunction("engine_runtime_is_server", reinterpret_cast<void*>(isServer));
     if (!runtime.load(generatedPath.string(), error)) {
         std::cerr << "generated FRust graph did not load: " << error << '\n';
         return 1;

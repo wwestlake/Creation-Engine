@@ -143,12 +143,23 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/NodeEditorUI/CMakeLists.txt"
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/NodeEditorUI"
                      "${CMAKE_CURRENT_BINARY_DIR}/CreationSuiteSharedNodeEditorUI")
 endif()
+find_package(Threads REQUIRED)
 add_subdirectory(EngineCore)
 
-find_package(Threads REQUIRED)
 add_executable(CreationEnginePersistenceSmoke tests/PersistenceSmoke.cpp)
-target_link_libraries(CreationEnginePersistenceSmoke PRIVATE engine_core Threads::Threads)
+target_link_libraries(CreationEnginePersistenceSmoke PRIVATE engine_sqlite_persistence Threads::Threads)
 add_test(NAME creation_engine_persistence_smoke COMMAND CreationEnginePersistenceSmoke)
+add_test(NAME creation_engine_sqlite_conformance
+    COMMAND CreationEnginePersistenceSmoke --sqlite "${CMAKE_CURRENT_BINARY_DIR}/Testing")
+
+add_executable(CreationEngineSQLiteRecovery tests/SQLitePersistenceRecovery.cpp)
+target_link_libraries(CreationEngineSQLiteRecovery PRIVATE engine_sqlite_persistence djehuti_sqlite Threads::Threads)
+add_test(NAME creation_engine_sqlite_recovery
+    COMMAND ${CMAKE_COMMAND}
+        "-DTEST_EXECUTABLE=$<TARGET_FILE:CreationEngineSQLiteRecovery>"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/Testing"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/SQLitePersistenceRecovery.cmake")
+set_tests_properties(creation_engine_sqlite_conformance creation_engine_sqlite_recovery PROPERTIES TIMEOUT 90)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/VFS" CreationSuiteSharedVFS)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/AssetSystem" CreationSuiteSharedAssetSystem)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/CharacterSystem" CreationSuiteSharedCharacterSystem)
