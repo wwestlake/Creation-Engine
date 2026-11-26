@@ -32,3 +32,5 @@ A new read on an expired snapshot returns `HistoryUnavailable`. Pages carry a pr
 Use `Session::Export` to capture an in-memory logical image at one revision. It includes the schema, records, opaque IDs, record versions, current revision and retained journal. `StorageProvider::Import` validates definitions, record identity and version chains, retained journal bounds and final record state. It builds indexes and publishes the new session atomically. Both durable providers preserve the same logical image. Import refuses an existing ID. A host can validate an imported session before selecting it for use. The native image keeps the logical state in memory, so big deployments will need a streamed format when transport is introduced.
 
 The existing EngineCore session entry points remain the same for callers. Provider implementations now supply snapshot, mutation and journal methods through shared policy wrappers. Logical export and import are additive capabilities. The common maximum revision is the positive signed 64-bit range used by SQLite.
+
+[SQLite and RocksDB preliminary comparison](PERSISTENCE_PROVIDER_BENCHMARK.md)

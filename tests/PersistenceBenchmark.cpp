@@ -328,9 +328,11 @@ int main(int argc, char* argv[])
             Seed(*session, count);
             std::_Exit(71);
         } else if (mode == "recover") {
+            std::unique_ptr<StorageProvider> provider;
+            std::unique_ptr<Session> session;
             const auto recoveryUs = Measure([&] {
-                auto provider = Create(rocks, directory);
-                auto session = Take(provider->OpenSession(Request()));
+                provider = Create(rocks, directory);
+                session = Take(provider->OpenSession(Request()));
                 Check(Take(session->Get(RecordAt(count - 1)))->data == Data(count - 1, 0),
                       "Recovery lost the last record.");
             });

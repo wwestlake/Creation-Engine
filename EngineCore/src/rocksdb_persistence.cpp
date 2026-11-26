@@ -3,6 +3,7 @@
 #include "persistence_encoding.h"
 #include "persistence_validation.h"
 
+#include <rocksdb/advanced_cache.h>
 #include <rocksdb/cache.h>
 #include <rocksdb/db.h>
 #include <rocksdb/statistics.h>
@@ -175,9 +176,9 @@ void RequireFormat(rocksdb::DB& db)
 
 std::unique_ptr<rocksdb::DB> OpenReadOnly(const fs::path& path)
 {
-    rocksdb::DB* db = nullptr;
+    std::unique_ptr<rocksdb::DB> db;
     Check(rocksdb::DB::OpenForReadOnly(rocksdb::Options{}, Path(path), &db), "open checkpoint");
-    return std::unique_ptr<rocksdb::DB>(db);
+    return db;
 }
 
 std::shared_ptr<Store> OpenStore(const RocksDBOptions& configured)
@@ -198,9 +199,8 @@ std::shared_ptr<Store> OpenStore(const RocksDBOptions& configured)
     rocksdb::BlockBasedTableOptions table;
     table.block_cache = store->cache;
     options.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table));
-    rocksdb::DB* db = nullptr;
-    Check(rocksdb::DB::Open(options, Path(path), &db), "open database");
-    store->database.reset(db);
+    Check(rocksdb::DB::Open(options, Path(path), &store->database), "open database");
+    auto* db = store->database.get();
 
     if (!Read(*db, {}, kFormatKey)) {
         std::unique_ptr<rocksdb::Iterator> cursor(db->NewIterator({}));
