@@ -144,6 +144,11 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/NodeEditorUI/CMakeLists.txt"
                      "${CMAKE_CURRENT_BINARY_DIR}/CreationSuiteSharedNodeEditorUI")
 endif()
 add_subdirectory(EngineCore)
+
+find_package(Threads REQUIRED)
+add_executable(CreationEnginePersistenceSmoke tests/PersistenceSmoke.cpp)
+target_link_libraries(CreationEnginePersistenceSmoke PRIVATE engine_core Threads::Threads)
+add_test(NAME creation_engine_persistence_smoke COMMAND CreationEnginePersistenceSmoke)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/VFS" CreationSuiteSharedVFS)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/AssetSystem" CreationSuiteSharedAssetSystem)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/CharacterSystem" CreationSuiteSharedCharacterSystem)
@@ -183,24 +188,24 @@ add_custom_command(TARGET CreationEngineEditor POST_BUILD
 
 if(WIN32)
     # Prebuilt import libraries can have their DLLs in the sibling bin directory.
-    function(creation_engine_stage_package_dlls library config)
+    function(creation_engine_stage_package_dlls target library config)
         get_filename_component(library_dir "${library}" DIRECTORY)
         get_filename_component(library_name "${library}" NAME_WE)
         foreach(dll_name IN ITEMS "${library_name}.dll" ${ARGN})
             set(dll "${library_dir}/../bin/${dll_name}")
             if(EXISTS "${dll}")
                 set(copy_command "${CMAKE_COMMAND}" -E copy_if_different
-                    "${dll}" "$<TARGET_FILE_DIR:CreationEngineEditor>")
-                add_custom_command(TARGET CreationEngineEditor POST_BUILD
+                    "${dll}" "$<TARGET_FILE_DIR:${target}>")
+                add_custom_command(TARGET ${target} POST_BUILD
                     COMMAND "$<${config}:${copy_command}>"
                     COMMAND_EXPAND_LISTS
                     VERBATIM)
             endif()
         endforeach()
     endfunction()
-    creation_engine_stage_package_dlls("${CREATION_OPENXR_LOADER_LIBRARY}" 1 jsoncpp.dll)
-    creation_engine_stage_package_dlls("${ZLIB_LIBRARY_DEBUG}" "$<CONFIG:Debug>")
-    creation_engine_stage_package_dlls("${ZLIB_LIBRARY_RELEASE}" "$<NOT:$<CONFIG:Debug>>")
+    creation_engine_stage_package_dlls(CreationEngineEditor "${CREATION_OPENXR_LOADER_LIBRARY}" 1 jsoncpp.dll)
+    creation_engine_stage_package_dlls(CreationEngineEditor "${ZLIB_LIBRARY_DEBUG}" "$<CONFIG:Debug>")
+    creation_engine_stage_package_dlls(CreationEngineEditor "${ZLIB_LIBRARY_RELEASE}" "$<NOT:$<CONFIG:Debug>>")
 endif()
 
 juce_generate_juce_header(CreationEngineEditor)
@@ -413,7 +418,12 @@ if (CREATION_ENGINE_HAS_OPENXR)
     )
     target_link_libraries(CreationEngineOpenXRRuntimeSmoke PRIVATE ${CREATION_OPENXR_LOADER_LIBRARY} juce::juce_core juce::juce_graphics juce::juce_opengl)
     target_compile_definitions(CreationEngineOpenXRRuntimeSmoke PRIVATE CE_HAS_OPENXR=1)
+    if (WIN32)
+        creation_engine_stage_package_dlls(CreationEngineOpenXRRuntimeSmoke
+            "${CREATION_OPENXR_LOADER_LIBRARY}" 1 jsoncpp.dll)
+    endif()
     add_test(NAME creation_engine_openxr_runtime_smoke COMMAND CreationEngineOpenXRRuntimeSmoke)
+    set_tests_properties(creation_engine_openxr_runtime_smoke PROPERTIES TIMEOUT 60)
 endif()
 
 target_link_libraries(CreationEngineEditor PRIVATE
