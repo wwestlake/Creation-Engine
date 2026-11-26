@@ -45,7 +45,7 @@ private:
     interaction::EditorInteraction interactions_{ world_ };
     ce::frust::EngineFrustHost frustHost_{ world_ };
     ce::input::InputActionSystem inputActionSystem_;
-    RuntimeWorldRunner runtimeWorldRunner_{ world_, physicsWorld_, frustHost_, inputActionSystem_ };
+    RuntimeWorldRunner runtimeWorldRunner_{ world_, physicsWorld_, frustHost_ };
     PossessionService possessionService_{ world_, physicsWorld_, inputActionSystem_ };
     CameraDirector cameraDirector_;
     juce::Array<ce::project::PlayerSlotInfo> playerSlots_;

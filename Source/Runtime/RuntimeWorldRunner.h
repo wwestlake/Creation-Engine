@@ -6,7 +6,6 @@
 namespace ce::engine { class World; }
 namespace ce::physics { class PhysicsWorld; }
 namespace ce::frust { class EngineFrustHost; }
-namespace ce::input { class InputActionSystem; }
 
 namespace ce::runtime
 {
@@ -24,7 +23,7 @@ public:
     };
 
     RuntimeWorldRunner(engine::World& world, physics::PhysicsWorld& physics,
-                       frust::EngineFrustHost& frust, input::InputActionSystem& input);
+                       frust::EngineFrustHost& frust);
 
     void BeginPlay();
     void EndPlay();
@@ -39,7 +38,6 @@ private:
     engine::World& world_;
     physics::PhysicsWorld& physics_;
     frust::EngineFrustHost& frust_;
-    input::InputActionSystem& input_;
     bool playing_ = false;
 };
 

@@ -262,7 +262,7 @@ private:
     ce::input::InputActionSystem inputActionSystem_;
     ce::runtime::PossessionService possessionService_ { world_, physicsWorld_, inputActionSystem_ };
     ce::runtime::CameraDirector cameraDirector_;
-    ce::runtime::RuntimeWorldRunner runtimeWorldRunner_ { world_, physicsWorld_, frustHost_, inputActionSystem_ };
+    ce::runtime::RuntimeWorldRunner runtimeWorldRunner_ { world_, physicsWorld_, frustHost_ };
     // Named registry of Pods (docs/BEHAVIOR_COMPONENT_MODEL.md, and the
     // Pod Management System plan generalizing it) -- owned here since
     // both PodEditorPanel (editing) and behaviorAttachmentPanel_

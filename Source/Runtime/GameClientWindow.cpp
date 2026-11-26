@@ -67,6 +67,7 @@ void GameClientContent::timerCallback()
         const float elapsedSeconds = lastFrameSeconds_ > 0.0
             ? static_cast<float>(nowSeconds - lastFrameSeconds_) : 0.0f;
         lastFrameSeconds_ = nowSeconds;
+        inputActionSystem_.PollOncePerFrame();
         runtimeWorldRunner_.RunFrame(elapsedSeconds, {
             [this](float dt) { updatePossessedPlayer(dt); }
         });

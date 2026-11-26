@@ -1,7 +1,6 @@
 #include "RuntimeWorldRunner.h"
 
 #include "Frust/EngineFrustHost.h"
-#include "Input/InputActionSystem.h"
 #include "Physics/PhysicsWorld.h"
 #include "engine/foundation_gameplay.h"
 #include "engine/simulation.h"
@@ -14,8 +13,8 @@ namespace ce::runtime
 {
 
 RuntimeWorldRunner::RuntimeWorldRunner(engine::World& world, physics::PhysicsWorld& physics,
-                                       frust::EngineFrustHost& frust, input::InputActionSystem& input)
-    : world_(world), physics_(physics), frust_(frust), input_(input)
+                                       frust::EngineFrustHost& frust)
+    : world_(world), physics_(physics), frust_(frust)
 {
 }
 
@@ -41,7 +40,6 @@ void RuntimeWorldRunner::RunFrame(float elapsedSeconds, const Hooks& hooks)
         return;
 
     const float dt = std::clamp(elapsedSeconds, 0.0f, 0.25f);
-    input_.PollOncePerFrame();
     engine::Simulation::Step(world_, dt);
     engine::FoundationGameplay::Step(world_, {}, dt);
     frust_.prePhysicsTick(static_cast<std::int64_t>(world_.CurrentTick()));

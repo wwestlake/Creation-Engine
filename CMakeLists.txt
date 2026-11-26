@@ -727,6 +727,7 @@ target_sources(CreationEngineServer PRIVATE
     Source/Input/InputBindingDocumentStore.cpp
     Source/Physics/PhysicsWorld.cpp
     Source/Scene/AnimatorControl.cpp
+    Source/Runtime/RuntimeWorldRunner.cpp
 )
 target_include_directories(CreationEngineServer PRIVATE Source)
 
@@ -753,6 +754,12 @@ target_link_libraries(CreationEngineServer PRIVATE
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags
+)
+
+add_test(NAME creation_engine_headless_ticks_smoke COMMAND CreationEngineServer --ticks 8)
+set_tests_properties(creation_engine_headless_ticks_smoke PROPERTIES
+    PASS_REGULAR_EXPRESSION "\\[server\\] completed 8 ticks"
+    TIMEOUT 60
 )
 
 install(TARGETS CreationEngineEditor

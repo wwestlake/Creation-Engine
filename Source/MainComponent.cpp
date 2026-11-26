@@ -1121,6 +1121,7 @@ void MainComponent::RunRuntimeFrame()
         ? static_cast<float>(nowSeconds - lastPhysicsAdvanceSeconds_) : 0.0f;
     lastPhysicsAdvanceSeconds_ = nowSeconds;
 
+    inputActionSystem_.PollOncePerFrame();
     runtimeWorldRunner_.RunFrame(elapsedSeconds, {
         [this](float dt) { UpdatePossessedCharacter(dt); }
     });

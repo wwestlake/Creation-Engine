@@ -2,10 +2,11 @@
 
 #include <iostream>
 
-#include "engine/simulation.h"
 #include "engine/world.h"
 #include "Project/EngineGameDocument.h"
 #include "Frust/EngineFrustHost.h"
+#include "Physics/PhysicsWorld.h"
+#include "Runtime/RuntimeWorldRunner.h"
 
 #include <creation/assets/ProjectWorkspaceService.h>
 #include <creation/suite/SuiteSettings.h>
@@ -13,7 +14,6 @@
 namespace {
 
 struct ServerConfig {
-    int port = 7777;
     double tickRateHz = 30.0;
     // -1 runs the server loop forever. A non-negative value is a useful
     // deterministic smoke-test mode for the host simulation clock.
@@ -29,9 +29,6 @@ struct ServerConfig {
 // file or launch parameters, without rebuilding the binary").
 ServerConfig ParseArgs(const juce::ArgumentList& args) {
     ServerConfig config;
-    if (auto index = args.indexOfOption("--port"); index >= 0 && index + 1 < args.size()) {
-        config.port = args[index + 1].text.getIntValue();
-    }
     if (auto index = args.indexOfOption("--tick-rate"); index >= 0 && index + 1 < args.size()) {
         config.tickRateHz = args[index + 1].text.getDoubleValue();
     }
@@ -86,7 +83,11 @@ int main(int argc, char* argv[]) {
         return 2;
     }
 
+    ce::physics::PhysicsWorld physicsWorld;
+    physicsWorld.AttachToWorld(world);
     ce::frust::EngineFrustHost frustHost(world, true);
+    frustHost.setPhysicsWorld(&physicsWorld);
+    ce::runtime::RuntimeWorldRunner runtime(world, physicsWorld, frustHost);
     std::string frustError;
     if (!frustHost.loadBundled(frustError)) {
         std::cerr << "[server] failed to load authoritative FRust plugins: " << frustError << std::endl;
@@ -96,35 +97,24 @@ int main(int argc, char* argv[]) {
     const float stepDt = config.dt >= 0.0f ? config.dt : static_cast<float>(1.0 / config.tickRateHz);
 
     if (config.ticks >= 0) {
-        frustHost.beginPlay(0);
+        runtime.BeginPlay();
         for (int i = 0; i < config.ticks; ++i) {
-            ce::engine::Simulation::Step(world, stepDt);
-            frustHost.tick(static_cast<std::int64_t>(world.CurrentTick()));
+            runtime.RunFrame(stepDt);
         }
-        frustHost.endPlay(static_cast<std::int64_t>(world.CurrentTick()));
+        runtime.EndPlay();
         std::cout << "[server] completed " << world.CurrentTick() << " ticks" << std::endl;
         return 0;
     }
 
     const auto tickIntervalMs = static_cast<int>(1000.0 / config.tickRateHz);
 
-    std::cout << "Creation Engine dedicated server starting on port " << config.port << " at " << config.tickRateHz
-              << " Hz." << std::endl;
+    std::cout << "[server] headless simulation running at " << config.tickRateHz << " Hz." << std::endl;
 
     const auto startTime = juce::Time::getMillisecondCounterHiRes();
-    frustHost.beginPlay(0);
+    runtime.BeginPlay();
 
-    // The real dedicated-server loop: advances the world clock (and any
-    // attached ScriptComponents) at a fixed rate and reports basic
-    // operational visibility (section 2.5). Network accept/session
-    // management and input validation (section 2.2) land on top of this
-    // scaffold. Uses the SAME Simulation::Step call the editor's
-    // MainComponent::timerCallback uses when playing -- the concrete
-    // implementation of "the same rule module runs identically
-    // client-side or server-side."
     while (true) {
-        ce::engine::Simulation::Step(world, stepDt);
-        frustHost.tick(static_cast<std::int64_t>(world.CurrentTick()));
+        runtime.RunFrame(stepDt);
 
         if (world.CurrentTick() % static_cast<ce::engine::Tick>(config.tickRateHz * 10) == 0) {
             const auto uptimeSeconds = (juce::Time::getMillisecondCounterHiRes() - startTime) / 1000.0;
