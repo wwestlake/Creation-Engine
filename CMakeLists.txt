@@ -146,6 +146,38 @@ endif()
 find_package(Threads REQUIRED)
 add_subdirectory(EngineCore)
 
+include(FetchContent)
+cmake_policy(PUSH)
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+endif()
+FetchContent_Declare(engine_httplib
+    URL https://codeload.github.com/yhirose/cpp-httplib/tar.gz/refs/tags/v0.67.0
+    URL_HASH SHA256=be711ddaf7a3655d8f23aa5655709250b24d247aedd4b2629989d18b6164e5be
+    SOURCE_SUBDIR engine-header-only
+)
+FetchContent_MakeAvailable(engine_httplib)
+cmake_policy(POP)
+add_library(engine_developer_api STATIC
+    Source/DeveloperApi/DeveloperApi.cpp
+    Source/DeveloperApi/HttpTransport.cpp
+    Source/DeveloperApi/PersistenceCommands.cpp
+    Source/DeveloperApi/RuntimeCommands.cpp
+)
+target_include_directories(engine_developer_api PUBLIC Source)
+target_include_directories(engine_developer_api SYSTEM PRIVATE "${engine_httplib_SOURCE_DIR}" "${JUCE_DIR}/modules")
+target_compile_features(engine_developer_api PUBLIC cxx_std_20)
+target_compile_definitions(engine_developer_api PRIVATE JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 JUCE_USE_CURL=0
+    $<$<CONFIG:Debug>:DEBUG=1> $<$<CONFIG:Debug>:_DEBUG=1>)
+target_link_libraries(engine_developer_api
+    PUBLIC engine_core
+    PRIVATE engine_sqlite_persistence engine_rocksdb_persistence Threads::Threads)
+if(WIN32)
+    target_link_libraries(engine_developer_api PRIVATE ws2_32)
+endif()
+
+
+
 add_executable(CreationEnginePersistenceSmoke tests/PersistenceSmoke.cpp)
 target_link_libraries(CreationEnginePersistenceSmoke PRIVATE engine_sqlite_persistence engine_rocksdb_persistence Threads::Threads)
 add_test(NAME creation_engine_persistence_smoke COMMAND CreationEnginePersistenceSmoke)
@@ -462,6 +494,8 @@ if (CREATION_ENGINE_HAS_OPENXR)
 endif()
 
 target_link_libraries(CreationEngineEditor PRIVATE
+    engine_developer_api
+    juce::juce_cryptography
     Jolt::Jolt
     engine_core
     node_system
@@ -785,6 +819,8 @@ target_compile_definitions(CreationEngineServer PRIVATE
 )
 
 target_link_libraries(CreationEngineServer PRIVATE
+    engine_developer_api
+    juce::juce_cryptography
     Jolt::Jolt
     engine_core
     node_system
@@ -800,11 +836,37 @@ target_link_libraries(CreationEngineServer PRIVATE
     juce::juce_recommended_warning_flags
 )
 
+if(WIN32)
+    creation_engine_stage_package_dlls(CreationEngineServer "${ZLIB_LIBRARY_DEBUG}" "$<CONFIG:Debug>")
+    creation_engine_stage_package_dlls(CreationEngineServer "${ZLIB_LIBRARY_RELEASE}" "$<NOT:$<CONFIG:Debug>>")
+endif()
+
+add_executable(CreationEngineDeveloperApiConformance tests/DeveloperApiConformance.cpp)
+target_compile_definitions(CreationEngineDeveloperApiConformance PRIVATE JUCE_USE_CURL=0)
+target_link_libraries(CreationEngineDeveloperApiConformance PRIVATE
+    engine_developer_api juce::juce_cryptography juce::juce_recommended_config_flags)
+if(WIN32)
+    creation_engine_stage_package_dlls(CreationEngineDeveloperApiConformance "${ZLIB_LIBRARY_DEBUG}" "$<CONFIG:Debug>")
+    creation_engine_stage_package_dlls(CreationEngineDeveloperApiConformance "${ZLIB_LIBRARY_RELEASE}" "$<NOT:$<CONFIG:Debug>>")
+endif()
+add_test(NAME creation_engine_developer_api_conformance
+    COMMAND CreationEngineDeveloperApiConformance "${CMAKE_CURRENT_BINARY_DIR}/developer-api-tests")
+set_tests_properties(creation_engine_developer_api_conformance PROPERTIES TIMEOUT 60)
+
+find_package(Python3 3.9 QUIET COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME creation_engine_developer_api_http
+        COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/DeveloperApiIntegration.py"
+            --server "$<TARGET_FILE:CreationEngineServer>" --work "${CMAKE_CURRENT_BINARY_DIR}/developer-api-tests")
+    set_tests_properties(creation_engine_developer_api_http PROPERTIES TIMEOUT 120)
+endif()
+
 install(TARGETS CreationEngineEditor
     RUNTIME DESTINATION .
     RESOURCE DESTINATION .
 )
 install(FILES README.md LICENSE DESTINATION .)
+install(FILES "${engine_httplib_SOURCE_DIR}/LICENSE" DESTINATION licenses RENAME cpp-httplib.txt)
 
 set(CPACK_PACKAGE_NAME "DjehutiEngine")
 set(CPACK_PACKAGE_VENDOR "LagDaemon Software")
