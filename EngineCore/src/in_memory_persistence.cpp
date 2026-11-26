@@ -1,7 +1,6 @@
 #include "engine/in_memory_persistence.h"
 
-#include <algorithm>
-#include <cmath>
+#include "persistence_validation.h"
 #include <limits>
 #include <mutex>
 
@@ -9,66 +8,7 @@ namespace ce::persistence
 {
 namespace
 {
-OperationError Fail(ErrorCode code, const char* message)
-{
-    return {code, message};
-}
-
-bool MatchesType(const FieldValue& value, const FieldDefinition& field)
-{
-    if (std::holds_alternative<Null>(value))
-        return field.nullable;
-
-    switch (field.type) {
-        case FieldType::Boolean: return std::holds_alternative<bool>(value);
-        case FieldType::Integer: return std::holds_alternative<std::int64_t>(value);
-        case FieldType::Real: {
-            const auto* real = std::get_if<double>(&value);
-            return real && std::isfinite(*real);
-        }
-        case FieldType::String: return std::holds_alternative<std::string>(value);
-        case FieldType::Binary: return std::holds_alternative<Binary>(value);
-    }
-    return false;
-}
-
-Status ValidateSchema(const SessionSchema& schema)
-{
-    for (const auto& [key, collection] : schema) {
-        if (key.nameSpace.value.empty() || key.collection.value.empty() || collection.version.value == 0)
-            return Fail(ErrorCode::InvalidArgument, "Collections require a namespace, name, and schema version.");
-        for (const auto& [name, field] : collection.fields) {
-            if (name.value.empty() || field.type < FieldType::Boolean || field.type > FieldType::Binary)
-                return Fail(ErrorCode::InvalidArgument, "Invalid field definition.");
-        }
-        for (const auto& [name, index] : collection.indexes) {
-            if (name.value.empty() || index.fields.empty())
-                return Fail(ErrorCode::InvalidArgument, "Indexes require a name and at least one field.");
-            std::set<FieldId> indexed;
-            for (const auto& field : index.fields) {
-                if (!collection.fields.contains(field) || !indexed.insert(field).second)
-                    return Fail(ErrorCode::InvalidArgument, "Index fields must be declared and distinct.");
-            }
-        }
-    }
-    return Null{};
-}
-
-Status ValidateData(const RecordData& data, const CollectionSchema& schema)
-{
-    if (data.schemaVersion != schema.version)
-        return Fail(ErrorCode::SchemaMismatch, "Record schema version differs from the collection.");
-    for (const auto& [name, value] : data.fields) {
-        const auto field = schema.fields.find(name);
-        if (field == schema.fields.end() || !MatchesType(value, field->second))
-            return Fail(ErrorCode::InvalidArgument, "Record contains an undeclared field or an invalid field value.");
-    }
-    for (const auto& [name, field] : schema.fields) {
-        if (field.required && !data.fields.contains(name))
-            return Fail(ErrorCode::InvalidArgument, "Record is missing a required field.");
-    }
-    return Null{};
-}
+using namespace detail;
 
 struct IndexEntry {
     IndexKey key;
@@ -110,15 +50,10 @@ struct SessionData {
 
 std::optional<IndexEntry> MakeEntry(const IndexDefinition& index, const Record& record)
 {
-    IndexEntry entry{{}, record.id};
-    entry.key.reserve(index.fields.size());
-    for (const auto& field : index.fields) {
-        const auto value = record.data.fields.find(field);
-        if (value == record.data.fields.end())
-            return std::nullopt;
-        entry.key.push_back(value->second);
-    }
-    return entry;
+    auto key = ProjectIndexKey(index, record.data);
+    if (!key)
+        return std::nullopt;
+    return IndexEntry{std::move(*key), record.id};
 }
 
 void RemoveIndexEntries(CollectionData& collection, const Record& record)
@@ -144,65 +79,6 @@ Status InsertIndexEntries(CollectionData& collection, const Record& record)
         }
         entries.insert(std::move(*entry));
     }
-    return Null{};
-}
-
-bool MatchesPrefix(const IndexKey& prefix, const IndexKey& key)
-{
-    return prefix.size() <= key.size() && std::equal(prefix.begin(), prefix.end(), key.begin());
-}
-
-bool BelowLower(const QueryDescription& query, const IndexKey& key)
-{
-    if (!query.lower)
-        return false;
-    const auto& value = key[query.prefix.size()];
-    return value < query.lower->value || (value == query.lower->value && !query.lower->inclusive);
-}
-
-bool AboveUpper(const QueryDescription& query, const IndexKey& key)
-{
-    if (!query.upper)
-        return false;
-    const auto& value = key[query.prefix.size()];
-    return value > query.upper->value || (value == query.upper->value && !query.upper->inclusive);
-}
-
-Status ValidateQuery(const QueryDescription& query, const std::vector<FieldDefinition>& fields,
-                     const SessionId& session, CommitRevision revision)
-{
-    if (query.limit == 0 || query.prefix.size() > fields.size())
-        return Fail(ErrorCode::InvalidArgument, "Invalid query limit or prefix length.");
-    for (std::size_t i = 0; i < query.prefix.size(); ++i) {
-        if (!MatchesType(query.prefix[i], fields[i]))
-            return Fail(ErrorCode::InvalidArgument, "Query prefix value has the wrong type.");
-    }
-    const auto nextField = query.prefix.size();
-    if (query.lower || query.upper) {
-        if (nextField == fields.size())
-            return Fail(ErrorCode::InvalidArgument, "Range bounds require a field after the equality prefix.");
-        if ((query.lower && !MatchesType(query.lower->value, fields[nextField]))
-            || (query.upper && !MatchesType(query.upper->value, fields[nextField])))
-            return Fail(ErrorCode::InvalidArgument, "Query bound has the wrong type.");
-        if (query.lower && query.upper && query.lower->value > query.upper->value)
-            return Fail(ErrorCode::InvalidArgument, "Query lower bound exceeds its upper bound.");
-    }
-    if (!query.after)
-        return Null{};
-
-    const auto& cursor = *query.after;
-    if (cursor.session != session || cursor.collection != query.collection || cursor.index != query.index
-        || cursor.key.size() != fields.size() || cursor.id.value.empty())
-        return Fail(ErrorCode::InvalidArgument, "Cursor does not belong to this query target.");
-    if (cursor.revision != revision)
-        return Fail(ErrorCode::HistoryUnavailable, "Cursor requires its original snapshot revision.");
-    for (std::size_t i = 0; i < cursor.key.size(); ++i) {
-        if (!MatchesType(cursor.key[i], fields[i]))
-            return Fail(ErrorCode::InvalidArgument, "Cursor key has the wrong type.");
-    }
-    if (!MatchesPrefix(query.prefix, cursor.key) || BelowLower(query, cursor.key) || AboveUpper(query, cursor.key)
-        || (!query.index && cursor.key.front() != FieldValue{cursor.id.value}))
-        return Fail(ErrorCode::InvalidArgument, "Cursor is outside the query bounds.");
     return Null{};
 }
 
@@ -235,17 +111,10 @@ public:
             return Fail(ErrorCode::UnknownCollection, "Unknown collection.");
         const auto& collection = *target->second;
 
-        std::vector<FieldDefinition> fields;
-        if (query.index) {
-            const auto index = collection.schema.indexes.find(*query.index);
-            if (index == collection.schema.indexes.end())
-                return Fail(ErrorCode::UnknownIndex, "Unknown secondary index.");
-            for (const auto& field : index->second.fields)
-                fields.push_back(collection.schema.fields.at(field));
-        } else {
-            fields.push_back({FieldType::String});
-        }
-        if (const auto valid = ValidateQuery(query, fields, session_, Revision()); !valid)
+        auto fields = QueryFields(query, collection.schema);
+        if (!fields)
+            return fields.Error();
+        if (const auto valid = ValidateQuery(query, fields.Value(), session_, Revision()); !valid)
             return valid.Error();
 
         auto start = query.prefix;
@@ -298,33 +167,11 @@ private:
 Result<RecordChange> ApplyMutation(CollectionData& collection, const Mutation& mutation,
                                    RecordVersion version)
 {
-    if (mutation.key.id.value.empty())
-        return Fail(ErrorCode::InvalidArgument, "Record ID cannot be empty.");
     const auto existing = collection.records.find(mutation.key.id);
-
-    switch (mutation.kind) {
-        case MutationKind::Create:
-            if (!mutation.data || mutation.expectedVersion)
-                return Fail(ErrorCode::InvalidArgument, "Create requires data and accepts no expected version.");
-            if (existing != collection.records.end())
-                return Fail(ErrorCode::RecordAlreadyExists, "Record already exists.");
-            break;
-        case MutationKind::Replace:
-        case MutationKind::Erase:
-            if ((mutation.kind == MutationKind::Replace) != mutation.data.has_value())
-                return Fail(ErrorCode::InvalidArgument, "Replace requires data and erase accepts no data.");
-            if (existing == collection.records.end())
-                return Fail(ErrorCode::RecordNotFound, "Record does not exist.");
-            if (mutation.expectedVersion && *mutation.expectedVersion != existing->second.version)
-                return Fail(ErrorCode::VersionConflict, "Record version changed.");
-            break;
-        default:
-            return Fail(ErrorCode::InvalidArgument, "Invalid mutation kind.");
-    }
-    if (mutation.data) {
-        if (const auto valid = ValidateData(*mutation.data, collection.schema); !valid)
-            return valid.Error();
-    }
+    const auto previous = existing == collection.records.end() ? std::nullopt
+                                                                : std::optional{existing->second.version};
+    if (const auto valid = ValidateMutation(mutation, collection.schema, previous); !valid)
+        return valid.Error();
 
     RecordChange change{mutation.kind, mutation.key, std::nullopt, std::nullopt};
     if (existing != collection.records.end()) {

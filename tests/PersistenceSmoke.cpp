@@ -1,4 +1,6 @@
 #include "engine/in_memory_persistence.h"
+#include "engine/sqlite_persistence.h"
+#include "PersistenceTestDirectory.h"
 
 #include <array>
 #include <iostream>
@@ -24,6 +26,8 @@ const FieldId kBytes{"bytes"};
 const IndexId kByGroupOrder{"group_order"};
 const IndexId kByLabel{"label_unique"};
 const IndexId kByNote{"note"};
+const IndexId kByBytes{"bytes"};
+const IndexId kByRatio{"ratio"};
 
 void Check(bool condition, std::string_view message)
 {
@@ -56,7 +60,8 @@ SessionSchema MakeSchema()
                      {kRatio, {FieldType::Real, false}}, {kFlag, {FieldType::Boolean, false}},
                      {kBytes, {FieldType::Binary, false}}};
     schema.indexes = {{kByGroupOrder, {{kGroup, kOrder}}},
-                      {kByLabel, {{kLabel}, true}}, {kByNote, {{kNote}}}};
+                      {kByLabel, {{kLabel}, true}}, {kByNote, {{kNote}}},
+                      {kByBytes, {{kBytes}}}, {kByRatio, {{kRatio}}}};
     return {{kMain, schema}, {kOtherCollection, schema}, {kOtherNamespace, schema}};
 }
 
@@ -88,16 +93,29 @@ std::vector<RecordId> Ids(const QueryPage& page)
     return result;
 }
 
+struct TestBackend {
+    std::optional<std::filesystem::path> directory;
+    std::size_t nextProvider = 0;
+
+    std::unique_ptr<StorageProvider> Create()
+    {
+        if (!directory)
+            return CreateInMemoryProvider();
+        return Take(CreateSQLiteProvider({*directory / std::to_string(++nextProvider)}));
+    }
+};
+
 struct Fixture {
-    Fixture() : provider(CreateInMemoryProvider()),
-                session(Take(provider->OpenSession({{"fixture"}, MakeSchema(), {}}))) {}
+    explicit Fixture(TestBackend& backend)
+        : provider(backend.Create()), session(Take(provider->OpenSession({{"fixture"}, MakeSchema(), {}}))) {}
+
     std::unique_ptr<StorageProvider> provider;
     std::unique_ptr<Session> session;
 };
 
-void Lifecycle()
+void Lifecycle(TestBackend& backend)
 {
-    Fixture fixture;
+    Fixture fixture(backend);
     auto& session = *fixture.session;
     // IDs are opaque bytes. The same ID may appear in different collections.
     const RecordId id{std::string("X/\0z", 4)};
@@ -141,9 +159,9 @@ void Lifecycle()
     ExpectError(session.Commit({{Replace(main, replacement, current.version)}}), ErrorCode::VersionConflict);
 }
 
-void AtomicityAndJournal()
+void AtomicityAndJournal(TestBackend& backend)
 {
-    Fixture fixture;
+    Fixture fixture(backend);
     auto& session = *fixture.session;
     const RecordKey a{kMain, {"a"}};
     const RecordKey b{kMain, {"b"}};
@@ -203,9 +221,9 @@ void AtomicityAndJournal()
     ExpectError(session.ReadChanges({4}, 1), ErrorCode::InvalidArgument);
 }
 
-void IndexedQueries()
+void IndexedQueries(TestBackend& backend)
 {
-    Fixture fixture;
+    Fixture fixture(backend);
     auto& session = *fixture.session;
     auto nullNote = Data(-1);
     nullNote.fields.emplace(kNote, Null{});
@@ -236,18 +254,55 @@ void IndexedQueries()
     ExpectError(session.Query({kMain, kByGroupOrder, {}, QueryBound{std::int64_t{2}}}), ErrorCode::InvalidArgument);
 }
 
-void CapabilitiesAndOpenClose()
+void IndexedScalarOrdering(TestBackend& backend)
 {
-    auto provider = CreateInMemoryProvider();
+    Fixture fixture(backend);
+    auto& session = *fixture.session;
+    const auto record = [](const char* id, Binary bytes, double ratio) {
+        auto data = Data(0);
+        data.fields.emplace(kBytes, std::move(bytes));
+        data.fields.emplace(kRatio, ratio);
+        return Create({kMain, {id}}, std::move(data));
+    };
+    Take(session.Commit({{record("d", {1}, 2.5), record("b", {0}, -0.0),
+                         record("c", {0, 255}, 0.0), record("a", {}, -2.5)}}));
+
+    QueryDescription binary{kMain, kByBytes};
+    binary.lower = QueryBound{Binary{0}, false};
+    binary.upper = QueryBound{Binary{0, 255}, true};
+    Check(Ids(Take(session.Query(binary))) == std::vector<RecordId>{{"c"}},
+          "Binary ranges must order empty values, embedded zeros, and prefixes correctly.");
+
+    QueryDescription ratio{kMain, kByRatio};
+    Check(Ids(Take(session.Query(ratio))) == std::vector<RecordId>{{"a"}, {"b"}, {"c"}, {"d"}},
+          "Real keys must sort numerically and treat signed zero as an equal key.");
+    ratio.prefix = {0.0};
+    ratio.limit = 1;
+    auto page = Take(session.Query(ratio));
+    Check(Ids(page) == std::vector<RecordId>{{"b"}} && page.next, "Zero must find both signed zero keys.");
+    ratio.after = page.next;
+    page = Take(session.Query(ratio));
+    Check(Ids(page) == std::vector<RecordId>{{"c"}} && !page.next, "Signed zero ties must page by ID.");
+}
+
+void CapabilitiesAndOpenClose(TestBackend& backend)
+{
+    auto provider = backend.Create();
     const auto caps = provider->Capabilities();
     Check(caps.contains(Capability::PrimaryQueries) && caps.contains(Capability::SecondaryIndexes)
           && caps.contains(Capability::AtomicTransactions) && caps.contains(Capability::ConsistentSnapshots)
-          && caps.contains(Capability::LogicalChangeJournal) && !caps.contains(Capability::DurablePersistence),
+          && caps.contains(Capability::LogicalChangeJournal)
+          && caps.contains(Capability::DurablePersistence) == backend.directory.has_value(),
           "The provider must advertise its actual features without advertising durability.");
 
     OpenSessionRequest request{{"capabilities"}, MakeSchema(), caps};
-    request.requiredCapabilities.insert(Capability::DurablePersistence);
+    request.requiredCapabilities.insert(static_cast<Capability>(999));
     ExpectError(provider->OpenSession(request), ErrorCode::UnsupportedOperation);
+    request.requiredCapabilities = {Capability::DurablePersistence};
+    if (backend.directory)
+        Take(provider->OpenSession(request));
+    else
+        ExpectError(provider->OpenSession(request), ErrorCode::UnsupportedOperation);
     request.requiredCapabilities = caps;
     const RecordKey key{kMain, {"key"}};
 
@@ -259,7 +314,9 @@ void CapabilitiesAndOpenClose()
     Check(!Take(separate->Get(key)), "Sessions have isolated records.");
     ExpectError(provider->OpenSession(request), ErrorCode::SessionAlreadyOpen);
 
+    auto pinned = Take(first->OpenSnapshot());
     Take(first->Close());
+    Check(Take(pinned->Get(key)).has_value(), "Closing a session keeps snapshots alive.");
     ExpectError(first->OpenSnapshot(), ErrorCode::SessionClosed);
     auto mismatch = request;
     mismatch.schema.at(kMain).version = {2};
@@ -271,14 +328,14 @@ void CapabilitiesAndOpenClose()
           "Records and journal survive reopen within the provider's lifetime.");
     reopened.reset();
     Take(provider->OpenSession(request)); // Destruction releases the open writer.
-    auto freshProvider = CreateInMemoryProvider();
+    auto freshProvider = backend.Create();
     auto fresh = Take(freshProvider->OpenSession(request));
-    Check(!Take(fresh->Get(key)), "Fresh in-memory provider has no persisted records.");
+    Check(!Take(fresh->Get(key)), "A new store has no records from another store.");
 }
 
-void ConcurrentConditionalWrites()
+void ConcurrentConditionalWrites(TestBackend& backend)
 {
-    Fixture fixture;
+    Fixture fixture(backend);
     auto& session = *fixture.session;
     const RecordKey key{kMain, {"race"}};
     Take(session.Commit({{Create(key, Data(0))}}));
@@ -300,14 +357,23 @@ void ConcurrentConditionalWrites()
 }
 } // namespace
 
-int main()
+int main(int argc, char* argv[])
 {
     try {
-        Lifecycle();
-        AtomicityAndJournal();
-        IndexedQueries();
-        CapabilitiesAndOpenClose();
-        ConcurrentConditionalWrites();
+        std::optional<persistence_test::TemporaryDirectory> directory;
+        TestBackend backend;
+        if (argc == 3 && std::string_view(argv[1]) == "--sqlite") {
+            directory.emplace(argv[2]);
+            backend.directory = directory->Path();
+        } else if (argc != 1) {
+            throw std::runtime_error("Usage: persistence smoke [--sqlite BUILD_TEST_DIRECTORY]");
+        }
+        Lifecycle(backend);
+        AtomicityAndJournal(backend);
+        IndexedQueries(backend);
+        IndexedScalarOrdering(backend);
+        CapabilitiesAndOpenClose(backend);
+        ConcurrentConditionalWrites(backend);
     } catch (const std::exception& error) {
         std::cerr << "Persistence smoke test failed: " << error.what() << '\n';
         return 1;

@@ -14,3 +14,10 @@ add_library(engine_core STATIC
 target_include_directories(engine_core PUBLIC include)
 target_link_libraries(engine_core PUBLIC EnTT::EnTT node_system)
 target_compile_features(engine_core PUBLIC cxx_std_20)
+
+include(SQLite.cmake)
+add_library(engine_sqlite_persistence STATIC
+    src/sqlite_persistence.cpp
+    src/sqlite_persistence_database.cpp
+)
+target_link_libraries(engine_sqlite_persistence PUBLIC engine_core PRIVATE djehuti_sqlite)
