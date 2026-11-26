@@ -183,4 +183,92 @@ inline Status ValidateMutation(const Mutation& mutation, const CollectionSchema&
     }
     return mutation.data ? ValidateData(*mutation.data, schema) : Status{Null{}};
 }
+
+inline constexpr std::uint64_t kPortableRevisionLimit = (std::uint64_t{1} << 63) - 1;
+
+inline Status ValidatePolicy(const PersistencePolicy& policy)
+{
+    if (policy.openSnapshots == 0 || policy.recordsPerTransaction == 0 || policy.pageEntries == 0
+        || policy.snapshotLifetime <= std::chrono::milliseconds::zero()
+        || policy.snapshotLifetime > std::chrono::hours(24))
+        return Fail(ErrorCode::InvalidArgument, "Persistence limits must be positive and snapshot lifetime at most 24 hours.");
+    return Null{};
+}
+
+inline CommitRevision RetentionFloor(CommitRevision latest, std::size_t keep)
+{
+    return {latest.value - std::min<std::uint64_t>(latest.value, keep)};
+}
+
+inline Status ValidateHistoryCursor(CommitRevision after, CommitRevision latest, CommitRevision floor, std::size_t limit)
+{
+    if (limit == 0 || after > latest)
+        return Fail(ErrorCode::InvalidArgument, "Invalid journal limit or starting revision.");
+    if (after < floor)
+        return {OperationError{ErrorCode::HistoryUnavailable,
+                               "Journal retention gap. Earliest cursor: " + std::to_string(floor.value) + "."}};
+    return Null{};
+}
+
+inline Status ValidateArchive(const SessionArchive& archive)
+{
+    if (archive.id.value.empty() || archive.revision.value > kPortableRevisionLimit
+        || archive.historyFloor > archive.revision
+        || archive.journal.size() != archive.revision.value - archive.historyFloor.value)
+        return Fail(ErrorCode::InvalidArgument, "Invalid archive identity, revision, or retained journal bounds.");
+    if (auto valid = ValidateSchema(archive.schema); !valid)
+        return valid.Error();
+
+    std::map<RecordKey, const Record*> visible;
+    for (const auto& entry : archive.records) {
+        const auto schema = archive.schema.find(entry.collection);
+        const auto& record = entry.record;
+        if (schema == archive.schema.end() || record.id.value.empty() || record.version.value == 0
+            || record.version.value > archive.revision.value || !ValidateData(record.data, schema->second)
+            || !visible.emplace(RecordKey{entry.collection, record.id}, &record).second)
+            return Fail(ErrorCode::InvalidArgument, "Invalid or duplicate archived record.");
+    }
+
+    std::map<RecordKey, const Record*> lastChange;
+    auto revision = archive.historyFloor.value;
+    for (const auto& batch : archive.journal) {
+        if (batch.revision.value != ++revision || batch.changes.empty())
+            return Fail(ErrorCode::InvalidArgument, "Archived journal has a missing or invalid revision.");
+        std::set<RecordKey> changed;
+        for (const auto& change : batch.changes) {
+            const auto schema = archive.schema.find(change.key.collection);
+            if (schema == archive.schema.end() || change.key.id.value.empty()
+                || !changed.insert(change.key).second
+                || change.kind < MutationKind::Create || change.kind > MutationKind::Erase
+                || change.previousVersion.has_value() != (change.kind != MutationKind::Create)
+                || change.record.has_value() != (change.kind != MutationKind::Erase)
+                || (change.previousVersion && (change.previousVersion->value == 0
+                                               || change.previousVersion->value >= revision))
+                || (change.record && (change.record->id != change.key.id || change.record->version.value != revision
+                                      || !ValidateData(change.record->data, schema->second))))
+                return Fail(ErrorCode::InvalidArgument, "Invalid archived journal change.");
+            const auto earlier = lastChange.find(change.key);
+            if (earlier != lastChange.end()) {
+                const auto expected = earlier->second ? std::optional{earlier->second->version} : std::nullopt;
+                if (change.previousVersion != expected)
+                    return Fail(ErrorCode::InvalidArgument, "Archived record version chain is inconsistent.");
+            } else if (change.previousVersion && change.previousVersion->value > archive.historyFloor.value) {
+                return Fail(ErrorCode::InvalidArgument, "Archived journal is missing a prior record change.");
+            }
+            lastChange[change.key] = change.record ? &*change.record : nullptr;
+        }
+    }
+    for (const auto& [key, record] : lastChange) {
+        const auto found = visible.find(key);
+        if ((record == nullptr && found != visible.end())
+            || (record && (found == visible.end() || *found->second != *record)))
+            return Fail(ErrorCode::InvalidArgument, "Archived state differs from its retained journal.");
+    }
+    for (const auto& [key, record] : visible) {
+        if (record->version.value > archive.historyFloor.value && !lastChange.contains(key))
+            return Fail(ErrorCode::InvalidArgument, "Archived record is missing its retained journal change.");
+    }
+    return Null{};
+}
+
 } // namespace ce::persistence::detail

@@ -1,7 +1,7 @@
 #include "engine/in_memory_persistence.h"
 
 #include "persistence_validation.h"
-#include <limits>
+#include <deque>
 #include <mutex>
 
 namespace ce::persistence
@@ -44,7 +44,11 @@ struct SessionData {
     const SessionSchema schema;
     std::mutex mutex;
     std::shared_ptr<const RevisionData> current;
-    std::vector<ChangeBatch> journal;
+    std::deque<ChangeBatch> journal;
+    CommitRevision HistoryFloor() const
+    {
+        return journal.empty() ? current->revision : CommitRevision{journal.front().revision.value - 1};
+    }
     bool open = false;
 };
 
@@ -188,8 +192,8 @@ Result<RecordChange> ApplyMutation(CollectionData& collection, const Mutation& m
 
 class MemorySession final : public Session {
 public:
-    MemorySession(SessionId id, std::shared_ptr<SessionData> data)
-        : id_(std::move(id)), data_(std::move(data)) {}
+    MemorySession(SessionId id, std::shared_ptr<SessionData> data, PersistencePolicy policy)
+        : Session(policy), id_(std::move(id)), data_(std::move(data)) {}
 
     ~MemorySession() override { static_cast<void>(Close()); }
 
@@ -203,7 +207,7 @@ public:
         return Null{};
     }
 
-    Result<std::unique_ptr<ReadSnapshot>> OpenSnapshot() const override
+    Result<std::unique_ptr<ReadSnapshot>> CaptureSnapshot() const override
     {
         std::lock_guard lock(data_->mutex);
         if (closed_)
@@ -211,7 +215,7 @@ public:
         return std::unique_ptr<ReadSnapshot>{std::make_unique<MemorySnapshot>(id_, data_->current)};
     }
 
-    Result<CommitRevision> Commit(const Transaction& transaction) override
+    Result<CommitRevision> Apply(const Transaction& transaction) override
     {
         std::lock_guard lock(data_->mutex);
         if (closed_)
@@ -221,7 +225,7 @@ public:
             return Fail(ErrorCode::InvalidArgument, "Cannot commit an empty transaction.");
         if (transaction.expectedRevision && *transaction.expectedRevision != current)
             return Fail(ErrorCode::VersionConflict, "Session revision changed.");
-        if (current.value == std::numeric_limits<std::uint64_t>::max())
+        if (current.value == kPortableRevisionLimit)
             return Fail(ErrorCode::RevisionExhausted, "Commit revision exhausted.");
 
         const CommitRevision revision{current.value + 1};
@@ -262,22 +266,36 @@ public:
         // Until the journal append succeeds, the old revision remains current.
         next->revision = revision;
         data_->journal.push_back(std::move(batch));
+        while (data_->journal.size() > Policy().journalRevisions)
+            data_->journal.pop_front();
         data_->current = std::move(next);
         return revision;
     }
 
-    Result<ChangePage> ReadChanges(CommitRevision after, std::size_t limit) const override
+    Result<ChangePage> CaptureChanges(CommitRevision after, std::size_t limit) const override
     {
         std::lock_guard lock(data_->mutex);
         if (closed_)
             return Fail(ErrorCode::SessionClosed, "Session is closed.");
-        if (limit == 0 || after > data_->current->revision)
-            return Fail(ErrorCode::InvalidArgument, "Invalid journal limit or starting revision.");
-
-        const auto begin = data_->journal.begin() + static_cast<std::ptrdiff_t>(after.value);
+        const auto floor = data_->HistoryFloor();
+        if (auto valid = ValidateHistoryCursor(after, data_->current->revision, floor, limit); !valid)
+            return valid.Error();
+        const auto begin = data_->journal.begin() + static_cast<std::ptrdiff_t>(after.value - floor.value);
         const auto count = std::min(limit, static_cast<std::size_t>(data_->journal.end() - begin));
-        return ChangePage{data_->current->revision,
-                          {begin, begin + static_cast<std::ptrdiff_t>(count)}};
+        return ChangePage{data_->current->revision, {begin, begin + static_cast<std::ptrdiff_t>(count)}, floor};
+    }
+
+    Result<SessionArchive> Export() const override
+    {
+        std::lock_guard lock(data_->mutex);
+        if (closed_)
+            return Fail(ErrorCode::SessionClosed, "Session is closed.");
+        SessionArchive archive{id_, data_->schema, data_->current->revision, data_->HistoryFloor(),
+                               {}, {data_->journal.begin(), data_->journal.end()}};
+        for (const auto& [collection, data] : data_->current->collections)
+            for (const auto& [id, record] : data->records)
+                archive.records.push_back({collection, record});
+        return archive;
     }
 
 private:
@@ -298,6 +316,8 @@ public:
     {
         if (request.id.value.empty())
             return Fail(ErrorCode::InvalidArgument, "Session ID cannot be empty.");
+        if (auto valid = ValidatePolicy(request.policy); !valid)
+            return valid.Error();
         const auto supported = Capabilities();
         if (!std::includes(supported.begin(), supported.end(), request.requiredCapabilities.begin(),
                            request.requiredCapabilities.end()))
@@ -317,9 +337,36 @@ public:
         if (request.schema != data->schema)
             return Fail(ErrorCode::SchemaMismatch, "Session schema differs from the stored definition.");
 
-        std::unique_ptr<Session> session = std::make_unique<MemorySession>(request.id, data);
+        std::unique_ptr<Session> session = std::make_unique<MemorySession>(request.id, data, request.policy);
         data->open = true;
         return session;
+    }
+
+    Status Import(const SessionArchive& archive) override
+    {
+        if (auto valid = ValidateArchive(archive); !valid)
+            return valid.Error();
+        auto data = std::make_shared<SessionData>(archive.schema);
+        auto state = std::make_shared<RevisionData>(*data->current);
+        std::map<CollectionKey, std::shared_ptr<CollectionData>> staged;
+        for (const auto& entry : archive.records) {
+            auto [working, inserted] = staged.try_emplace(entry.collection);
+            if (inserted) {
+                working->second = std::make_shared<CollectionData>(*state->collections.at(entry.collection));
+                state->collections.at(entry.collection) = working->second;
+            }
+            working->second->records.emplace(entry.record.id, entry.record);
+            if (auto indexed = InsertIndexEntries(*working->second, entry.record); !indexed)
+                return indexed.Error();
+        }
+        state->revision = archive.revision;
+        data->current = std::move(state);
+        data->journal.assign(archive.journal.begin(), archive.journal.end());
+
+        std::lock_guard lock(mutex_);
+        if (!sessions_.try_emplace(archive.id, std::move(data)).second)
+            return Fail(ErrorCode::RecordAlreadyExists, "Import requires a new session ID.");
+        return Null{};
     }
 
 private:

@@ -21,3 +21,7 @@ add_library(engine_sqlite_persistence STATIC
     src/sqlite_persistence_database.cpp
 )
 target_link_libraries(engine_sqlite_persistence PUBLIC engine_core PRIVATE djehuti_sqlite)
+
+include(RocksDB.cmake)
+add_library(engine_rocksdb_persistence STATIC src/rocksdb_persistence.cpp)
+target_link_libraries(engine_rocksdb_persistence PUBLIC engine_core PRIVATE rocksdb)

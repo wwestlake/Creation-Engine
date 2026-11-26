@@ -1,5 +1,5 @@
 #include "sqlite_persistence_database.h"
-#include "sqlite_persistence_codec.h"
+#include "persistence_encoding.h"
 
 #include <mutex>
 
@@ -8,6 +8,7 @@ namespace ce::persistence
 namespace
 {
 using namespace detail;
+using namespace encoding;
 using namespace sqlite_detail;
 
 constexpr std::uint64_t kMaxRevision = std::numeric_limits<std::int64_t>::max();
@@ -261,7 +262,7 @@ void IndexRecord(const Database& database, const SessionId& session, const Colle
     }
 }
 
-void WriteRevision(const Database& database, const SessionId& session, const ChangeBatch& batch)
+void InsertJournal(const Database& database, const SessionId& session, const ChangeBatch& batch)
 {
     const auto revision = static_cast<std::int64_t>(batch.revision.value);
     Statement insert(database, "INSERT INTO changes VALUES (?, ?, ?)", "append change journal");
@@ -269,11 +270,56 @@ void WriteRevision(const Database& database, const SessionId& session, const Cha
     insert.Bind(2, revision);
     insert.Bind(3, EncodeChanges(batch));
     insert.Run();
+}
 
+void WriteRevision(const Database& database, const SessionId& session, const ChangeBatch& batch, std::size_t retain)
+{
+    InsertJournal(database, session, batch);
     Statement update(database, "UPDATE sessions SET revision=? WHERE id=?", "advance session revision");
-    update.Bind(1, revision);
+    update.Bind(1, static_cast<std::int64_t>(batch.revision.value));
     update.Bind(2, session.value);
     update.Run();
+    const auto floor = RetentionFloor(batch.revision, retain);
+    if (floor.value > 0) {
+        Statement prune(database, "DELETE FROM changes WHERE session_id=? AND revision<=?", "prune change journal");
+        prune.Bind(1, session.value);
+        prune.Bind(2, static_cast<std::int64_t>(floor.value));
+        prune.Run();
+    }
+}
+
+CommitRevision ReadHistoryFloor(const Database& database, const SessionId& session, CommitRevision latest)
+{
+    Statement read(database, "SELECT COALESCE(MIN(revision)-1, ?) FROM changes WHERE session_id=?",
+                   "read journal history floor");
+    read.Bind(1, static_cast<std::int64_t>(latest.value));
+    read.Bind(2, session.value);
+    if (!read.Step())
+        MalformedData();
+    return {read.Unsigned(0)};
+}
+
+ChangePage ReadJournal(const Database& database, const SessionId& session, CommitRevision after,
+                       CommitRevision latest, CommitRevision floor, std::size_t limit)
+{
+    if (const auto valid = ValidateHistoryCursor(after, latest, floor, limit); !valid)
+        throw valid.Error();
+    ChangePage result{latest, {}, floor};
+    Statement read(database, "SELECT revision, payload FROM changes WHERE session_id=? AND revision>? "
+                             "ORDER BY revision LIMIT ?", "read change journal");
+    read.Bind(1, session.value);
+    read.Bind(2, static_cast<std::int64_t>(after.value));
+    read.Bind(3, SqlLimit(limit));
+    while (read.Step()) {
+        const CommitRevision revision{read.Unsigned(0)};
+        if (revision.value != after.value + 1 || revision > latest)
+            MalformedData();
+        result.batches.push_back(DecodeChanges(revision, read.Blob(1)));
+        after = revision;
+    }
+    if (result.batches.size() < limit && after != latest)
+        MalformedData();
+    return result;
 }
 
 struct WriterRegistry {
@@ -307,7 +353,7 @@ class SQLiteSession final : public Session {
 public:
     SQLiteSession(SQLiteOptions options, const OpenSessionRequest& request,
                   std::unique_ptr<WriterLease> lease, Database database)
-        : options_(std::move(options)), id_(request.id), schema_(std::make_shared<const SessionSchema>(request.schema)),
+        : Session(request.policy), options_(std::move(options)), id_(request.id), schema_(std::make_shared<const SessionSchema>(request.schema)),
           lease_(std::move(lease)), writer_(std::move(database)) {}
 
     Status Close() override
@@ -318,7 +364,7 @@ public:
         return Null{};
     }
 
-    Result<std::unique_ptr<ReadSnapshot>> OpenSnapshot() const override
+    Result<std::unique_ptr<ReadSnapshot>> CaptureSnapshot() const override
     {
         return ResultOf([&]() -> std::unique_ptr<ReadSnapshot> {
             std::lock_guard lock(mutex_);
@@ -327,7 +373,7 @@ public:
         });
     }
 
-    Result<CommitRevision> Commit(const Transaction& transaction) override
+    Result<CommitRevision> Apply(const Transaction& transaction) override
     {
         return ResultOf([&] {
             std::lock_guard lock(mutex_);
@@ -362,37 +408,40 @@ public:
             // Check uniqueness after all former entries have been removed.
             for (const auto& change : batch.changes)
                 IndexRecord(database, id_, schema_->at(change.key.collection), change);
-            WriteRevision(database, id_, batch);
+            WriteRevision(database, id_, batch, Policy().journalRevisions);
             write.Commit();
             return batch.revision;
         });
     }
 
-    Result<ChangePage> ReadChanges(CommitRevision after, std::size_t limit) const override
+    Result<ChangePage> CaptureChanges(CommitRevision after, std::size_t limit) const override
     {
         return ResultOf([&] {
             auto database = OpenReader();
             database.Execute("BEGIN", "begin journal snapshot");
             const auto latest = ReadRevision(database, id_);
-            if (limit == 0 || after > latest)
-                throw Fail(ErrorCode::InvalidArgument, "Invalid journal limit or starting revision.");
+            return ReadJournal(database, id_, after, latest, ReadHistoryFloor(database, id_, latest), limit);
+        });
+    }
 
-            ChangePage result{latest, {}};
-            Statement read(database, "SELECT revision, payload FROM changes WHERE session_id=? AND revision>? "
-                                     "ORDER BY revision LIMIT ?", "read change journal");
-            read.Bind(1, id_.value);
-            read.Bind(2, static_cast<std::int64_t>(after.value));
-            read.Bind(3, SqlLimit(limit));
-            while (read.Step()) {
-                const CommitRevision revision{read.Unsigned(0)};
-                if (revision.value != after.value + 1 || revision > latest)
-                    MalformedData();
-                result.batches.push_back(DecodeChanges(revision, read.Blob(1)));
-                after = revision;
+    Result<SessionArchive> Export() const override
+    {
+        return ResultOf([&] {
+            auto database = OpenReader();
+            database.Execute("BEGIN", "begin archive snapshot");
+            const auto revision = ReadRevision(database, id_);
+            const auto floor = ReadHistoryFloor(database, id_, revision);
+            SessionArchive archive{id_, *schema_, revision, floor, {},
+                                   ReadJournal(database, id_, floor, revision, floor, kMaxRevision).batches};
+            Statement rows(database, "SELECT record_id, version, payload, namespace_id, collection_id FROM records "
+                                     "WHERE session_id=? ORDER BY namespace_id, collection_id, record_id",
+                           "export records");
+            rows.Bind(1, id_.value);
+            while (rows.Step()) {
+                const CollectionKey collection{{rows.Bytes(3)}, {rows.Bytes(4)}};
+                archive.records.push_back({collection, ReadRecord(rows, GetCollection(*schema_, collection))});
             }
-            if (result.batches.size() < limit && after != latest)
-                MalformedData();
-            return result;
+            return archive;
         });
     }
 
@@ -454,6 +503,8 @@ public:
         return ResultOf([&]() -> std::unique_ptr<Session> {
             if (request.id.value.empty())
                 throw Fail(ErrorCode::InvalidArgument, "Session ID cannot be empty.");
+            if (auto valid = ValidatePolicy(request.policy); !valid)
+                throw valid.Error();
             const auto supported = Capabilities();
             if (!std::ranges::includes(supported, request.requiredCapabilities))
                 throw Fail(ErrorCode::UnsupportedOperation, "The provider lacks a required capability.");
@@ -464,6 +515,37 @@ public:
             auto database = Connect(options_, SQLITE_OPEN_READWRITE);
             OpenOrCreateSession(database, request);
             return std::make_unique<SQLiteSession>(options_, request, std::move(lease), std::move(database));
+        });
+    }
+
+    Status Import(const SessionArchive& archive) override
+    {
+        return ResultOf([&] {
+            if (const auto valid = ValidateArchive(archive); !valid)
+                throw valid.Error();
+            auto database = Connect(options_, SQLITE_OPEN_READWRITE);
+            WriteTransaction write(database);
+            {
+                Statement check(database, "SELECT 1 FROM sessions WHERE id=?", "test import destination");
+                check.Bind(1, archive.id.value);
+                if (check.Step())
+                    throw Fail(ErrorCode::RecordAlreadyExists, "Import requires a new session ID.");
+            }
+            Statement insert(database, "INSERT INTO sessions VALUES (?, ?, ?)", "create imported session");
+            insert.Bind(1, archive.id.value);
+            insert.Bind(2, EncodeSchema(archive.schema));
+            insert.Bind(3, static_cast<std::int64_t>(archive.revision.value));
+            insert.Run();
+            for (const auto& entry : archive.records) {
+                const RecordChange change{MutationKind::Create, {entry.collection, entry.record.id},
+                                          std::nullopt, entry.record};
+                ApplyRecord(database, archive.id, change);
+                IndexRecord(database, archive.id, GetCollection(archive.schema, entry.collection), change);
+            }
+            for (const auto& batch : archive.journal)
+                InsertJournal(database, archive.id, batch);
+            write.Commit();
+            return Null{};
         });
     }
 
