@@ -37,6 +37,7 @@
 #include "Runtime/CameraDirector.h"
 #include "Runtime/PossessionService.h"
 #include "Runtime/RuntimeWorldRunner.h"
+#include "DeveloperApi/DeveloperApi.h"
 #include "Project/EngineGameDocument.h"
 #include "Project/StarterGameTemplates.h"
 
@@ -110,10 +111,16 @@ private:
     float RunPhysicsResolvePhase();
     void RunPostPhysicsPhase(float physicsElapsedSeconds);
     void RunRuntimeFrame();
+    void RunRuntimeFrame(float elapsedSeconds);
     void UpdatePossessedCharacter(float physicsElapsedSeconds);
     bool beginAutomaticPlayerPossession(bool placeAtSpawn, juce::String& error);
     void releaseEditorPossession();
     void SetPlaying(bool playing);
+    bool StopRuntime();
+    ce::developer::Phase RuntimePhase() const;
+    ce::developer::RuntimeOperations RuntimeOperations();
+    void SetPlaybackStatus(const juce::String& text);
+    bool StartDeveloperApi();
     void initialiseDockingWorkspace();
     void openGameClient();
 
@@ -275,6 +282,12 @@ private:
     // ObjectDefinitionEditorPanel (edit) need the same catalog.
     ce::scene::ObjectDefinitionCatalog objectDefinitions_;
     bool isPlaying_ = false;
+    bool fixtureRuntime_ = false;
+    bool showPlayErrors_ = true;
+    juce::String playbackStatus_ = "Editing";
+    juce::String developerDiscoveryId_;
+    ce::developer::RuntimeCommands runtimeCommands_{RuntimeOperations()};
+    std::unique_ptr<ce::developer::DeveloperApi> developerApi_;
     // Captured once at the first Play press. Pause intentionally retains it
     // so Play resumes; Stop restores it and discards runtime-only changes.
     juce::ValueTree playModeSceneSnapshot_;

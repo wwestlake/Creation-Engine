@@ -299,23 +299,23 @@ MainComponent::MainComponent(StartupProgressCallback startupProgressCallback)
         suiteShellController_.showProjectBrowser();
     };
     addAndMakeVisible(headerBar_);
-    headerBar_.onPlay = [this] { SetPlaying(true); };
-    headerBar_.onPause = [this] { SetPlaying(false); };
-    headerBar_.onStop = [this] {
-        SetPlaying(false);
-        if (playModeSceneSnapshot_.isValid()) {
-            if (!ce::scene::EngineSceneSerializer::restoreScene(world_, playModeSceneSnapshot_)) {
-                headerBar_.setStatusText("Could not restore the authored scene after Play.");
-                return;
-            }
-            playModeSceneSnapshot_ = {};
+    const auto executeTransport = [this](ce::developer::RuntimeAction action) {
+        const juce::ScopedValueSetter<bool> allowDialogs(showPlayErrors_, true);
+        try {
+            runtimeCommands_.Execute(action);
+        } catch (const ce::developer::Failure&) {
+            // SetPlaying and StopRuntime already report actionable editor errors.
         }
-        world_.ResetTick();
-        frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
-        propertiesPanel_.Refresh();
-        headerBar_.setStatusText("Stopped");
     };
-    headerBar_.setStatusText("Editing");
+    headerBar_.onPlay = [this, executeTransport] {
+        using namespace ce::developer;
+        const auto phase = RuntimePhase();
+        if (phase != Phase::running)
+            executeTransport(phase == Phase::paused ? RuntimeAction::resume : RuntimeAction::start);
+    };
+    headerBar_.onPause = [executeTransport] { executeTransport(ce::developer::RuntimeAction::pause); };
+    headerBar_.onStop = [executeTransport] { executeTransport(ce::developer::RuntimeAction::stop); };
+    SetPlaybackStatus("Editing");
 
     inputBindingsPanel_.onGameUpdated = [this](const ce::project::GameDocumentInfo& updated, juce::String& error) {
         activeGame_ = updated;
@@ -374,6 +374,10 @@ MainComponent::MainComponent(StartupProgressCallback startupProgressCallback)
     setSize(1400, 900);
     startTimerHz(30);
 
+    if (StartDeveloperApi()) {
+        FinishStartupProgress("Djehuti Engine is ready for developer automation.");
+        return;
+    }
     ReportStartupProgress("Opening Suite project...", 0.78f);
     juce::String projectError;
     if (!ensureProjectSessionActive(projectError)) {
@@ -389,6 +393,13 @@ MainComponent::MainComponent(StartupProgressCallback startupProgressCallback)
 MainComponent::~MainComponent() {
     removeKeyListener(commandManager_.getKeyMappings());
     stopTimer();
+    developerApi_.reset();
+    if (developerDiscoveryId_.isNotEmpty()) {
+        juce::String error;
+        const auto current = creation::services::SuiteVfsJsonStore::loadJson("agents/engine-developer.json", error);
+        if (ce::developer::Get(current, "instance").toString() == developerDiscoveryId_)
+            creation::services::SuiteVfsJsonStore::removeJson("agents/engine-developer.json", error);
+    }
     gameClients_.clear();
 }
 
@@ -996,6 +1007,90 @@ void MainComponent::releaseEditorPossession()
     viewport_.ExitPossessedMode();
 }
 
+bool MainComponent::StartDeveloperApi()
+{
+    using namespace ce::developer;
+    try {
+        auto settings = ReadSettings();
+        if (!settings.enabled) return false;
+        const bool fixtureOnly = settings.allowFixture &&
+            juce::SystemStats::getEnvironmentVariable("DJEHUTI_DEV_FIXTURE_ONLY", {}) == "1";
+        settings.allowAuthored = !fixtureOnly;
+        auto mount = MakeTestMount(settings);
+        developerApi_ = std::make_unique<DeveloperApi>(std::move(settings), "editor",
+            JUCE_APPLICATION_VERSION_STRING, runtimeCommands_, std::move(mount));
+        const auto port = developerApi_->Start();
+        const auto url = "http://127.0.0.1:" + juce::String(port);
+        if (!fixtureOnly) {
+            developerDiscoveryId_ = juce::Uuid().toString();
+            juce::String error;
+            creation::services::SuiteVfsJsonStore::saveJson("agents/engine-developer.json",
+                Object({{"apiVersion", "1.0.0"}, {"processMode", "editor"}, {"url", url},
+                        {"instance", developerDiscoveryId_}}), error);
+        }
+        juce::Logger::writeToLog("Developer API " + url);
+        return fixtureOnly;
+    } catch (const Failure& failure) {
+        developerApi_.reset();
+        juce::Logger::writeToLog(failure.message);
+    } catch (...) {
+        developerApi_.reset();
+        juce::Logger::writeToLog("Developer API could not start.");
+    }
+    return false;
+}
+
+ce::developer::Phase MainComponent::RuntimePhase() const
+{
+    using ce::developer::Phase;
+    return isPlaying_ ? Phase::running : playModeSceneSnapshot_.isValid() ? Phase::paused : Phase::stopped;
+}
+
+ce::developer::RuntimeOperations MainComponent::RuntimeOperations()
+{
+    using namespace ce::developer;
+    return {
+        [this] { return RuntimePhase(); },
+        [this] { return world_.CurrentTick(); },
+        [this](Source source) {
+            fixtureRuntime_ = source == Source::fixture;
+            SetPlaying(true);
+            if (!isPlaying_) fixtureRuntime_ = false;
+            return isPlaying_;
+        },
+        [this] { SetPlaying(false); },
+        [this] { SetPlaying(true); return isPlaying_; },
+        [this] { return StopRuntime(); },
+        [this] { RunRuntimeFrame(1.0f / 30.0f); },
+        [this] { return Object({{"playing", isPlaying_}, {"editorStatus", playbackStatus_}}); }
+    };
+}
+
+void MainComponent::SetPlaybackStatus(const juce::String& text)
+{
+    playbackStatus_ = text;
+    headerBar_.setStatusText(text);
+}
+
+bool MainComponent::StopRuntime()
+{
+    SetPlaying(false);
+    runtimeWorldRunner_.EndPlay();
+    if (playModeSceneSnapshot_.isValid()) {
+        if (!ce::scene::EngineSceneSerializer::restoreScene(world_, playModeSceneSnapshot_)) {
+            SetPlaybackStatus("Could not restore the authored scene after Play.");
+            return false;
+        }
+        playModeSceneSnapshot_ = {};
+    }
+    fixtureRuntime_ = false;
+    world_.ResetTick();
+    frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
+    propertiesPanel_.Refresh();
+    SetPlaybackStatus("Stopped");
+    return true;
+}
+
 void MainComponent::SetPlaying(bool playing) {
     if (isPlaying_ == playing) {
         return;
@@ -1003,15 +1098,28 @@ void MainComponent::SetPlaying(bool playing) {
 
     if (playing) {
         const bool newSession = !playModeSceneSnapshot_.isValid();
-        if (newSession)
+        if (newSession) {
             playModeSceneSnapshot_ = ce::scene::EngineSceneSerializer::serializeScene(world_);
+            if (!playModeSceneSnapshot_.isValid()) {
+                SetPlaybackStatus("Could not save the scene before Play.");
+                return;
+            }
+            if (fixtureRuntime_) {
+                {
+                    std::lock_guard lock(world_.RegistryMutex());
+                    world_.Registry().clear();
+                }
+                world_.ResetTick();
+                frustHost_.prepareLevel(0);
+            }
+        }
         juce::String error;
-        if (!beginAutomaticPlayerPossession(newSession, error)) {
+        if (!fixtureRuntime_ && !beginAutomaticPlayerPossession(newSession, error)) {
             if (newSession) playModeSceneSnapshot_ = {};
             const auto message = "Play cannot start.\n\n" + error
                                  + "\n\nFix the scene setup, then press Play again.";
-            headerBar_.setStatusText("Cannot start Play: " + error);
-            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+            SetPlaybackStatus("Cannot start Play: " + error);
+            if (showPlayErrors_) juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
                                                    "Cannot Start Play", message);
             return;
         }
@@ -1028,14 +1136,13 @@ void MainComponent::SetPlaying(bool playing) {
         runtimeWorldRunner_.BeginPlay();
     } else {
         isPlaying_ = false;
-        runtimeWorldRunner_.EndPlay();
         // Pause intentionally returns control to the editor camera while
         // retaining the live scene. Stop subsequently restores its snapshot.
         releaseEditorPossession();
         viewport_.SetPlaying(false);
     }
     headerBar_.setPlaybackVisualState(isPlaying_, false);
-    headerBar_.setStatusText(isPlaying_ ? "Playing" : "Paused - editor camera restored");
+    SetPlaybackStatus(isPlaying_ ? "Playing" : "Paused - editor camera restored");
 }
 
 void MainComponent::timerCallback() {
@@ -1089,9 +1196,16 @@ void MainComponent::timerCallback() {
         const auto requestedScene = pendingSceneTransitionId_;
         pendingSceneTransitionId_.clear();
         const bool resumeAfterTransition = isPlaying_;
-        if (resumeAfterTransition) SetPlaying(false);
+        if (resumeAfterTransition) {
+            SetPlaying(false);
+            runtimeWorldRunner_.EndPlay();
+        }
         selectScene(requestedScene);
         if (resumeAfterTransition) SetPlaying(true);
+    }
+    if (developerApi_) {
+        const juce::ScopedValueSetter<bool> suppressDialogs(showPlayErrors_, false);
+        developerApi_->PumpOwner();
     }
     if (isPlaying_) {
         RunRuntimeFrame();
@@ -1121,6 +1235,11 @@ void MainComponent::RunRuntimeFrame()
         ? static_cast<float>(nowSeconds - lastPhysicsAdvanceSeconds_) : 0.0f;
     lastPhysicsAdvanceSeconds_ = nowSeconds;
 
+    RunRuntimeFrame(elapsedSeconds);
+}
+
+void MainComponent::RunRuntimeFrame(float elapsedSeconds)
+{
     runtimeWorldRunner_.RunFrame(elapsedSeconds, {
         [this](float dt) { UpdatePossessedCharacter(dt); }
     });

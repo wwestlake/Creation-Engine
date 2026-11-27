@@ -1,11 +1,14 @@
 #include <JuceHeader.h>
 
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 
 #include "engine/simulation.h"
 #include "engine/world.h"
 #include "Project/EngineGameDocument.h"
 #include "Frust/EngineFrustHost.h"
+#include "DeveloperApi/DeveloperApi.h"
 
 #include <creation/assets/ProjectWorkspaceService.h>
 #include <creation/suite/SuiteSettings.h>
@@ -44,6 +47,8 @@ ServerConfig ParseArgs(const juce::ArgumentList& args) {
     if (auto index = args.indexOfOption("--project"); index >= 0 && index + 1 < args.size()) config.projectId = args[index + 1].text;
     if (auto index = args.indexOfOption("--game"); index >= 0 && index + 1 < args.size()) config.gameId = args[index + 1].text;
     if (auto index = args.indexOfOption("--scene"); index >= 0 && index + 1 < args.size()) config.sceneId = args[index + 1].text;
+    if (!std::isfinite(config.tickRateHz) || config.tickRateHz < 1.0 || config.tickRateHz > 1000.0)
+        config.tickRateHz = 30.0;
     return config;
 }
 
@@ -79,9 +84,18 @@ int main(int argc, char* argv[]) {
 
     const juce::ArgumentList args(argc, argv);
     ServerConfig config = ParseArgs(args);
+    using namespace ce::developer;
+    Settings developerSettings;
+    try {
+        developerSettings = ReadSettings();
+    } catch (const Failure& failure) {
+        std::cerr << "[server] " << failure.message << std::endl;
+        return 2;
+    }
+
     ce::engine::World world;
     juce::String loadError;
-    if (!LoadAuthoredWorld(config, world, loadError)) {
+    if ((!developerSettings.enabled || config.ticks >= 0) && !LoadAuthoredWorld(config, world, loadError)) {
         std::cerr << "[server] failed to load authored world: " << loadError << std::endl;
         return 2;
     }
@@ -95,42 +109,86 @@ int main(int argc, char* argv[]) {
 
     const float stepDt = config.dt >= 0.0f ? config.dt : static_cast<float>(1.0 / config.tickRateHz);
 
+    const auto tickIntervalMs = std::max(1, static_cast<int>(1000.0 / config.tickRateHz));
+    const auto tick = [&] {
+        ce::engine::Simulation::Step(world, stepDt);
+        frustHost.tick(static_cast<std::int64_t>(world.CurrentTick()));
+    };
+
     if (config.ticks >= 0) {
         frustHost.beginPlay(0);
-        for (int i = 0; i < config.ticks; ++i) {
-            ce::engine::Simulation::Step(world, stepDt);
-            frustHost.tick(static_cast<std::int64_t>(world.CurrentTick()));
-        }
+        for (int i = 0; i < config.ticks; ++i) tick();
         frustHost.endPlay(static_cast<std::int64_t>(world.CurrentTick()));
         std::cout << "[server] completed " << world.CurrentTick() << " ticks" << std::endl;
         return 0;
     }
 
-    const auto tickIntervalMs = static_cast<int>(1000.0 / config.tickRateHz);
+    if (developerSettings.enabled) {
+        developerSettings.allowAuthored = config.projectId.isNotEmpty();
+        auto phase = Phase::stopped;
+        const auto reset = [&] {
+            {
+                std::lock_guard lock(world.RegistryMutex());
+                world.Registry().clear();
+            }
+            world.ResetTick();
+        };
+        RuntimeCommands runtime({
+            [&] { return phase; },
+            [&] { return world.CurrentTick(); },
+            [&](Source source) {
+                if (source == Source::authored && config.projectId.isEmpty()) return false;
+                reset();
+                if (source == Source::authored && !LoadAuthoredWorld(config, world, loadError)) {
+                    reset();
+                    return false;
+                }
+                frustHost.prepareLevel(0);
+                frustHost.beginPlay(0);
+                phase = Phase::running;
+                return true;
+            },
+            [&] { phase = Phase::paused; },
+            [&] { phase = Phase::running; return true; },
+            [&] {
+                frustHost.endPlay(static_cast<std::int64_t>(world.CurrentTick()));
+                reset();
+                frustHost.prepareLevel(0);
+                phase = Phase::stopped;
+                return true;
+            },
+            tick,
+            [&] { return Object({{"tickRateHz", config.tickRateHz}, {"authoredConfigured", config.projectId.isNotEmpty()}}); }
+        });
+        try {
+            auto mount = MakeTestMount(developerSettings);
+            DeveloperApi api(std::move(developerSettings), "server", JUCE_APPLICATION_VERSION_STRING, runtime, std::move(mount));
+            const auto port = api.Start();
+            std::cout << "Developer API http://127.0.0.1:" << port << std::endl;
+            while (true) {
+                api.PumpOwner();
+                if (phase == Phase::running) tick();
+                juce::Thread::sleep(tickIntervalMs);
+            }
+        } catch (const Failure& failure) {
+            std::cerr << "[server] " << failure.message << std::endl;
+            return 2;
+        } catch (...) {
+            std::cerr << "[server] Developer API host failed." << std::endl;
+            return 2;
+        }
+    }
 
     std::cout << "Creation Engine dedicated server starting on port " << config.port << " at " << config.tickRateHz
               << " Hz." << std::endl;
-
     const auto startTime = juce::Time::getMillisecondCounterHiRes();
     frustHost.beginPlay(0);
-
-    // The real dedicated-server loop: advances the world clock (and any
-    // attached ScriptComponents) at a fixed rate and reports basic
-    // operational visibility (section 2.5). Network accept/session
-    // management and input validation (section 2.2) land on top of this
-    // scaffold. Uses the SAME Simulation::Step call the editor's
-    // MainComponent::timerCallback uses when playing -- the concrete
-    // implementation of "the same rule module runs identically
-    // client-side or server-side."
     while (true) {
-        ce::engine::Simulation::Step(world, stepDt);
-        frustHost.tick(static_cast<std::int64_t>(world.CurrentTick()));
-
+        tick();
         if (world.CurrentTick() % static_cast<ce::engine::Tick>(config.tickRateHz * 10) == 0) {
             const auto uptimeSeconds = (juce::Time::getMillisecondCounterHiRes() - startTime) / 1000.0;
             std::cout << "[server] tick=" << world.CurrentTick() << " uptime=" << uptimeSeconds << "s" << std::endl;
         }
-
         juce::Thread::sleep(tickIntervalMs);
     }
 }

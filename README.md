@@ -5,6 +5,7 @@ built as one JUCE codebase. It is a sibling project to
 [Creation Station](https://github.com/wwestlake/CreationStation).
 
 The product scope lives in [docs/CAPABILITIES.md](docs/CAPABILITIES.md).
+The [Developer API guide](docs/DEVELOPER_API.md) covers local editor and server automation over HTTP, CLI and MCP.
 
 ## Layout
 
