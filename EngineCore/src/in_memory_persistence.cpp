@@ -1,7 +1,9 @@
 #include "engine/in_memory_persistence.h"
 
 #include "persistence_validation.h"
+#include "persistence_encoding.h"
 #include <deque>
+#include <iterator>
 #include <mutex>
 
 namespace ce::persistence
@@ -9,9 +11,10 @@ namespace ce::persistence
 namespace
 {
 using namespace detail;
+using namespace encoding;
 
 struct IndexEntry {
-    IndexKey key;
+    Binary key;
     RecordId id;
     auto operator<=>(const IndexEntry&) const = default;
 };
@@ -41,7 +44,7 @@ struct SessionData {
         current = std::move(initial);
     }
 
-    const SessionSchema schema;
+    SessionSchema schema;
     std::mutex mutex;
     std::shared_ptr<const RevisionData> current;
     std::deque<ChangeBatch> journal;
@@ -57,7 +60,7 @@ std::optional<IndexEntry> MakeEntry(const IndexDefinition& index, const Record& 
     auto key = ProjectIndexKey(index, record.data);
     if (!key)
         return std::nullopt;
-    return IndexEntry{std::move(*key), record.id};
+    return IndexEntry{EncodeOrderedKey(*key, &index), record.id};
 }
 
 void RemoveIndexEntries(CollectionData& collection, const Record& record)
@@ -68,20 +71,24 @@ void RemoveIndexEntries(CollectionData& collection, const Record& record)
     }
 }
 
+Status InsertIndexEntry(std::set<IndexEntry>& entries, const IndexDefinition& definition, const Record& record)
+{
+    auto entry = MakeEntry(definition, record);
+    if (!entry) return Null{};
+    if (definition.unique) {
+        const auto first = entries.lower_bound(IndexEntry{entry->key, {}});
+        if (first != entries.end() && first->key == entry->key)
+            return Fail(ErrorCode::UniqueConstraint, "Unique index key already exists.");
+    }
+    entries.insert(std::move(*entry));
+    return Null{};
+}
+
 Status InsertIndexEntries(CollectionData& collection, const Record& record)
 {
     for (const auto& [index, definition] : collection.schema.indexes) {
-        auto entry = MakeEntry(definition, record);
-        if (!entry)
-            continue;
-
-        auto& entries = collection.indexes.at(index);
-        if (definition.unique) {
-            const auto first = entries.lower_bound(IndexEntry{entry->key, {}});
-            if (first != entries.end() && first->key == entry->key)
-                return Fail(ErrorCode::UniqueConstraint, "Unique index key already exists.");
-        }
-        entries.insert(std::move(*entry));
+        if (const auto inserted = InsertIndexEntry(collection.indexes.at(index), definition, record); !inserted)
+            return inserted.Error();
     }
     return Null{};
 }
@@ -92,6 +99,14 @@ public:
         : session_(std::move(session)), state_(std::move(state)) {}
 
     CommitRevision Revision() const noexcept override { return state_->revision; }
+
+    Result<CollectionSchema> Describe(const CollectionKey& key) const override
+    {
+        const auto collection = state_->collections.find(key);
+        if (collection == state_->collections.end())
+            return Fail(ErrorCode::UnknownCollection, "Unknown collection.");
+        return collection->second->schema;
+    }
 
     Result<std::optional<Record>> Get(const RecordKey& key) const override
     {
@@ -118,47 +133,69 @@ public:
         auto fields = QueryFields(query, collection.schema);
         if (!fields)
             return fields.Error();
-        if (const auto valid = ValidateQuery(query, fields.Value(), session_, Revision()); !valid)
+        const auto* definition = SelectedIndex(query, collection.schema);
+        if (const auto valid = ValidateQuery(query, fields.Value(), session_, Revision(), definition); !valid)
             return valid.Error();
 
-        auto start = query.prefix;
-        if (query.lower)
-            start.push_back(query.lower->value);
-
         QueryPage result;
-        IndexKey lastKey;
-        const auto append = [&](const IndexKey& key, const Record& record) {
-            if (!MatchesPrefix(query.prefix, key) || AboveUpper(query, key))
-                return false;
-            if (BelowLower(query, key))
-                return true;
+        const auto append = [&](const Record& record) {
             if (result.records.size() == query.limit) {
-                result.next = QueryCursor{session_, Revision(), query.collection, query.index,
-                                          std::move(lastKey), result.records.back().id};
+                const auto& last = result.records.back();
+                auto key = definition ? *ProjectIndexKey(*definition, last.data) : IndexKey{last.id.value};
+                result.next = MakeCursor(query, session_, Revision(), definition, std::move(key), last.id);
                 return false;
             }
-            lastKey = key;
             result.records.push_back(record);
             return true;
         };
+        const bool reverse = query.direction == SortDirection::Descending;
+        const auto visit = [&](auto first, auto past, const auto& recordAt) {
+            const auto loop = [&](auto it, auto end) {
+                for (; it != end && append(recordAt(*it)); ++it) {}
+            };
+            if (reverse)
+                loop(std::make_reverse_iterator(past), std::make_reverse_iterator(first));
+            else
+                loop(first, past);
+        };
 
-        if (query.index) {
+        if (definition) {
             const auto& entries = collection.indexes.at(*query.index);
-            auto it = query.after ? entries.upper_bound({query.after->key, query.after->id})
-                                  : entries.lower_bound({std::move(start), {}});
-            for (; it != entries.end(); ++it) {
-                if (!append(it->key, collection.records.at(it->id)))
-                    break;
+            const auto range = MakeOrderedRange({}, query, definition, false);
+            if (range.empty) return result;
+            auto first = entries.lower_bound({range.first, {}});
+            auto past = range.past ? entries.lower_bound({*range.past, {}}) : entries.end();
+            if (query.after) {
+                IndexEntry anchor{EncodeOrderedKey(query.after->key, definition), query.after->id};
+                if (reverse) past = entries.lower_bound(anchor);
+                else first = entries.upper_bound(anchor);
             }
+            visit(first, past, [&](const auto& entry) -> const Record& { return collection.records.at(entry.id); });
         } else {
             const auto& records = collection.records;
-            auto it = start.empty() ? records.begin() : records.lower_bound({std::get<std::string>(start.front())});
-            if (query.after)
-                it = records.upper_bound(query.after->id);
-            for (; it != records.end(); ++it) {
-                if (!append({it->first.value}, it->second))
-                    break;
+            auto first = records.begin();
+            auto past = records.end();
+            if (!query.prefix.empty()) {
+                const RecordId key{std::get<std::string>(query.prefix.front())};
+                first = records.lower_bound(key);
+                past = records.upper_bound(key);
+            } else {
+                if (query.lower && query.upper && query.lower->value == query.upper->value
+                    && (!query.lower->inclusive || !query.upper->inclusive)) return result;
+                if (query.lower) {
+                    const RecordId key{std::get<std::string>(query.lower->value)};
+                    first = query.lower->inclusive ? records.lower_bound(key) : records.upper_bound(key);
+                }
+                if (query.upper) {
+                    const RecordId key{std::get<std::string>(query.upper->value)};
+                    past = query.upper->inclusive ? records.upper_bound(key) : records.lower_bound(key);
+                }
             }
+            if (query.after) {
+                if (reverse) past = records.lower_bound(query.after->id);
+                else first = records.upper_bound(query.after->id);
+            }
+            visit(first, past, [](const auto& row) -> const Record& { return row.second; });
         }
         return result;
     }
@@ -213,6 +250,40 @@ public:
         if (closed_)
             return Fail(ErrorCode::SessionClosed, "Session is closed.");
         return std::unique_ptr<ReadSnapshot>{std::make_unique<MemorySnapshot>(id_, data_->current)};
+    }
+
+    Result<IndexMaintenanceResult> MaintainIndex(const IndexMaintenance& request) override
+    {
+        std::lock_guard lock(data_->mutex);
+        if (closed_) return Fail(ErrorCode::SessionClosed, "Session is closed.");
+        const auto target = data_->current->collections.find(request.collection);
+        if (target == data_->current->collections.end())
+            return Fail(ErrorCode::UnknownCollection, "Unknown collection.");
+        auto schema = MaintainDefinition(target->second->schema, request);
+        if (!schema) return schema.Error();
+        if (request.operation != IndexOperation::Remove && target->second->records.size() > request.maxRecords)
+            return Fail(ErrorCode::ResourceLimit, "Index maintenance exceeded the configured record budget.");
+
+        auto next = std::make_shared<RevisionData>(*data_->current);
+        auto collection = std::make_shared<CollectionData>(*target->second);
+        collection->schema = schema.Value();
+        collection->indexes.erase(request.index);
+        IndexMaintenanceResult result{next->revision, {}, 0};
+        if (const auto index = collection->schema.indexes.find(request.index); index != collection->schema.indexes.end()) {
+            result.definition = index->second;
+            auto& entries = collection->indexes[request.index];
+            for (const auto& [id, record] : collection->records) {
+                if (const auto active = CheckMaintenance(request, result.recordsExamined, true); !active)
+                    return active.Error();
+                if (auto added = InsertIndexEntry(entries, index->second, record); !added) return added.Error();
+                ++result.recordsExamined;
+            }
+        }
+        if (const auto active = CheckMaintenance(request, result.recordsExamined); !active) return active.Error();
+        next->collections[request.collection] = std::move(collection);
+        data_->schema.at(request.collection) = std::move(schema).Value();
+        data_->current = std::move(next);
+        return result;
     }
 
     Result<CommitRevision> Apply(const Transaction& transaction) override
@@ -309,7 +380,8 @@ public:
     CapabilitySet Capabilities() const override
     {
         return {Capability::PrimaryQueries, Capability::SecondaryIndexes, Capability::AtomicTransactions,
-                Capability::ConsistentSnapshots, Capability::LogicalChangeJournal};
+                Capability::ConsistentSnapshots, Capability::LogicalChangeJournal, Capability::PortableQueries,
+                Capability::IndexMaintenance};
     }
 
     Result<std::unique_ptr<Session>> OpenSession(const OpenSessionRequest& request) override

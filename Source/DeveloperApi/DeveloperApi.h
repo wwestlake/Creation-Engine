@@ -25,6 +25,9 @@ struct Limits {
     int resultMs = 60000;
     int retainedBytes = 16777216;
     int requestHistory = 8192;
+    int queryCandidates = 4096;
+    int queryPredicateNodes = 64;
+    int queryPredicateDepth = 10;
 };
 
 struct Settings {

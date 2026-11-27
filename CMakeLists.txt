@@ -205,6 +205,16 @@ add_test(NAME creation_engine_rocksdb_recovery
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/RocksDBPersistenceRecovery.cmake")
 set_tests_properties(creation_engine_rocksdb_conformance creation_engine_rocksdb_recovery PROPERTIES TIMEOUT 180)
 
+add_executable(CreationEnginePortablePersistenceQuery tests/PortablePersistenceQuery.cpp)
+target_link_libraries(CreationEnginePortablePersistenceQuery PRIVATE
+    engine_rocksdb_persistence engine_sqlite_persistence Threads::Threads)
+add_test(NAME creation_engine_portable_persistence_query
+    COMMAND ${CMAKE_COMMAND}
+        "-DTEST_EXECUTABLE=$<TARGET_FILE:CreationEnginePortablePersistenceQuery>"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/Testing"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/PortablePersistenceQuery.cmake")
+set_tests_properties(creation_engine_portable_persistence_query PROPERTIES TIMEOUT 180)
+
 add_executable(CreationEnginePersistenceBenchmark tests/PersistenceBenchmark.cpp)
 target_link_libraries(CreationEnginePersistenceBenchmark PRIVATE
     engine_rocksdb_persistence engine_sqlite_persistence djehuti_sqlite Threads::Threads)
@@ -269,7 +279,7 @@ if(WIN32)
     creation_engine_stage_package_dlls(CreationEngineEditor "${ZLIB_LIBRARY_DEBUG}" "$<CONFIG:Debug>")
     creation_engine_stage_package_dlls(CreationEngineEditor "${ZLIB_LIBRARY_RELEASE}" "$<NOT:$<CONFIG:Debug>>")
     foreach(persistence_target IN ITEMS CreationEnginePersistenceSmoke CreationEngineRocksDBRecovery
-                                         CreationEnginePersistenceBenchmark)
+                                         CreationEnginePersistenceBenchmark CreationEnginePortablePersistenceQuery)
         creation_engine_stage_package_dlls(${persistence_target} "${ZLIB_LIBRARY_DEBUG}" "$<CONFIG:Debug>")
         creation_engine_stage_package_dlls(${persistence_target} "${ZLIB_LIBRARY_RELEASE}" "$<NOT:$<CONFIG:Debug>>")
     endforeach()

@@ -193,6 +193,41 @@ def persistence(ctl, reader, provider, discovery):
     print(f"{provider} read, indexed pagination, snapshots, journal, expiry and lossless wire format passed", flush=True)
 
 
+def portable_index_queries(ctl, reader):
+    view = result(reader, "persistence.snapshot.open")
+    keys = {"snapshot": view["snapshot"], "namespace": b64(b"automation"), "collection": b64(b"records")}
+    catalog = result(reader, "persistence.indexes", keys)
+    assert catalog == {"revision": "4", "indexes": [{
+        "id": b64(b"value"), "version": "1", "unique": False, "status": "ready",
+        "fields": [{"field": b64(b"value"), "type": "i64", "direction": "asc", "required": True, "nullable": False}],
+    }]}
+    field = b64(b"value")
+    predicate = {"op": "and", "children": [
+        {"op": "ge", "field": field, "value": {"type": "i64", "value": "0"}},
+        {"op": "not", "children": [{"op": "eq", "field": field,
+                                     "value": {"type": "i64", "value": "9223372036854775804"}}]},
+    ]}
+    query = dict(keys, direction="desc", where=predicate, limit=1)
+    plan = result(reader, "persistence.query.explain", query)
+    assert plan["plan"]["access"] == "index_seek" and plan["plan"]["index"] == catalog["indexes"][0]["id"]
+    assert plan["plan"]["residualFilter"]
+    page = result(reader, "persistence.query.execute", query)
+    assert page["plan"] == plan["plan"] and page["records"][0]["id"] == b64(b"1") and page["cursor"]
+    assert page["statistics"]["candidates"] == page["statistics"]["returned"] == "1"
+    next_page = result(reader, "persistence.query.execute", dict(query, cursor=page["cursor"]))
+    assert next_page["records"][0]["id"] == b64(b"2")
+    result(ctl, "persistence.query.execute", dict(query, cursor=page["cursor"]), expected="forbidden")
+    result(reader, "persistence.query.execute", dict(query, direction="asc", cursor=page["cursor"]), expected="conflict")
+    assert "portable_index_queries" in reader.discovery()["capabilities"]
+    scan = dict(keys, where={"op": "isMissing", "field": field}, limit=1, primaryOnly=True)
+    assert result(reader, "persistence.query.explain", scan)["plan"]["access"] == "primary_scan"
+    result(reader, "persistence.query.execute", scan, expected="scan_required")
+    partial = result(reader, "persistence.query.execute", dict(scan, allowScan=True, candidates=1))
+    assert partial["records"] == [] and partial["cursor"] and partial["statistics"]["candidateBudgetReached"]
+    result(reader, "persistence.snapshot.release", {"snapshot": view["snapshot"]})
+    print("Portable index catalog, explain plan, statistics and scoped execution passed", flush=True)
+
+
 def contract_and_security(controller, read, env, discovery):
     port, read_token, control = controller.port, env["DJEHUTI_DEV_READ_TOKEN"], env["DJEHUTI_DEV_CONTROL_TOKEN"]
     expect_http("unauthenticated", *raw(port, "GET", "/v1/discovery"), 401)
@@ -254,7 +289,9 @@ def cli_and_mcp(environment):
     assert process.returncode == 0 and not stderr, stderr
     replies = {r["id"]: r["result"] for r in map(json.loads, stdout.splitlines())}
     assert replies[1]["protocolVersion"] == "2025-11-25"
-    assert {"runtime.start", "persistence.info", "developer.job"} <= {tool["name"] for tool in replies[2]["tools"]}
+    assert {"runtime.start", "persistence.info", "persistence.query.explain", "developer.job"} <= {
+        tool["name"] for tool in replies[2]["tools"]
+    }
     assert replies[3]["structuredContent"]["state"] == "running"
     assert replies[4]["structuredContent"]["state"] == "stopped"
     print("CLI and MCP stdio invoked the same Engine session", flush=True)
@@ -324,6 +361,7 @@ def main():
                         contract_and_security(*engine)
                         cli_and_mcp(engine[2])
                     persistence(engine[0], engine[1], provider, engine[3])
+                    portable_index_queries(engine[0], engine[1])
             with host(args.server, directory / "jobs", "server", limit_overrides={"queueDepth": 1},
                       arguments=("--tick-rate", "1")) as engine:
                 jobs(*engine)

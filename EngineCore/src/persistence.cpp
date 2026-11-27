@@ -22,6 +22,11 @@ public:
         : pin_(std::move(pin)), revision_(pin_->snapshot->Revision()), pageEntries_(pageEntries) {}
 
     CommitRevision Revision() const noexcept override { return revision_; }
+    std::size_t PageCapacity() const noexcept override { return pageEntries_; }
+    Result<CollectionSchema> Describe(const CollectionKey& collection) const override
+    {
+        return Read([&](const auto& snapshot) { return snapshot.Describe(collection); });
+    }
 
     Result<std::optional<Record>> Get(const RecordKey& key) const override
     {
@@ -96,6 +101,16 @@ struct Session::SnapshotRegistry {
 
 Session::Session(PersistencePolicy policy) : policy_(policy), snapshots_(std::make_unique<SnapshotRegistry>()) {}
 Session::~Session() = default;
+
+Result<IndexMaintenanceResult> Session::MaintainIndex(const IndexMaintenance&)
+{
+    return detail::Fail(ErrorCode::UnsupportedOperation, "Provider does not support index maintenance.");
+}
+
+Result<CollectionSchema> ReadSnapshot::Describe(const CollectionKey&) const
+{
+    return detail::Fail(ErrorCode::UnsupportedOperation, "Provider does not expose collection definitions.");
+}
 
 Result<std::unique_ptr<ReadSnapshot>> Session::OpenSnapshot() const
 {

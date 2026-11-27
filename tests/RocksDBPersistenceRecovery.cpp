@@ -96,6 +96,15 @@ void ProvisionalWrite(const fs::path& root)
     std::_Exit(72);
 }
 
+void ProvisionalIndexWrite(const fs::path& root)
+{
+    auto provider = Take(CreateRocksDBProvider({root, 2048, 4096, RocksDBCompression::None, RocksDBDurability::Process}));
+    auto session = Take(provider->OpenSession(Request()));
+    const IndexDefinition descending{{kValue}, true, {2}, {SortDirection::Descending}};
+    Take(session->MaintainIndex({kCollection, kOrdering, IndexOperation::Rebuild, descending, IndexVersion{1}}));
+    std::_Exit(74);
+}
+
 void Abandon(const fs::path& root)
 {
     auto provider = Take(CreateRocksDBProvider({root}));
@@ -194,6 +203,8 @@ int main(int argc, char* argv[])
             Crash(root, RocksDBDurability::Process);
         else if (mode == "provisional")
             ProvisionalWrite(root);
+        else if (mode == "provisional-index")
+            ProvisionalIndexWrite(root);
         else if (mode == "abandon")
             Abandon(root);
         else if (mode == "tear")

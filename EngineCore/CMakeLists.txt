@@ -9,6 +9,7 @@ add_library(engine_core STATIC
     src/foundation_gameplay.cpp
     src/mock_vr_provider.cpp
     src/persistence.cpp
+    src/persistence_query.cpp
     src/in_memory_persistence.cpp
 )
 target_include_directories(engine_core PUBLIC include)

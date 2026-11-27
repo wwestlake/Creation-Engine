@@ -40,8 +40,13 @@ inline Status ValidateSchema(const SessionSchema& schema)
                 return Fail(ErrorCode::InvalidArgument, "Invalid field definition.");
         }
         for (const auto& [name, index] : collection.indexes) {
-            if (name.value.empty() || index.fields.empty())
-                return Fail(ErrorCode::InvalidArgument, "Indexes require a name and at least one field.");
+            if (name.value.empty() || index.fields.empty() || index.version.value == 0)
+                return Fail(ErrorCode::InvalidArgument, "Indexes require a name, positive version and at least one field.");
+            if ((!index.directions.empty() && index.directions.size() != index.fields.size())
+                || !std::ranges::all_of(index.directions, [](auto order) {
+                    return order == SortDirection::Ascending || order == SortDirection::Descending;
+                }))
+                return Fail(ErrorCode::InvalidArgument, "Index direction must be declared for each component.");
             std::set<FieldId> indexed;
             for (const auto& field : index.fields) {
                 if (!collection.fields.contains(field) || !indexed.insert(field).second)
@@ -49,6 +54,58 @@ inline Status ValidateSchema(const SessionSchema& schema)
             }
         }
     }
+    return Null{};
+}
+
+inline const IndexDefinition* SelectedIndex(const QueryDescription& query, const CollectionSchema& schema)
+{
+    return query.index ? &schema.indexes.at(*query.index) : nullptr;
+}
+
+inline Result<CollectionSchema> MaintainDefinition(const CollectionSchema& original, const IndexMaintenance& request)
+{
+    if (request.index.value.empty() || request.maxRecords == 0)
+        return Fail(ErrorCode::InvalidArgument, "Index maintenance requires a name and a positive record budget.");
+    if (request.stop.stop_requested())
+        return Fail(ErrorCode::Cancelled, "Index maintenance was cancelled.");
+    auto next = original;
+    const auto current = next.indexes.find(request.index);
+    if (request.operation == IndexOperation::Create) {
+        if (current != next.indexes.end())
+            return Fail(ErrorCode::VersionConflict, "The index identifier is already registered.");
+        if (!request.definition || request.expectedVersion)
+            return Fail(ErrorCode::InvalidArgument, "Create requires a definition and accepts no expected version.");
+        next.indexes.emplace(request.index, *request.definition);
+    } else {
+        if (current == next.indexes.end())
+            return Fail(ErrorCode::UnknownIndex, "Unknown secondary index.");
+        if (request.expectedVersion && *request.expectedVersion != current->second.version)
+            return Fail(ErrorCode::VersionConflict, "The index version changed.");
+        if (request.operation == IndexOperation::Remove) {
+            if (request.definition)
+                return Fail(ErrorCode::InvalidArgument, "Remove accepts no index definition.");
+            next.indexes.erase(current);
+        } else if (request.operation == IndexOperation::Rebuild) {
+            if (request.definition && *request.definition != current->second) {
+                if (request.definition->version <= current->second.version)
+                    return Fail(ErrorCode::VersionConflict, "A changed definition requires a newer index version.");
+                current->second = *request.definition;
+            }
+        } else {
+            return Fail(ErrorCode::InvalidArgument, "Invalid index maintenance operation.");
+        }
+    }
+    if (const auto valid = ValidateSchema({{request.collection, next}}); !valid)
+        return valid.Error();
+    return next;
+}
+
+inline Status CheckMaintenance(const IndexMaintenance& request, std::size_t examined, bool nextRecord = false)
+{
+    if (request.stop.stop_requested())
+        return Fail(ErrorCode::Cancelled, "Index maintenance was cancelled.");
+    if (nextRecord && examined >= request.maxRecords)
+        return Fail(ErrorCode::ResourceLimit, "Index maintenance exceeded the configured record budget.");
     return Null{};
 }
 
@@ -90,9 +147,10 @@ inline bool AboveUpper(const QueryDescription& query, const IndexKey& key)
 }
 
 inline Status ValidateQuery(const QueryDescription& query, const std::vector<FieldDefinition>& fields,
-                     const SessionId& session, CommitRevision revision)
+                     const SessionId& session, CommitRevision revision, const IndexDefinition* definition)
 {
-    if (query.limit == 0 || query.prefix.size() > fields.size())
+    if (query.limit == 0 || query.prefix.size() > fields.size()
+        || (query.direction != SortDirection::Ascending && query.direction != SortDirection::Descending))
         return Fail(ErrorCode::InvalidArgument, "Invalid query limit or prefix length.");
     for (std::size_t i = 0; i < query.prefix.size(); ++i) {
         if (!MatchesType(query.prefix[i], fields[i]))
@@ -113,7 +171,8 @@ inline Status ValidateQuery(const QueryDescription& query, const std::vector<Fie
 
     const auto& cursor = *query.after;
     if (cursor.session != session || cursor.collection != query.collection || cursor.index != query.index
-        || cursor.key.size() != fields.size() || cursor.id.value.empty())
+        || cursor.key.size() != fields.size() || cursor.id.value.empty() || cursor.direction != query.direction
+        || (cursor.definition && (!definition || *cursor.definition != *definition)))
         return Fail(ErrorCode::InvalidArgument, "Cursor does not belong to this query target.");
     if (cursor.revision != revision)
         return Fail(ErrorCode::HistoryUnavailable, "Cursor requires its original snapshot revision.");
@@ -125,6 +184,13 @@ inline Status ValidateQuery(const QueryDescription& query, const std::vector<Fie
         || (!query.index && cursor.key.front() != FieldValue{cursor.id.value}))
         return Fail(ErrorCode::InvalidArgument, "Cursor is outside the query bounds.");
     return Null{};
+}
+
+inline QueryCursor MakeCursor(const QueryDescription& query, const SessionId& session, CommitRevision revision,
+                              const IndexDefinition* definition, IndexKey key, const RecordId& id)
+{
+    return {session, revision, query.collection, query.index, std::move(key), id, {}, query.direction,
+            definition ? std::optional{*definition} : std::nullopt};
 }
 
 inline std::optional<IndexKey> ProjectIndexKey(const IndexDefinition& index, const RecordData& data)

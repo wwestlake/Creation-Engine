@@ -39,7 +39,7 @@ bool BoundedJson(std::string_view json)
         } else if (c == '"') {
             quoted = true;
         } else if (c == '{' || c == '[') {
-            if (++depth > 16) return false;
+            if (++depth > 24) return false;
         } else if (c == '}' || c == ']') {
             if (depth == 0) return false;
             finished = --depth == 0;
