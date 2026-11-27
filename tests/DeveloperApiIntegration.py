@@ -236,6 +236,7 @@ def contract_and_security(controller, read, env, discovery):
     expect_http("forbidden", *raw(port, "GET", "/v1/discovery", read_token, headers={"Host": "example.invalid"}), 403)
     expect_http("forbidden", *raw(port, "POST", "/v1/commands/runtime.stop", read_token, "{}"), 403)
     expect_http("unsupported", *raw(port, "POST", "/v1/commands/unknown", control, "{}"), 404)
+    expect_http("unsupported", *raw(port, "POST", "/v1/commands/persistence.index.rebuild", control, "{}"), 404)
     expect_http("invalid_input", *raw(port, "POST", "/v1/commands/runtime.inspect", read_token, '{"requestId":'), 400)
     bad = json.dumps({"requestId": new_id(), "arguments": {"ticks": 121}})
     expect_http("invalid_input", *raw(port, "POST", "/v1/commands/runtime.step", control, bad), 400)
@@ -269,6 +270,12 @@ def cli_and_mcp(environment):
     completed = subprocess.run([*cli, "run", "runtime.inspect"], env=environment, text=True,
                                capture_output=True, check=True, timeout=10)
     assert json.loads(completed.stdout)["result"]["state"] == "stopped"
+    controller = Client(environment["DJEHUTI_DEV_URL"], environment["DJEHUTI_DEV_TOKEN"])
+    snapshot = result(controller, "persistence.snapshot.open")["snapshot"]
+    scope = {"snapshot": snapshot, "namespace": b64(b"automation"), "collection": b64(b"records")}
+    catalog = subprocess.run([*cli, "run", "persistence.indexes", json.dumps(scope)], env=environment, text=True,
+                             capture_output=True, check=True, timeout=10)
+    assert json.loads(catalog.stdout)["result"]["indexes"][0]["status"] == "ready"
     with subprocess.Popen([sys.executable, "-B", str(ROOT / "scripts" / "developer_mcp.py")],
                           env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           text=True) as process:
@@ -278,6 +285,8 @@ def cli_and_mcp(environment):
             {"method": "notifications/initialized"}, {"id": 2, "method": "tools/list"},
             {"id": 3, "method": "tools/call", "params": {"name": "runtime.start", "arguments": {"source": "fixture"}}},
             {"id": 4, "method": "tools/call", "params": {"name": "runtime.stop", "arguments": {}}},
+            {"id": 5, "method": "tools/call", "params": {"name": "persistence.query.explain",
+                "arguments": dict(scope, limit=1)}},
         ]
         wire = "".join(json.dumps(dict(message, jsonrpc="2.0")) + "\n" for message in messages)
         try:
@@ -294,6 +303,8 @@ def cli_and_mcp(environment):
     }
     assert replies[3]["structuredContent"]["state"] == "running"
     assert replies[4]["structuredContent"]["state"] == "stopped"
+    assert replies[5]["structuredContent"]["plan"]["access"] == "primary_scan"
+    result(controller, "persistence.snapshot.release", {"snapshot": snapshot})
     print("CLI and MCP stdio invoked the same Engine session", flush=True)
 
 
@@ -372,6 +383,7 @@ def main():
         if args.editor:
             with host(args.editor, directory / "editor", "editor") as engine:
                 lifecycle(engine[0], "editor")
+                portable_index_queries(engine[0], engine[1])
 
 
 if __name__ == "__main__":
