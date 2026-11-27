@@ -167,7 +167,7 @@ add_library(engine_developer_api STATIC
 target_include_directories(engine_developer_api PUBLIC Source)
 target_include_directories(engine_developer_api SYSTEM PRIVATE "${engine_httplib_SOURCE_DIR}" "${JUCE_DIR}/modules")
 target_compile_features(engine_developer_api PUBLIC cxx_std_20)
-target_compile_definitions(engine_developer_api PRIVATE JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 JUCE_USE_CURL=0
+target_compile_definitions(engine_developer_api PRIVATE JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 JUCE_USE_CURL=0 JUCE_INCLUDE_ZLIB_CODE=0
     $<$<CONFIG:Debug>:DEBUG=1> $<$<CONFIG:Debug>:_DEBUG=1>)
 target_link_libraries(engine_developer_api
     PUBLIC engine_core
@@ -814,12 +814,14 @@ target_include_directories(CreationEngineServer PRIVATE Source)
 target_compile_definitions(CreationEngineServer PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
+    JUCE_INCLUDE_ZLIB_CODE=0
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:CreationEngineServer,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:CreationEngineServer,JUCE_VERSION>"
 )
 
 target_link_libraries(CreationEngineServer PRIVATE
     engine_developer_api
+    ZLIB::ZLIB
     juce::juce_cryptography
     Jolt::Jolt
     engine_core
@@ -842,9 +844,9 @@ if(WIN32)
 endif()
 
 add_executable(CreationEngineDeveloperApiConformance tests/DeveloperApiConformance.cpp)
-target_compile_definitions(CreationEngineDeveloperApiConformance PRIVATE JUCE_USE_CURL=0)
+target_compile_definitions(CreationEngineDeveloperApiConformance PRIVATE JUCE_USE_CURL=0 JUCE_INCLUDE_ZLIB_CODE=0)
 target_link_libraries(CreationEngineDeveloperApiConformance PRIVATE
-    engine_developer_api juce::juce_cryptography juce::juce_recommended_config_flags)
+    engine_developer_api ZLIB::ZLIB juce::juce_cryptography juce::juce_recommended_config_flags)
 if(WIN32)
     creation_engine_stage_package_dlls(CreationEngineDeveloperApiConformance "${ZLIB_LIBRARY_DEBUG}" "$<CONFIG:Debug>")
     creation_engine_stage_package_dlls(CreationEngineDeveloperApiConformance "${ZLIB_LIBRARY_RELEASE}" "$<NOT:$<CONFIG:Debug>>")

@@ -83,6 +83,12 @@ def host(executable, directory, mode, provider="memory", limit_overrides=None, a
             discovery = wait_for(ready, 40)
             assert discovery["processMode"] == mode, discovery
             yield controller, reader, env, discovery
+        except Exception:
+            log.seek(0)
+            tail = log.read().decode("utf-8", errors="replace").replace(read, "[redacted]").replace(control, "[redacted]")
+            if tail:
+                print(tail[-4000:], file=sys.stderr, flush=True)
+            raise
         finally:
             if process.poll() is None:
                 process.terminate()
