@@ -67,8 +67,11 @@ def host(executable, directory, mode, provider="memory", limit_overrides=None, a
     flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     executable = executable.resolve()
     with (directory / f"{mode}-{provider}.log").open("w+b") as log:
+        # A Windows editor can bootstrap the shared VFS, which outlives the
+        # fixture and can inherit its stdout. Keep that handle off the fixture log.
+        output = subprocess.DEVNULL if mode == "editor" and os.name == "nt" else log
         process = subprocess.Popen([str(executable), *arguments], cwd=executable.parent, env=env,
-                                   stdout=log, stderr=subprocess.STDOUT, creationflags=flags)
+                                   stdout=output, stderr=subprocess.STDOUT, creationflags=flags)
         try:
             reader, controller = Client(endpoint, read), Client(endpoint, control)
 
