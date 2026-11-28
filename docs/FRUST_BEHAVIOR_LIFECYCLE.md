@@ -1,5 +1,6 @@
 # FRust Behavior Lifecycle
 
+The [common world runtime](RUNTIME_PARITY.md) controls this lifecycle in Play in Editor, local clients and the dedicated server.
 Creation Engine owns application and simulation timing. FRust behavior pods
 participate in that schedule; they do not create a game loop or present frames.
 

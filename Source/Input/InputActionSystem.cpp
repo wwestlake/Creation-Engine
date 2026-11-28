@@ -110,10 +110,16 @@ void InputActionSystem::LoadForGame(const creation::assets::ProjectSession& sess
     previous_.clear();
 }
 
-void InputActionSystem::PollOncePerFrame()
+void InputActionSystem::PollOncePerFrame(bool acceptLocalInput)
 {
     previous_ = current_;
     current_.clear();
+    firedCombos_.clear();
+    if (!acceptLocalInput) {
+        previousRawKeysDown_.clear();
+        recentKeyDownEvents_.clear();
+        return;
+    }
 
     // See EvaluateDigitalSource's own comment: this only suppresses
     // KeyboardKey/MouseButton bindings, not controller ones.
@@ -142,7 +148,6 @@ void InputActionSystem::PollOncePerFrame()
     // the (typically small) set of keys any defined combo actually cares
     // about, so this stays cheap even with dozens of unrelated Actions
     // bound elsewhere.
-    firedCombos_.clear();
     std::unordered_map<int, bool> currentRawKeysDown;
     for (const auto& combo : bindings_.combos) {
         for (const auto& key : combo.keys) {

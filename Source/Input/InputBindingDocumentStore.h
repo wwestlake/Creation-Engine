@@ -19,6 +19,9 @@ public:
                       InputBindingSet& result,
                       juce::String& errorMessage);
 
+    static std::vector<std::string> listComboNames(const creation::assets::ProjectSession& session,
+                                                   const project::GameDocumentInfo& game);
+
     static bool save(creation::assets::ProjectSession& session,
                       project::GameDocumentInfo& game,
                       const juce::String& contextId,

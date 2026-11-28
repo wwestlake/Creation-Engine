@@ -4,10 +4,11 @@
 #include <cmath>
 #include <iostream>
 
-#include "engine/simulation.h"
 #include "engine/world.h"
 #include "Project/EngineGameDocument.h"
 #include "Frust/EngineFrustHost.h"
+#include "Physics/PhysicsWorld.h"
+#include "Runtime/RuntimeDeveloperInspection.h"
 #include "DeveloperApi/DeveloperApi.h"
 
 #include <creation/assets/ProjectWorkspaceService.h>
@@ -16,7 +17,6 @@
 namespace {
 
 struct ServerConfig {
-    int port = 7777;
     double tickRateHz = 30.0;
     // -1 runs the server loop forever. A non-negative value is a useful
     // deterministic smoke-test mode for the host simulation clock.
@@ -32,9 +32,6 @@ struct ServerConfig {
 // file or launch parameters, without rebuilding the binary").
 ServerConfig ParseArgs(const juce::ArgumentList& args) {
     ServerConfig config;
-    if (auto index = args.indexOfOption("--port"); index >= 0 && index + 1 < args.size()) {
-        config.port = args[index + 1].text.getIntValue();
-    }
     if (auto index = args.indexOfOption("--tick-rate"); index >= 0 && index + 1 < args.size()) {
         config.tickRateHz = args[index + 1].text.getDoubleValue();
     }
@@ -60,7 +57,8 @@ const Document* FindDocument(const juce::Array<Document>& documents, const juce:
     return nullptr;
 }
 
-bool LoadAuthoredWorld(const ServerConfig& config, ce::engine::World& world, juce::String& error)
+bool OpenAuthoredGame(const ServerConfig& config, ce::runtime::RuntimeGameSource& source,
+                      ce::project::SceneDocumentInfo& entry, juce::String& error)
 {
     if (config.projectId.isEmpty()) return true;
     creation::suite::SuiteSettingsStore settingsStore;
@@ -74,7 +72,9 @@ bool LoadAuthoredWorld(const ServerConfig& config, ce::engine::World& world, juc
     const auto* scene = config.sceneId.isEmpty()
         ? FindDocument(game->scenes, game->entrySceneId) : FindDocument(game->scenes, config.sceneId);
     if (scene == nullptr) { error = "The requested Engine scene was not found."; return false; }
-    return ce::project::EngineGameDocumentStore::loadScene(session, *game, *scene, world, error);
+    entry = *scene;
+    source = ce::runtime::FromProject(std::move(session), *game);
+    return true;
 }
 
 } // namespace
@@ -94,71 +94,70 @@ int main(int argc, char* argv[]) {
     }
 
     ce::engine::World world;
-    juce::String loadError;
-    if ((!developerSettings.enabled || config.ticks >= 0) && !LoadAuthoredWorld(config, world, loadError)) {
-        std::cerr << "[server] failed to load authored world: " << loadError << std::endl;
-        return 2;
-    }
-
+    ce::physics::PhysicsWorld physics;
+    physics.AttachToWorld(world);
     ce::frust::EngineFrustHost frustHost(world, true);
-    std::string frustError;
-    if (!frustHost.loadBundled(frustError)) {
-        std::cerr << "[server] failed to load authoritative FRust plugins: " << frustError << std::endl;
-        return 1;
-    }
-
     const float stepDt = config.dt >= 0.0f ? config.dt : static_cast<float>(1.0 / config.tickRateHz);
+    ce::runtime::RuntimeWorldRunner worldRuntime(world, physics, frustHost, stepDt);
 
-    const auto tickIntervalMs = std::max(1, static_cast<int>(1000.0 / config.tickRateHz));
-    const auto tick = [&] {
-        ce::engine::Simulation::Step(world, stepDt);
-        frustHost.tick(static_cast<std::int64_t>(world.CurrentTick()));
+    juce::String loadError;
+    const auto start = [&](Source requested) {
+        ce::runtime::RuntimeGameSource source;
+        ce::project::SceneDocumentInfo scene;
+        loadError.clear();
+        if (requested == Source::fixture) {
+            source = ce::runtime::DeveloperFixture();
+            if (!source.game.scenes.isEmpty())
+                scene = source.game.scenes.getFirst();
+        } else if (!OpenAuthoredGame(config, source, scene, loadError)) {
+            return false;
+        }
+        if (worldRuntime.Start(std::move(source), std::move(scene)))
+            return true;
+        loadError = worldRuntime.LastError();
+        return false;
     };
+    const auto tickIntervalMs = std::max(1, static_cast<int>(1000.0 / config.tickRateHz));
+    const auto tick = [&] { worldRuntime.Tick(); };
+
+    if (!developerSettings.enabled || config.ticks >= 0) {
+        if (!start(Source::authored)) {
+            std::cerr << "[server] failed to start the runtime: " << loadError << std::endl;
+            return 2;
+        }
+    }
 
     if (config.ticks >= 0) {
-        frustHost.beginPlay(0);
         for (int i = 0; i < config.ticks; ++i) tick();
-        frustHost.endPlay(static_cast<std::int64_t>(world.CurrentTick()));
         std::cout << "[server] completed " << world.CurrentTick() << " ticks" << std::endl;
         return 0;
     }
 
     if (developerSettings.enabled) {
         developerSettings.allowAuthored = config.projectId.isNotEmpty();
+        const bool fixtureAllowed = developerSettings.allowFixture;
         auto phase = Phase::stopped;
-        const auto reset = [&] {
-            {
-                std::lock_guard lock(world.RegistryMutex());
-                world.Registry().clear();
-            }
-            world.ResetTick();
-        };
         RuntimeCommands runtime({
             [&] { return phase; },
             [&] { return world.CurrentTick(); },
             [&](Source source) {
                 if (source == Source::authored && config.projectId.isEmpty()) return false;
-                reset();
-                if (source == Source::authored && !LoadAuthoredWorld(config, world, loadError)) {
-                    reset();
-                    return false;
-                }
-                frustHost.prepareLevel(0);
-                frustHost.beginPlay(0);
+                if (!start(source)) return false;
                 phase = Phase::running;
                 return true;
             },
             [&] { phase = Phase::paused; },
             [&] { phase = Phase::running; return true; },
-            [&] {
-                frustHost.endPlay(static_cast<std::int64_t>(world.CurrentTick()));
-                reset();
-                frustHost.prepareLevel(0);
-                phase = Phase::stopped;
-                return true;
-            },
+            [&] { worldRuntime.Stop(); phase = Phase::stopped; return true; },
             tick,
-            [&] { return Object({{"tickRateHz", config.tickRateHz}, {"authoredConfigured", config.projectId.isNotEmpty()}}); }
+            [&] {
+                auto diagnostics = ce::runtime::RuntimeDiagnostics(worldRuntime, world, fixtureAllowed);
+                auto* properties = diagnostics.getDynamicObject();
+                properties->setProperty("tickRateHz", config.tickRateHz);
+                properties->setProperty("authoredConfigured", config.projectId.isNotEmpty());
+                if (loadError.isNotEmpty()) properties->setProperty("runtimeError", loadError);
+                return diagnostics;
+            }
         });
         try {
             auto mount = MakeTestMount(developerSettings);
@@ -179,10 +178,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    std::cout << "Creation Engine dedicated server starting on port " << config.port << " at " << config.tickRateHz
-              << " Hz." << std::endl;
+    std::cout << "Creation Engine dedicated server starting at " << config.tickRateHz << " Hz." << std::endl;
     const auto startTime = juce::Time::getMillisecondCounterHiRes();
-    frustHost.beginPlay(0);
     while (true) {
         tick();
         if (world.CurrentTick() % static_cast<ce::engine::Tick>(config.tickRateHz * 10) == 0) {

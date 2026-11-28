@@ -107,11 +107,7 @@ private:
     // already did; physicsElapsedSeconds is threaded through since
     // PostPhysics (possession) needs the same real-elapsed-time value
     // PhysicsResolve computed.
-    void RunPreUpdatePhase();
-    float RunPhysicsResolvePhase();
-    void RunPostPhysicsPhase(float physicsElapsedSeconds);
     void RunRuntimeFrame();
-    void RunRuntimeFrame(float elapsedSeconds);
     void UpdatePossessedCharacter(float physicsElapsedSeconds);
     bool beginAutomaticPlayerPossession(bool placeAtSpawn, juce::String& error);
     void releaseEditorPossession();
@@ -253,7 +249,6 @@ private:
     creation::services::SuiteProcessRegistration suiteProcessRegistration_;
     ce::project::GameDocumentInfo activeGame_;
     ce::project::SceneDocumentInfo activeScene_;
-    juce::String pendingSceneTransitionId_;
     juce::Array<ce::project::GameDocumentInfo> games_;
     bool projectDirty_ = false;
     juce::ApplicationCommandManager commandManager_;
@@ -263,13 +258,13 @@ private:
     // a dockable panel (Core Architectural Invariant 4, Jolt vendoring
     // plan). AttachToWorld() is called once, in the constructor body.
     ce::physics::PhysicsWorld physicsWorld_;
-    double lastPhysicsAdvanceSeconds_ = 0.0;
     ce::interaction::EditorInteraction interactions_ { world_ };
     ce::frust::EngineFrustHost frustHost_ { world_ };
     ce::input::InputActionSystem inputActionSystem_;
     ce::runtime::PossessionService possessionService_ { world_, physicsWorld_, inputActionSystem_ };
     ce::runtime::CameraDirector cameraDirector_;
-    ce::runtime::RuntimeWorldRunner runtimeWorldRunner_ { world_, physicsWorld_, frustHost_, inputActionSystem_ };
+    ce::frust::EngineFrustHost runtimeFrustHost_ { world_ };
+    ce::runtime::RuntimeWorldRunner runtimeWorldRunner_ { world_, physicsWorld_, runtimeFrustHost_ };
     // Named registry of Pods (docs/BEHAVIOR_COMPONENT_MODEL.md, and the
     // Pod Management System plan generalizing it) -- owned here since
     // both PodEditorPanel (editing) and behaviorAttachmentPanel_
@@ -288,6 +283,8 @@ private:
     juce::String developerDiscoveryId_;
     ce::developer::RuntimeCommands runtimeCommands_{RuntimeOperations()};
     std::unique_ptr<ce::developer::DeveloperApi> developerApi_;
+    std::unique_ptr<ce::runtime::GameClientWindow> developerFixtureClient_;
+    std::unique_ptr<ce::developer::DeveloperApi> developerFixtureClientApi_;
     // Captured once at the first Play press. Pause intentionally retains it
     // so Play resumes; Stop restores it and discards runtime-only changes.
     juce::ValueTree playModeSceneSnapshot_;
@@ -401,6 +398,7 @@ private:
 
     std::unique_ptr<CreationDock::DockManager> dockManager_;
     std::vector<std::unique_ptr<ce::runtime::GameClientWindow>> gameClients_;
+    int nextClientNumber_ = 1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

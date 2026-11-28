@@ -24,7 +24,7 @@ juce::MemoryBlock ToMemory(const juce::ValueTree& tree)
     return { text.toRawUTF8(), static_cast<std::size_t>(text.getNumBytesAsUTF8()) };
 }
 
-bool ReadTree(creation::assets::ProjectSession& session, const juce::String& path,
+bool ReadTree(const creation::assets::ProjectSession& session, const juce::String& path,
               juce::ValueTree& result, juce::String& error)
 {
     juce::MemoryBlock data;
@@ -423,21 +423,28 @@ bool EngineGameDocumentStore::saveScene(creation::assets::ProjectSession& sessio
     return true;
 }
 
-bool EngineGameDocumentStore::loadScene(creation::assets::ProjectSession& session,
-                                        const GameDocumentInfo& game,
-                                        const SceneDocumentInfo& scene,
-                                        ce::engine::World& world,
-                                        juce::String& errorMessage)
+bool EngineGameDocumentStore::readSceneState(const creation::assets::ProjectSession& session,
+                                             const GameDocumentInfo& game, const SceneDocumentInfo& scene,
+                                             juce::ValueTree& state, juce::String& errorMessage, bool* upgradedLegacy)
 {
     juce::ValueTree document;
     if (!ReadTree(session, game.scenePath(scene.id), document, errorMessage)) return false;
-    auto sceneState = document.hasType("CreationEngineSceneDocument")
+    state = document.hasType("CreationEngineSceneDocument")
         ? document.getChildWithName("CreationEngineScene") : document;
-    const bool upgradedLegacyDefaultScene = UpgradeUntouchedLegacyDefaultScenePhysics(sceneState);
-    if (!ce::scene::EngineSceneSerializer::restoreScene(world, sceneState)) {
-        errorMessage = "Scene data could not be restored: " + scene.name;
-        return false;
+    if (state.hasType("CreationEngineScene")) {
+        const bool upgraded = UpgradeUntouchedLegacyDefaultScenePhysics(state);
+        if (upgradedLegacy != nullptr) *upgradedLegacy = upgraded;
+        return true;
     }
+    errorMessage = "Invalid scene data: " + scene.name;
+    return false;
+}
+
+bool EngineGameDocumentStore::restoreSceneState(ce::engine::World& world, const SceneDocumentInfo& scene,
+                                                 const juce::ValueTree& state)
+{
+    if (!ce::scene::EngineSceneSerializer::restoreScene(world, state)) return false;
+    if (scene.id.isEmpty()) return true;
 
     // The Scene itself is a real Thing with its own metric (see
     // docs/OBJECT_MODEL.md's "Entity, Thing, Object" section) -- a root
@@ -467,6 +474,23 @@ bool EngineGameDocumentStore::loadScene(creation::assets::ProjectSession& sessio
             if (const auto* parent = reg.try_get<ce::scene::Parent>(entity); parent == nullptr || parent->value == entt::null)
                 reg.emplace_or_replace<ce::scene::Parent>(entity, ce::scene::Parent{ root });
         }
+    }
+
+    return true;
+}
+
+bool EngineGameDocumentStore::loadScene(creation::assets::ProjectSession& session,
+                                        const GameDocumentInfo& game,
+                                        const SceneDocumentInfo& scene,
+                                        ce::engine::World& world,
+                                        juce::String& errorMessage)
+{
+    juce::ValueTree sceneState;
+    bool upgradedLegacyDefaultScene = false;
+    if (!readSceneState(session, game, scene, sceneState, errorMessage, &upgradedLegacyDefaultScene)) return false;
+    if (!restoreSceneState(world, scene, sceneState)) {
+        errorMessage = "Scene data could not be restored: " + scene.name;
+        return false;
     }
 
     world.ResetTick();

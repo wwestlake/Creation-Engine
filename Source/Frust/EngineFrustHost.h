@@ -50,8 +50,14 @@ public:
     bool load(const std::string& pluginPath, std::string& error);
     bool loadBundled(std::string& error);
     bool loadObjectBehavior(const std::string& podId, const std::string& pluginPath, std::string& error);
+    using ReadModule = std::function<bool(const std::string&, std::string&)>;
+    bool loadObjectBehaviorSource(const std::string& podId, const std::string& source,
+                                  const ReadModule& readModule, std::string& error);
     std::int64_t dispatch(EngineFrustEvent event, std::int64_t argument = 0);
     void prepareLevel(std::int64_t tick);
+    void releaseLevel(std::int64_t tick);
+    void unloadObjectBehaviors();
+    [[nodiscard]] std::vector<std::string> behaviorIds() const;
     void beginPlay(std::int64_t tick);
     void prePhysicsTick(std::int64_t tick);
     void postPhysicsTick(std::int64_t tick);
@@ -156,7 +162,7 @@ private:
     static std::int64_t animGetClipDurationMillis(std::int64_t entityId, const char* clipName);
     static bool animIsBlending(std::int64_t entityId);
     // Input Binding System plan -- host-extern nodes backing
-    // Domain::Input, delegating to InputActionSystem (process-global, no
+    // Domain::Input, delegating to this world's InputActionSystem (no
     // entity dimension, matching engine::GameplayInput's own shape).
     static bool inputIsActionActive(const char* actionName);
     static bool inputWasActionPressed(const char* actionName);
@@ -209,12 +215,12 @@ private:
         std::set<std::string> playingPods;
     };
 
-    static EngineFrustHost* activeHost;
+    class CallbackScope;
+    static EngineFrustHost* callbackHost() noexcept;
 
     engine::World& world;
     creation::frust::PluginRuntime runtime { "creation-engine" };
     node_system::NodeLibraryRegistry nodeLibraries_;
-    std::int64_t activeObjectEntityId = -1;
     bool playActive = false;
     std::function<void(const std::string&)> sceneTransitionRequestHandler;
     std::function<std::string()> activeGameIdProvider;

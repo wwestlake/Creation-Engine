@@ -13,6 +13,15 @@ node loop pub fn core_repeat(count: i64) -> i64 = {
 }
 
 extern fn engine_current_object_entity() -> i64;
+extern fn engine_first_transform_entity() -> i64;
+
+pub fn on_init() -> i64 = {
+    engine_set_position_x(engine_first_transform_entity(), 50)
+}
+
+pub fn on_unload() -> i64 = {
+    engine_set_position_x(engine_first_transform_entity(), 0 - 50)
+}
 extern fn engine_set_position_x(entity: i64, position_x: i64) -> i64;
 
 pub fn on_spawn(tick: i64) -> i64 = {

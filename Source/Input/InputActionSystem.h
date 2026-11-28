@@ -84,7 +84,7 @@ public:
     // line inside `if (isPlaying_)`, before Simulation::Step/
     // FoundationGameplay::Step/frustHost_.tick()) so a Pod's on_tick this
     // same tick sees this tick's poll, not last tick's.
-    void PollOncePerFrame();
+    void PollOncePerFrame(bool acceptLocalInput = true);
 
     [[nodiscard]] bool IsActionActive(const juce::String& actionName) const;
     [[nodiscard]] bool WasActionPressed(const juce::String& actionName) const;  // edge: false->true this tick.

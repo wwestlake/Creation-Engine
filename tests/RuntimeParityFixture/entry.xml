@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CreationEngineScene>
+  <Entities>
+    <Entity id="1" instanceId="runtime-probe-instance" name="Runtime Probe">
+      <Transform posY="3" posZ="1" />
+      <RigidBody motionType="2" />
+      <Collider shape="1" radius="0.5" />
+      <Behaviors><Behavior podId="runtime-probe" /></Behaviors>
+    </Entity>
+    <Entity id="2" instanceId="runtime-floor-instance" name="Floor">
+      <Transform posY="-0.5" posZ="1" />
+      <RigidBody motionType="0" />
+      <Collider shape="0" halfExtentX="5.0" halfExtentY="0.5" halfExtentZ="5.0" />
+    </Entity>
+  </Entities>
+</CreationEngineScene>

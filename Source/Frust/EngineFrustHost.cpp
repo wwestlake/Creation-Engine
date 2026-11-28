@@ -22,12 +22,36 @@ namespace
 using ObjectLifecycleHook = std::int64_t (*)(std::int64_t);
 }
 
-EngineFrustHost* EngineFrustHost::activeHost = nullptr;
+// The FRust host ABI has no userdata parameter. Set the context only while
+// executing JIT code. A nested invocation restores its caller's world and entity.
+class EngineFrustHost::CallbackScope final
+{
+public:
+    explicit CallbackScope(EngineFrustHost& owner, std::int64_t entityId = -1)
+        : host(owner), entity(entityId), previous(current) { current = this; }
+    ~CallbackScope() { current = previous; }
+    CallbackScope(const CallbackScope&) = delete;
+    CallbackScope& operator=(const CallbackScope&) = delete;
+
+    EngineFrustHost& host;
+    const std::int64_t entity;
+    std::string variableValue, animationClip, gameId, sceneId;
+    static thread_local CallbackScope* current;
+
+private:
+    CallbackScope* const previous;
+};
+
+thread_local EngineFrustHost::CallbackScope* EngineFrustHost::CallbackScope::current = nullptr;
+
+EngineFrustHost* EngineFrustHost::callbackHost() noexcept
+{
+    return CallbackScope::current != nullptr ? &CallbackScope::current->host : nullptr;
+}
 
 EngineFrustHost::EngineFrustHost(engine::World& worldToHost, bool isServerHost)
     : world(worldToHost), serverMode(isServerHost)
 {
-    activeHost = this;
     runtime.registerHostFunction("engine_current_tick", reinterpret_cast<void*>(&EngineFrustHost::currentTick));
     runtime.registerHostFunction("engine_runtime_is_server", reinterpret_cast<void*>(&EngineFrustHost::runtimeIsServer));
     runtime.registerHostFunction("engine_first_transform_entity", reinterpret_cast<void*>(&EngineFrustHost::firstTransformEntity));
@@ -108,14 +132,13 @@ EngineFrustHost::EngineFrustHost(engine::World& worldToHost, bool isServerHost)
 
 EngineFrustHost::~EngineFrustHost()
 {
+    const CallbackScope scope(*this);
     runtime.unloadAll();
-    if (activeHost == this) {
-        activeHost = nullptr;
-    }
 }
 
 bool EngineFrustHost::load(const std::string& pluginPath, std::string& error)
 {
+    const CallbackScope scope(*this);
     if (!runtime.load(pluginPath, error)) {
         return false;
     }
@@ -128,6 +151,7 @@ bool EngineFrustHost::load(const std::string& pluginPath, std::string& error)
 
 bool EngineFrustHost::loadBundled(std::string& error)
 {
+    const CallbackScope scope(*this);
     const auto executable = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
     const auto plugins = executable.getParentDirectory().getChildFile("plugins");
     const auto pluginFile = plugins.getChildFile("EngineLifecycle.frust");
@@ -146,6 +170,7 @@ bool EngineFrustHost::loadBundled(std::string& error)
 
 bool EngineFrustHost::loadObjectBehavior(const std::string& podId, const std::string& pluginPath, std::string& error)
 {
+    const CallbackScope scope(*this);
     if (podId.empty()) {
         error = "An object behavior needs a non-empty pod identifier.";
         return false;
@@ -161,8 +186,32 @@ bool EngineFrustHost::loadObjectBehavior(const std::string& podId, const std::st
     return false;
 }
 
+bool EngineFrustHost::loadObjectBehaviorSource(const std::string& podId, const std::string& source,
+                                                const ReadModule& readModule, std::string& error)
+{
+    const CallbackScope scope(*this);
+    ::frust::CompileRequest request;
+    request.sources.push_back({ podId + ".frust", source });
+    request.siblingFiles = [&readModule](const std::string& name, std::string& contents) {
+        const auto module = juce::String(name).replaceCharacter('\\', '/').fromLastOccurrenceOf("/", false, false);
+        if (!module.endsWith(".frust") || module.containsAnyOf(":") || module.startsWith("."))
+            return false;
+        // The built-in library is the same module used by the graph editor.
+        if (module != "CoreNodesLibrary.frust")
+            return readModule && readModule(module.toStdString(), contents);
+        const auto executable = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
+        const auto file = executable.getSiblingFile("plugins").getChildFile(module);
+        if (!file.existsAsFile())
+            return false;
+        contents = file.loadFileAsString().toStdString();
+        return true;
+    };
+    return runtime.loadSource(behaviorKey(podId), request, error);
+}
+
 std::int64_t EngineFrustHost::dispatch(EngineFrustEvent event, std::int64_t argument)
 {
+    const CallbackScope scope(*this);
     return runtime.callEvent(static_cast<std::int64_t>(event), argument);
 }
 
@@ -293,6 +342,38 @@ void EngineFrustHost::notifyObjectDestroyed(entt::entity entity, std::int64_t ti
     objectLifecycles.erase(found);
 }
 
+void EngineFrustHost::releaseLevel(std::int64_t tick)
+{
+    endPlay(tick);
+    for (const auto& [entityId, podId] : attachedObjectBehaviors()) {
+        (void)podId;
+        notifyObjectDestroyed(static_cast<entt::entity>(entityId), tick);
+    }
+    objectLifecycles.clear();
+    lastRaycastHit_ = {};
+}
+
+void EngineFrustHost::unloadObjectBehaviors()
+{
+    const CallbackScope scope(*this);
+    for (const auto& key : runtime.loadedPluginKeys()) {
+        if (key.starts_with("object-behavior:"))
+            runtime.unload(key);
+    }
+}
+
+std::vector<std::string> EngineFrustHost::behaviorIds() const
+{
+    std::vector<std::string> result;
+    for (const auto& [entityId, podId] : attachedObjectBehaviors()) {
+        (void)entityId;
+        result.push_back(podId);
+    }
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
 void EngineFrustHost::setSceneTransitionRequestHandler(std::function<void(const std::string&)> handler)
 {
     sceneTransitionRequestHandler = std::move(handler);
@@ -344,22 +425,25 @@ bool EngineFrustHost::registerNodeLibraries(const std::string& key, std::string&
 
 std::int64_t EngineFrustHost::currentTick()
 {
-    return activeHost != nullptr ? static_cast<std::int64_t>(activeHost->world.CurrentTick()) : 0;
+    auto* const host = callbackHost();
+    return host != nullptr ? static_cast<std::int64_t>(host->world.CurrentTick()) : 0;
 }
 
 std::int64_t EngineFrustHost::runtimeIsServer()
 {
-    return activeHost != nullptr && activeHost->serverMode ? 1 : 0;
+    auto* const host = callbackHost();
+    return host != nullptr && host->serverMode ? 1 : 0;
 }
 
 std::int64_t EngineFrustHost::firstTransformEntity()
 {
-    if (activeHost == nullptr) {
+    auto* const host = callbackHost();
+    if (host == nullptr) {
         return -1;
     }
 
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    const auto view = activeHost->world.Registry().view<engine::Transform>();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    const auto view = host->world.Registry().view<engine::Transform>();
     const auto first = view.begin();
     if (first == view.end()) {
         return -1;
@@ -369,15 +453,16 @@ std::int64_t EngineFrustHost::firstTransformEntity()
 
 std::int64_t EngineFrustHost::currentObjectEntity()
 {
-    return activeHost != nullptr ? activeHost->activeObjectEntityId : -1;
+    return CallbackScope::current != nullptr ? CallbackScope::current->entity : -1;
 }
 
 std::int64_t EngineFrustHost::entityFindByName(const char* name)
 {
-    if (activeHost == nullptr || name == nullptr) return -1;
+    auto* const host = callbackHost();
+    if (host == nullptr || name == nullptr) return -1;
     const juce::String target(name);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    const auto view = activeHost->world.Registry().view<scene::Name>();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    const auto view = host->world.Registry().view<scene::Name>();
     for (const auto entity : view)
         if (view.get<scene::Name>(entity).value == target)
             return static_cast<std::int64_t>(entt::to_integral(entity));
@@ -386,10 +471,11 @@ std::int64_t EngineFrustHost::entityFindByName(const char* name)
 
 std::int64_t EngineFrustHost::entityFindByInstanceId(const char* instanceId)
 {
-    if (activeHost == nullptr || instanceId == nullptr) return -1;
+    auto* const host = callbackHost();
+    if (host == nullptr || instanceId == nullptr) return -1;
     const juce::String target(instanceId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    const auto view = activeHost->world.Registry().view<scene::InstanceId>();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    const auto view = host->world.Registry().view<scene::InstanceId>();
     for (const auto entity : view)
         if (view.get<scene::InstanceId>(entity).value == target)
             return static_cast<std::int64_t>(entt::to_integral(entity));
@@ -404,20 +490,22 @@ juce::Identifier PodVariableKey(const char* podId, const char* name) {
 
 bool EngineFrustHost::podGetVariableBool(std::int64_t entityId, const char* podId, const char* name)
 {
-    if (activeHost == nullptr || entityId < 0) return false;
+    auto* const host = callbackHost();
+    if (host == nullptr || entityId < 0) return false;
     const auto entity = static_cast<entt::entity>(entityId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    auto& registry = activeHost->world.Registry();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    auto& registry = host->world.Registry();
     const auto* state = registry.valid(entity) ? registry.try_get<scene::ObjectState>(entity) : nullptr;
     return state != nullptr && static_cast<bool>(state->values[PodVariableKey(podId, name)]);
 }
 
 std::int64_t EngineFrustHost::podSetVariableBool(std::int64_t entityId, const char* podId, const char* name, bool value)
 {
-    if (activeHost == nullptr || entityId < 0) return 0;
+    auto* const host = callbackHost();
+    if (host == nullptr || entityId < 0) return 0;
     const auto entity = static_cast<entt::entity>(entityId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    auto& registry = activeHost->world.Registry();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    auto& registry = host->world.Registry();
     if (!registry.valid(entity)) return 0;
     registry.get_or_emplace<scene::ObjectState>(entity).values.set(PodVariableKey(podId, name), value);
     return 1;
@@ -425,20 +513,22 @@ std::int64_t EngineFrustHost::podSetVariableBool(std::int64_t entityId, const ch
 
 std::int64_t EngineFrustHost::podGetVariableInt(std::int64_t entityId, const char* podId, const char* name)
 {
-    if (activeHost == nullptr || entityId < 0) return 0;
+    auto* const host = callbackHost();
+    if (host == nullptr || entityId < 0) return 0;
     const auto entity = static_cast<entt::entity>(entityId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    auto& registry = activeHost->world.Registry();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    auto& registry = host->world.Registry();
     const auto* state = registry.valid(entity) ? registry.try_get<scene::ObjectState>(entity) : nullptr;
     return state != nullptr ? static_cast<std::int64_t>(state->values[PodVariableKey(podId, name)]) : 0;
 }
 
 std::int64_t EngineFrustHost::podSetVariableInt(std::int64_t entityId, const char* podId, const char* name, std::int64_t value)
 {
-    if (activeHost == nullptr || entityId < 0) return 0;
+    auto* const host = callbackHost();
+    if (host == nullptr || entityId < 0) return 0;
     const auto entity = static_cast<entt::entity>(entityId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    auto& registry = activeHost->world.Registry();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    auto& registry = host->world.Registry();
     if (!registry.valid(entity)) return 0;
     registry.get_or_emplace<scene::ObjectState>(entity).values.set(PodVariableKey(podId, name), value);
     return 1;
@@ -446,12 +536,14 @@ std::int64_t EngineFrustHost::podSetVariableInt(std::int64_t entityId, const cha
 
 const char* EngineFrustHost::podGetVariableString(std::int64_t entityId, const char* podId, const char* name)
 {
-    static thread_local std::string value;
+    auto* const host = callbackHost();
+    if (CallbackScope::current == nullptr) return "";
+    auto& value = CallbackScope::current->variableValue;
     value.clear();
-    if (activeHost == nullptr || entityId < 0) return value.c_str();
+    if (host == nullptr || entityId < 0) return value.c_str();
     const auto entity = static_cast<entt::entity>(entityId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    auto& registry = activeHost->world.Registry();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    auto& registry = host->world.Registry();
     if (const auto* state = registry.valid(entity) ? registry.try_get<scene::ObjectState>(entity) : nullptr) {
         value = state->values[PodVariableKey(podId, name)].toString().toStdString();
     }
@@ -460,16 +552,18 @@ const char* EngineFrustHost::podGetVariableString(std::int64_t entityId, const c
 
 bool EngineFrustHost::assetExists(const char* assetDisplayName)
 {
-    if (activeHost == nullptr || !activeHost->assetExistsProvider || assetDisplayName == nullptr) return false;
-    return activeHost->assetExistsProvider(assetDisplayName);
+    auto* const host = callbackHost();
+    if (host == nullptr || !host->assetExistsProvider || assetDisplayName == nullptr) return false;
+    return host->assetExistsProvider(assetDisplayName);
 }
 
 std::int64_t EngineFrustHost::animSetActiveClip(std::int64_t entityId, const char* clipName)
 {
-    if (activeHost == nullptr || entityId < 0 || clipName == nullptr || *clipName == '\0') return 0;
+    auto* const host = callbackHost();
+    if (host == nullptr || entityId < 0 || clipName == nullptr || *clipName == '\0') return 0;
     const auto entity = static_cast<entt::entity>(entityId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    auto& registry = activeHost->world.Registry();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    auto& registry = host->world.Registry();
     auto* animator = registry.valid(entity) ? registry.try_get<scene::Animator>(entity) : nullptr;
     if (animator == nullptr || animator->clips == nullptr) return 0;
 
@@ -490,10 +584,11 @@ std::int64_t EngineFrustHost::animSetActiveClip(std::int64_t entityId, const cha
 
 std::int64_t EngineFrustHost::animCrossfadeTo(std::int64_t entityId, const char* clipName, std::int64_t blendMillis)
 {
-    if (activeHost == nullptr || entityId < 0) return 0;
+    auto* const host = callbackHost();
+    if (host == nullptr || entityId < 0) return 0;
     const auto entity = static_cast<entt::entity>(entityId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    auto& registry = activeHost->world.Registry();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    auto& registry = host->world.Registry();
     auto* animator = registry.valid(entity) ? registry.try_get<scene::Animator>(entity) : nullptr;
     if (animator == nullptr) return 0;
     return scene::CrossfadeAnimatorTo(*animator, clipName, static_cast<int>(blendMillis)) ? 1 : 0;
@@ -501,10 +596,11 @@ std::int64_t EngineFrustHost::animCrossfadeTo(std::int64_t entityId, const char*
 
 std::int64_t EngineFrustHost::animSetPlaybackSpeedPerMille(std::int64_t entityId, std::int64_t speedPerMille)
 {
-    if (activeHost == nullptr || entityId < 0) return 0;
+    auto* const host = callbackHost();
+    if (host == nullptr || entityId < 0) return 0;
     const auto entity = static_cast<entt::entity>(entityId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    auto& registry = activeHost->world.Registry();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    auto& registry = host->world.Registry();
     auto* animator = registry.valid(entity) ? registry.try_get<scene::Animator>(entity) : nullptr;
     if (animator == nullptr) return 0;
     animator->playbackSpeed = static_cast<float>(speedPerMille) / 1000.0f;
@@ -513,12 +609,14 @@ std::int64_t EngineFrustHost::animSetPlaybackSpeedPerMille(std::int64_t entityId
 
 const char* EngineFrustHost::animGetActiveClipName(std::int64_t entityId)
 {
-    static thread_local std::string value;
+    auto* const host = callbackHost();
+    if (CallbackScope::current == nullptr) return "";
+    auto& value = CallbackScope::current->animationClip;
     value.clear();
-    if (activeHost == nullptr || entityId < 0) return value.c_str();
+    if (host == nullptr || entityId < 0) return value.c_str();
     const auto entity = static_cast<entt::entity>(entityId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    auto& registry = activeHost->world.Registry();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    auto& registry = host->world.Registry();
     const auto* animator = registry.valid(entity) ? registry.try_get<const scene::Animator>(entity) : nullptr;
     if (animator != nullptr && animator->clips != nullptr && animator->activeClip >= 0 &&
         static_cast<std::size_t>(animator->activeClip) < animator->clips->size()) {
@@ -529,10 +627,11 @@ const char* EngineFrustHost::animGetActiveClipName(std::int64_t entityId)
 
 std::int64_t EngineFrustHost::animGetClipDurationMillis(std::int64_t entityId, const char* clipName)
 {
-    if (activeHost == nullptr || entityId < 0 || clipName == nullptr) return 0;
+    auto* const host = callbackHost();
+    if (host == nullptr || entityId < 0 || clipName == nullptr) return 0;
     const auto entity = static_cast<entt::entity>(entityId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    auto& registry = activeHost->world.Registry();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    auto& registry = host->world.Registry();
     const auto* animator = registry.valid(entity) ? registry.try_get<const scene::Animator>(entity) : nullptr;
     if (animator == nullptr || animator->clips == nullptr) return 0;
     for (const auto& clip : *animator->clips) {
@@ -545,46 +644,52 @@ std::int64_t EngineFrustHost::animGetClipDurationMillis(std::int64_t entityId, c
 
 bool EngineFrustHost::animIsBlending(std::int64_t entityId)
 {
-    if (activeHost == nullptr || entityId < 0) return false;
+    auto* const host = callbackHost();
+    if (host == nullptr || entityId < 0) return false;
     const auto entity = static_cast<entt::entity>(entityId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    auto& registry = activeHost->world.Registry();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    auto& registry = host->world.Registry();
     const auto* animator = registry.valid(entity) ? registry.try_get<const scene::Animator>(entity) : nullptr;
     return animator != nullptr && animator->blendFromClip >= 0;
 }
 
 bool EngineFrustHost::inputIsActionActive(const char* actionName)
 {
-    if (activeHost == nullptr || activeHost->inputActionSystem_ == nullptr || actionName == nullptr) return false;
-    return activeHost->inputActionSystem_->IsActionActive(actionName);
+    auto* const host = callbackHost();
+    if (host == nullptr || host->inputActionSystem_ == nullptr || actionName == nullptr) return false;
+    return host->inputActionSystem_->IsActionActive(actionName);
 }
 
 bool EngineFrustHost::inputWasActionPressed(const char* actionName)
 {
-    if (activeHost == nullptr || activeHost->inputActionSystem_ == nullptr || actionName == nullptr) return false;
-    return activeHost->inputActionSystem_->WasActionPressed(actionName);
+    auto* const host = callbackHost();
+    if (host == nullptr || host->inputActionSystem_ == nullptr || actionName == nullptr) return false;
+    return host->inputActionSystem_->WasActionPressed(actionName);
 }
 
 bool EngineFrustHost::inputWasActionReleased(const char* actionName)
 {
-    if (activeHost == nullptr || activeHost->inputActionSystem_ == nullptr || actionName == nullptr) return false;
-    return activeHost->inputActionSystem_->WasActionReleased(actionName);
+    auto* const host = callbackHost();
+    if (host == nullptr || host->inputActionSystem_ == nullptr || actionName == nullptr) return false;
+    return host->inputActionSystem_->WasActionReleased(actionName);
 }
 
 std::int64_t EngineFrustHost::inputGetActionValuePerMille(const char* actionName)
 {
-    if (activeHost == nullptr || activeHost->inputActionSystem_ == nullptr || actionName == nullptr) return 0;
-    return activeHost->inputActionSystem_->GetActionValuePerMille(actionName);
+    auto* const host = callbackHost();
+    if (host == nullptr || host->inputActionSystem_ == nullptr || actionName == nullptr) return 0;
+    return host->inputActionSystem_->GetActionValuePerMille(actionName);
 }
 
 std::int64_t EngineFrustHost::physicsSetRigidBody(std::int64_t entityId, std::int64_t motionType, double mass,
                                                   double friction, double restitution,
                                                   double linearDamping, double angularDamping)
 {
-    if (activeHost == nullptr || entityId < 0) return 0;
+    auto* const host = callbackHost();
+    if (host == nullptr || entityId < 0) return 0;
     const auto entity = static_cast<entt::entity>(entityId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    auto& registry = activeHost->world.Registry();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    auto& registry = host->world.Registry();
     if (!registry.valid(entity)) return 0;
 
     auto& rigidBody = registry.get_or_emplace<physics::RigidBodyComponent>(entity);
@@ -608,10 +713,11 @@ std::int64_t EngineFrustHost::physicsSetColliderShape(std::int64_t entityId, std
                                                       double radius, double halfHeight, std::int64_t collisionLayer,
                                                       bool isSensor)
 {
-    if (activeHost == nullptr || entityId < 0) return 0;
+    auto* const host = callbackHost();
+    if (host == nullptr || entityId < 0) return 0;
     const auto entity = static_cast<entt::entity>(entityId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    auto& registry = activeHost->world.Registry();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    auto& registry = host->world.Registry();
     if (!registry.valid(entity)) return 0;
 
     auto& collider = registry.get_or_emplace<physics::ColliderComponent>(entity);
@@ -630,100 +736,113 @@ std::int64_t EngineFrustHost::physicsSetColliderShape(std::int64_t entityId, std
 
 std::int64_t EngineFrustHost::physicsApplyForce(std::int64_t entityId, double x, double y, double z)
 {
-    if (activeHost == nullptr || activeHost->physicsWorld_ == nullptr || entityId < 0) return 0;
-    activeHost->physicsWorld_->ApplyForce(activeHost->world, entityId,
+    auto* const host = callbackHost();
+    if (host == nullptr || host->physicsWorld_ == nullptr || entityId < 0) return 0;
+    host->physicsWorld_->ApplyForce(host->world, entityId,
                                           static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
     return 1;
 }
 
 std::int64_t EngineFrustHost::physicsApplyImpulse(std::int64_t entityId, double x, double y, double z)
 {
-    if (activeHost == nullptr || activeHost->physicsWorld_ == nullptr || entityId < 0) return 0;
-    activeHost->physicsWorld_->ApplyImpulse(activeHost->world, entityId,
+    auto* const host = callbackHost();
+    if (host == nullptr || host->physicsWorld_ == nullptr || entityId < 0) return 0;
+    host->physicsWorld_->ApplyImpulse(host->world, entityId,
                                             static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
     return 1;
 }
 
 std::int64_t EngineFrustHost::physicsSetLinearVelocity(std::int64_t entityId, double x, double y, double z)
 {
-    if (activeHost == nullptr || activeHost->physicsWorld_ == nullptr || entityId < 0) return 0;
-    activeHost->physicsWorld_->SetLinearVelocity(activeHost->world, entityId,
+    auto* const host = callbackHost();
+    if (host == nullptr || host->physicsWorld_ == nullptr || entityId < 0) return 0;
+    host->physicsWorld_->SetLinearVelocity(host->world, entityId,
                                                  static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
     return 1;
 }
 
 double EngineFrustHost::physicsGetLinearVelocityX(std::int64_t entityId)
 {
-    if (activeHost == nullptr || activeHost->physicsWorld_ == nullptr || entityId < 0) return 0.0;
+    auto* const host = callbackHost();
+    if (host == nullptr || host->physicsWorld_ == nullptr || entityId < 0) return 0.0;
     float x = 0, y = 0, z = 0;
-    activeHost->physicsWorld_->GetLinearVelocity(activeHost->world, entityId, x, y, z);
+    host->physicsWorld_->GetLinearVelocity(host->world, entityId, x, y, z);
     return static_cast<double>(x);
 }
 
 double EngineFrustHost::physicsGetLinearVelocityY(std::int64_t entityId)
 {
-    if (activeHost == nullptr || activeHost->physicsWorld_ == nullptr || entityId < 0) return 0.0;
+    auto* const host = callbackHost();
+    if (host == nullptr || host->physicsWorld_ == nullptr || entityId < 0) return 0.0;
     float x = 0, y = 0, z = 0;
-    activeHost->physicsWorld_->GetLinearVelocity(activeHost->world, entityId, x, y, z);
+    host->physicsWorld_->GetLinearVelocity(host->world, entityId, x, y, z);
     return static_cast<double>(y);
 }
 
 double EngineFrustHost::physicsGetLinearVelocityZ(std::int64_t entityId)
 {
-    if (activeHost == nullptr || activeHost->physicsWorld_ == nullptr || entityId < 0) return 0.0;
+    auto* const host = callbackHost();
+    if (host == nullptr || host->physicsWorld_ == nullptr || entityId < 0) return 0.0;
     float x = 0, y = 0, z = 0;
-    activeHost->physicsWorld_->GetLinearVelocity(activeHost->world, entityId, x, y, z);
+    host->physicsWorld_->GetLinearVelocity(host->world, entityId, x, y, z);
     return static_cast<double>(z);
 }
 
 bool EngineFrustHost::physicsRaycast(double originX, double originY, double originZ,
                                      double dirX, double dirY, double dirZ, double maxDistance)
 {
-    if (activeHost == nullptr || activeHost->physicsWorld_ == nullptr) return false;
-    const auto hit = activeHost->physicsWorld_->CastRay(
+    auto* const host = callbackHost();
+    if (host == nullptr || host->physicsWorld_ == nullptr) return false;
+    const auto hit = host->physicsWorld_->CastRay(
         static_cast<float>(originX), static_cast<float>(originY), static_cast<float>(originZ),
         static_cast<float>(dirX), static_cast<float>(dirY), static_cast<float>(dirZ),
         static_cast<float>(maxDistance));
-    activeHost->lastRaycastHit_.hit = hit.hit;
-    activeHost->lastRaycastHit_.hitEntity = hit.hitEntity;
-    activeHost->lastRaycastHit_.distance = static_cast<double>(hit.distance);
-    activeHost->lastRaycastHit_.normalX = static_cast<double>(hit.normalX);
-    activeHost->lastRaycastHit_.normalY = static_cast<double>(hit.normalY);
-    activeHost->lastRaycastHit_.normalZ = static_cast<double>(hit.normalZ);
+    host->lastRaycastHit_.hit = hit.hit;
+    host->lastRaycastHit_.hitEntity = hit.hitEntity;
+    host->lastRaycastHit_.distance = static_cast<double>(hit.distance);
+    host->lastRaycastHit_.normalX = static_cast<double>(hit.normalX);
+    host->lastRaycastHit_.normalY = static_cast<double>(hit.normalY);
+    host->lastRaycastHit_.normalZ = static_cast<double>(hit.normalZ);
     return hit.hit;
 }
 
 std::int64_t EngineFrustHost::physicsRaycastHitEntity()
 {
-    return activeHost != nullptr ? activeHost->lastRaycastHit_.hitEntity : -1;
+    auto* const host = callbackHost();
+    return host != nullptr ? host->lastRaycastHit_.hitEntity : -1;
 }
 
 double EngineFrustHost::physicsRaycastHitDistance()
 {
-    return activeHost != nullptr ? activeHost->lastRaycastHit_.distance : 0.0;
+    auto* const host = callbackHost();
+    return host != nullptr ? host->lastRaycastHit_.distance : 0.0;
 }
 
 double EngineFrustHost::physicsRaycastNormalX()
 {
-    return activeHost != nullptr ? activeHost->lastRaycastHit_.normalX : 0.0;
+    auto* const host = callbackHost();
+    return host != nullptr ? host->lastRaycastHit_.normalX : 0.0;
 }
 
 double EngineFrustHost::physicsRaycastNormalY()
 {
-    return activeHost != nullptr ? activeHost->lastRaycastHit_.normalY : 0.0;
+    auto* const host = callbackHost();
+    return host != nullptr ? host->lastRaycastHit_.normalY : 0.0;
 }
 
 double EngineFrustHost::physicsRaycastNormalZ()
 {
-    return activeHost != nullptr ? activeHost->lastRaycastHit_.normalZ : 0.0;
+    auto* const host = callbackHost();
+    return host != nullptr ? host->lastRaycastHit_.normalZ : 0.0;
 }
 
 std::int64_t EngineFrustHost::podSetVariableString(std::int64_t entityId, const char* podId, const char* name, const char* value)
 {
-    if (activeHost == nullptr || entityId < 0) return 0;
+    auto* const host = callbackHost();
+    if (host == nullptr || entityId < 0) return 0;
     const auto entity = static_cast<entt::entity>(entityId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    auto& registry = activeHost->world.Registry();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    auto& registry = host->world.Registry();
     if (!registry.valid(entity)) return 0;
     registry.get_or_emplace<scene::ObjectState>(entity).values.set(PodVariableKey(podId, name), juce::String(value != nullptr ? value : ""));
     return 1;
@@ -731,13 +850,14 @@ std::int64_t EngineFrustHost::podSetVariableString(std::int64_t entityId, const 
 
 std::int64_t EngineFrustHost::setPositionX(std::int64_t entityId, std::int64_t positionX)
 {
-    if (activeHost == nullptr || entityId < 0) {
+    auto* const host = callbackHost();
+    if (host == nullptr || entityId < 0) {
         return 0;
     }
 
     const auto entity = static_cast<entt::entity>(entityId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    auto& registry = activeHost->world.Registry();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    auto& registry = host->world.Registry();
     if (!registry.valid(entity) || !registry.all_of<engine::Transform>(entity)) {
         return 0;
     }
@@ -749,11 +869,12 @@ std::int64_t EngineFrustHost::setPositionX(std::int64_t entityId, std::int64_t p
 std::int64_t EngineFrustHost::setMaterialColorParameter(std::int64_t entityId, const char* parameterName,
                                                           std::int64_t r255, std::int64_t g255, std::int64_t b255)
 {
-    if (activeHost == nullptr || entityId < 0 || parameterName == nullptr || *parameterName == '\0') return 0;
+    auto* const host = callbackHost();
+    if (host == nullptr || entityId < 0 || parameterName == nullptr || *parameterName == '\0') return 0;
 
     const auto entity = static_cast<entt::entity>(entityId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    auto& registry = activeHost->world.Registry();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    auto& registry = host->world.Registry();
     if (!registry.valid(entity)) return 0;
 
     auto& overrides = registry.get_or_emplace<engine::MaterialParameterOverrides>(entity);
@@ -767,11 +888,12 @@ std::int64_t EngineFrustHost::setMaterialColorParameter(std::int64_t entityId, c
 
 std::int64_t EngineFrustHost::setMaterialScalarParameter(std::int64_t entityId, const char* parameterName, std::int64_t valuePerMille)
 {
-    if (activeHost == nullptr || entityId < 0 || parameterName == nullptr || *parameterName == '\0') return 0;
+    auto* const host = callbackHost();
+    if (host == nullptr || entityId < 0 || parameterName == nullptr || *parameterName == '\0') return 0;
 
     const auto entity = static_cast<entt::entity>(entityId);
-    std::lock_guard<std::mutex> lock(activeHost->world.RegistryMutex());
-    auto& registry = activeHost->world.Registry();
+    std::lock_guard<std::mutex> lock(host->world.RegistryMutex());
+    auto& registry = host->world.Registry();
     if (!registry.valid(entity)) return 0;
 
     auto& overrides = registry.get_or_emplace<engine::MaterialParameterOverrides>(entity);
@@ -781,22 +903,27 @@ std::int64_t EngineFrustHost::setMaterialScalarParameter(std::int64_t entityId, 
 
 std::int64_t EngineFrustHost::requestSceneTransition(const char* sceneReference)
 {
-    if (activeHost == nullptr || !activeHost->sceneTransitionRequestHandler || sceneReference == nullptr || *sceneReference == '\0') return 0;
-    activeHost->sceneTransitionRequestHandler(sceneReference);
+    auto* const host = callbackHost();
+    if (host == nullptr || !host->sceneTransitionRequestHandler || sceneReference == nullptr || *sceneReference == '\0') return 0;
+    host->sceneTransitionRequestHandler(sceneReference);
     return 1;
 }
 
 const char* EngineFrustHost::activeGameId()
 {
-    static thread_local std::string value;
-    value = (activeHost != nullptr && activeHost->activeGameIdProvider) ? activeHost->activeGameIdProvider() : std::string{};
+    auto* const host = callbackHost();
+    if (CallbackScope::current == nullptr) return "";
+    auto& value = CallbackScope::current->gameId;
+    value = (host != nullptr && host->activeGameIdProvider) ? host->activeGameIdProvider() : std::string{};
     return value.c_str();
 }
 
 const char* EngineFrustHost::activeSceneId()
 {
-    static thread_local std::string value;
-    value = (activeHost != nullptr && activeHost->activeSceneIdProvider) ? activeHost->activeSceneIdProvider() : std::string{};
+    auto* const host = callbackHost();
+    if (CallbackScope::current == nullptr) return "";
+    auto& value = CallbackScope::current->sceneId;
+    value = (host != nullptr && host->activeSceneIdProvider) ? host->activeSceneIdProvider() : std::string{};
     return value.c_str();
 }
 
@@ -855,13 +982,12 @@ void EngineFrustHost::invokeObjectHook(std::int64_t entityId, const std::string&
         return;
     }
 
-    activeObjectEntityId = entityId;
+    const CallbackScope scope(*this, entityId);
     const auto hook = reinterpret_cast<ObjectLifecycleHook>(runtime.getFunction(key, hookName));
     if (hook != nullptr) {
         (void)hook(tick);
     } else {
         (void)runtime.callEvent(key, static_cast<std::int64_t>(fallbackEvent), tick);
     }
-    activeObjectEntityId = -1;
 }
 } // namespace ce::frust

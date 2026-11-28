@@ -1,5 +1,6 @@
 # Djehuti Engine Developer API
 
+See [common runtime inspection](RUNTIME_PARITY.md#inspection-and-verification) for execution context diagnostics.
 ENG-004 adds a local development interface for the graphical editor and the dedicated server. A typed command dispatcher owns validation, permissions and job state. Runtime commands execute on the Engine owner thread and use the editor’s Play transport or the dedicated server’s simulation loop. Persistence inspection uses the native persistence contract on a separate serial worker. HTTP, the CLI and the MCP adapter use the same command identifiers and contracts. Commands execute directly without model invocation.
 
 ## Enable and connect
