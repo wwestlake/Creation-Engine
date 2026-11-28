@@ -6,6 +6,8 @@
 
 #include "engine/world.h"
 
+namespace juce { class ValueTree; }
+
 namespace ce::project
 {
 struct SceneDocumentInfo
@@ -135,6 +137,11 @@ public:
                           const SceneDocumentInfo& scene,
                           ce::engine::World& world,
                           juce::String& errorMessage);
+    static bool readSceneState(const creation::assets::ProjectSession& session,
+                               const GameDocumentInfo& game, const SceneDocumentInfo& scene,
+                               juce::ValueTree& state, juce::String& errorMessage, bool* upgradedLegacy = nullptr);
+    static bool restoreSceneState(ce::engine::World& world, const SceneDocumentInfo& scene,
+                                  const juce::ValueTree& state);
     static bool loadScene(creation::assets::ProjectSession& session,
                           const GameDocumentInfo& game,
                           const SceneDocumentInfo& scene,

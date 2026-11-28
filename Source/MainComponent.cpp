@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "Runtime/RuntimeDeveloperInspection.h"
 
 #include <algorithm>
 #include <cmath>
@@ -248,11 +249,6 @@ MainComponent::MainComponent(StartupProgressCallback startupProgressCallback)
     };
     sceneBuiltinsPanel_.onCreateBuiltIn = [this](ce::scene::BuiltInKind kind) { CreateBuiltIn(kind); };
     sceneGraphPanel_.onEntitySelected = [this](entt::entity entity) { interactions_.select(entity); };
-    frustHost_.setSceneTransitionRequestHandler([this](const std::string& reference) {
-        const juce::String sceneReference(reference);
-        for (const auto& scene : activeGame_.scenes)
-            if (scene.id == sceneReference || scene.name == sceneReference) { pendingSceneTransitionId_ = scene.id; return; }
-    });
     frustHost_.setActiveGameIdProvider([this] { return activeGame_.id.toStdString(); });
     frustHost_.setActiveSceneIdProvider([this] { return activeScene_.id.toStdString(); });
     // Backs core.asset.exists (Node/Behavior Graph Foundations plan Phase
@@ -266,6 +262,7 @@ MainComponent::MainComponent(StartupProgressCallback startupProgressCallback)
         return false;
     });
     frustHost_.setInputActionSystem(&inputActionSystem_);
+    runtimeFrustHost_.setInputActionSystem(&inputActionSystem_);
     frustHost_.setPhysicsWorld(&physicsWorld_);
 
     headerBar_.setAppTitle("Djehuti Engine");
@@ -335,7 +332,8 @@ MainComponent::MainComponent(StartupProgressCallback startupProgressCallback)
     menuBar_->setColour(juce::TextButton::textColourOnId, juce::Colours::white);
     addAndMakeVisible(*menuBar_);
     propertiesPanel_.onEntityDestroying = [this](entt::entity entity) {
-        frustHost_.notifyObjectDestroyed(entity, static_cast<std::int64_t>(world_.CurrentTick()));
+        auto& host = runtimeWorldRunner_.IsPlaying() ? runtimeFrustHost_ : frustHost_;
+        host.notifyObjectDestroyed(entity, static_cast<std::int64_t>(world_.CurrentTick()));
     };
     // Editor UI/Workflow Overhaul plan, Phase 5 (Decision 4): object-first
     // Pod creation. If the selected entity already has an attached Pod,
@@ -393,7 +391,10 @@ MainComponent::MainComponent(StartupProgressCallback startupProgressCallback)
 MainComponent::~MainComponent() {
     removeKeyListener(commandManager_.getKeyMappings());
     stopTimer();
+    developerFixtureClientApi_.reset();
+    developerFixtureClient_.reset();
     developerApi_.reset();
+    if (playModeSceneSnapshot_.isValid()) StopRuntime();
     if (developerDiscoveryId_.isNotEmpty()) {
         juce::String error;
         const auto current = creation::services::SuiteVfsJsonStore::loadJson("agents/engine-developer.json", error);
@@ -621,11 +622,13 @@ void MainComponent::openGameClient()
         headerBar_.setStatusText("Open a game and scene before running a client.");
         return;
     }
-    saveSessionToDisk(false);
-    const int clientNumber = static_cast<int>(gameClients_.size()) + 1;
-    const auto sceneState = ce::scene::EngineSceneSerializer::serializeScene(world_);
+    if (!playModeSceneSnapshot_.isValid())
+        saveSessionToDisk(false);
+    std::erase_if(gameClients_, [](const auto& client) { return !client->isVisible(); });
+    const auto sceneState = playModeSceneSnapshot_.isValid()
+        ? playModeSceneSnapshot_ : ce::scene::EngineSceneSerializer::serializeScene(world_);
     gameClients_.push_back(std::make_unique<ce::runtime::GameClientWindow>(
-        clientNumber, sceneState, activeGame_.name, activeScene_.name, activeGame_.playerSlots, activeGame_, projectSession_, suiteSettings_));
+        nextClientNumber_++, sceneState, activeGame_, activeScene_, projectSession_, suiteSettings_));
     headerBar_.setStatusText("Running " + juce::String(gameClients_.size()) + " game client" + (gameClients_.size() == 1 ? "" : "s"));
 }
 
@@ -1017,6 +1020,19 @@ bool MainComponent::StartDeveloperApi()
             juce::SystemStats::getEnvironmentVariable("DJEHUTI_DEV_FIXTURE_ONLY", {}) == "1";
         settings.allowAuthored = !fixtureOnly;
         auto mount = MakeTestMount(settings);
+        const auto fixtureClientPort = fixtureOnly
+            ? juce::SystemStats::getEnvironmentVariable("DJEHUTI_DEV_RUNTIME_CLIENT_PORT", {}).getIntValue() : 0;
+        if (fixtureClientPort > 0 && fixtureClientPort <= 65535) {
+            auto clientSettings = settings;
+            clientSettings.port = fixtureClientPort;
+            developerFixtureClient_ = std::make_unique<ce::runtime::GameClientWindow>(
+                1, juce::ValueTree{}, ce::project::GameDocumentInfo{}, ce::project::SceneDocumentInfo{},
+                creation::assets::ProjectSession{}, suiteSettings_, false);
+            developerFixtureClientApi_ = std::make_unique<DeveloperApi>(std::move(clientSettings), "editor",
+                JUCE_APPLICATION_VERSION_STRING, developerFixtureClient_->Commands());
+            const auto port = developerFixtureClientApi_->Start();
+            juce::Logger::writeToLog("Runtime fixture client API http://127.0.0.1:" + juce::String(port));
+        }
         developerApi_ = std::make_unique<DeveloperApi>(std::move(settings), "editor",
             JUCE_APPLICATION_VERSION_STRING, runtimeCommands_, std::move(mount));
         const auto port = developerApi_->Start();
@@ -1031,9 +1047,13 @@ bool MainComponent::StartDeveloperApi()
         juce::Logger::writeToLog("Developer API " + url);
         return fixtureOnly;
     } catch (const Failure& failure) {
+        developerFixtureClientApi_.reset();
+        developerFixtureClient_.reset();
         developerApi_.reset();
         juce::Logger::writeToLog(failure.message);
     } catch (...) {
+        developerFixtureClientApi_.reset();
+        developerFixtureClient_.reset();
         developerApi_.reset();
         juce::Logger::writeToLog("Developer API could not start.");
     }
@@ -1061,8 +1081,13 @@ ce::developer::RuntimeOperations MainComponent::RuntimeOperations()
         [this] { SetPlaying(false); },
         [this] { SetPlaying(true); return isPlaying_; },
         [this] { return StopRuntime(); },
-        [this] { RunRuntimeFrame(1.0f / 30.0f); },
-        [this] { return Object({{"playing", isPlaying_}, {"editorStatus", playbackStatus_}}); }
+        [this] { RunRuntimeFrame(); },
+        [this] {
+            auto diagnostics = ce::runtime::RuntimeDiagnostics(runtimeWorldRunner_, world_, fixtureRuntime_);
+            Put(diagnostics, "playing", isPlaying_);
+            Put(diagnostics, "editorStatus", playbackStatus_);
+            return diagnostics;
+        }
     };
 }
 
@@ -1075,17 +1100,19 @@ void MainComponent::SetPlaybackStatus(const juce::String& text)
 bool MainComponent::StopRuntime()
 {
     SetPlaying(false);
-    runtimeWorldRunner_.EndPlay();
+    runtimeWorldRunner_.Stop();
     if (playModeSceneSnapshot_.isValid()) {
-        if (!ce::scene::EngineSceneSerializer::restoreScene(world_, playModeSceneSnapshot_)) {
+        if (!ce::project::EngineGameDocumentStore::restoreSceneState(world_, activeScene_, playModeSceneSnapshot_)) {
             SetPlaybackStatus("Could not restore the authored scene after Play.");
             return false;
         }
         playModeSceneSnapshot_ = {};
+        if (projectSession_.isValid()) viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
     }
     fixtureRuntime_ = false;
-    world_.ResetTick();
+    interactions_.select(entt::null);
     frustHost_.prepareLevel(static_cast<std::int64_t>(world_.CurrentTick()));
+    sceneGraphPanel_.Refresh();
     propertiesPanel_.Refresh();
     SetPlaybackStatus("Stopped");
     return true;
@@ -1098,42 +1125,46 @@ void MainComponent::SetPlaying(bool playing) {
 
     if (playing) {
         const bool newSession = !playModeSceneSnapshot_.isValid();
+        juce::String error;
+        bool ready = false;
         if (newSession) {
             playModeSceneSnapshot_ = ce::scene::EngineSceneSerializer::serializeScene(world_);
             if (!playModeSceneSnapshot_.isValid()) {
                 SetPlaybackStatus("Could not save the scene before Play.");
                 return;
             }
-            if (fixtureRuntime_) {
-                {
-                    std::lock_guard lock(world_.RegistryMutex());
-                    world_.Registry().clear();
-                }
-                world_.ResetTick();
-                frustHost_.prepareLevel(0);
+
+            auto scene = activeScene_;
+            auto source = fixtureRuntime_ ? ce::runtime::DeveloperFixture() : ce::runtime::FromProject(projectSession_, activeGame_);
+            if (fixtureRuntime_) scene = source.game.scenes.isEmpty() ? ce::project::SceneDocumentInfo{} : source.game.scenes.getFirst();
+            for (const auto& combo : inputActionSystem_.Bindings().combos) {
+                const auto name = combo.name.toStdString();
+                if (std::find(source.comboNames.begin(), source.comboNames.end(), name) == source.comboNames.end())
+                    source.comboNames.push_back(name);
             }
+
+            ready = runtimeWorldRunner_.Start(std::move(source), std::move(scene),
+                fixtureRuntime_ ? juce::ValueTree{} : playModeSceneSnapshot_,
+                [this](juce::String& failure) {
+                    if (fixtureRuntime_) return true;
+                    if (projectSession_.isValid()) viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
+                    return beginAutomaticPlayerPossession(true, failure);
+                });
+            if (!ready) {
+                error = runtimeWorldRunner_.LastError();
+                StopRuntime();
+            }
+        } else {
+            ready = fixtureRuntime_ || beginAutomaticPlayerPossession(false, error);
         }
-        juce::String error;
-        if (!fixtureRuntime_ && !beginAutomaticPlayerPossession(newSession, error)) {
-            if (newSession) playModeSceneSnapshot_ = {};
-            const auto message = "Play cannot start.\n\n" + error
-                                 + "\n\nFix the scene setup, then press Play again.";
+        if (!ready) {
             SetPlaybackStatus("Cannot start Play: " + error);
             if (showPlayErrors_) juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
-                                                   "Cannot Start Play", message);
+                "Cannot Start Play", "Play cannot start.\n\n" + error + "\n\nFix the scene setup, then press Play again.");
             return;
         }
         isPlaying_ = true;
-        viewport_.SetPlaying(true); // hides editor-only entities while playing.
-        // RunPhysicsResolvePhase() treats lastPhysicsAdvanceSeconds_ <= 0.0
-        // as "first tick, elapsed = 0" -- reset it here so THAT guard also
-        // covers "first tick after resuming Play," not just "first tick
-        // ever." Without this, a second Play press feeds Advance() the
-        // real wall-clock gap since physics last ran (however long the
-        // editor sat stopped), producing one huge instantaneous physics
-        // step -- objects visibly sliding/jumping on resume.
-        lastPhysicsAdvanceSeconds_ = 0.0;
-        runtimeWorldRunner_.BeginPlay();
+        viewport_.SetPlaying(true);
     } else {
         isPlaying_ = false;
         // Pause intentionally returns control to the editor camera while
@@ -1192,17 +1223,8 @@ void MainComponent::timerCallback() {
         viewport_.RefreshDesktopGizmo();
         viewport_.MarkFrameSnapshotDirty();
     }
-    if (pendingSceneTransitionId_.isNotEmpty()) {
-        const auto requestedScene = pendingSceneTransitionId_;
-        pendingSceneTransitionId_.clear();
-        const bool resumeAfterTransition = isPlaying_;
-        if (resumeAfterTransition) {
-            SetPlaying(false);
-            runtimeWorldRunner_.EndPlay();
-        }
-        selectScene(requestedScene);
-        if (resumeAfterTransition) SetPlaying(true);
-    }
+    if (developerFixtureClientApi_)
+        developerFixtureClientApi_->PumpOwner();
     if (developerApi_) {
         const juce::ScopedValueSetter<bool> suppressDialogs(showPlayErrors_, false);
         developerApi_->PumpOwner();
@@ -1230,18 +1252,22 @@ void MainComponent::timerCallback() {
 
 void MainComponent::RunRuntimeFrame()
 {
-    const double nowSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0;
-    const float elapsedSeconds = lastPhysicsAdvanceSeconds_ > 0.0
-        ? static_cast<float>(nowSeconds - lastPhysicsAdvanceSeconds_) : 0.0f;
-    lastPhysicsAdvanceSeconds_ = nowSeconds;
-
-    RunRuntimeFrame(elapsedSeconds);
-}
-
-void MainComponent::RunRuntimeFrame(float elapsedSeconds)
-{
-    runtimeWorldRunner_.RunFrame(elapsedSeconds, {
-        [this](float dt) { UpdatePossessedCharacter(dt); }
+    if (!fixtureRuntime_)
+        inputActionSystem_.PollOncePerFrame(juce::TopLevelWindow::getActiveTopLevelWindow() == getTopLevelComponent());
+    runtimeWorldRunner_.Tick({
+        [this](float dt) { UpdatePossessedCharacter(dt); },
+        [this] { releaseEditorPossession(); },
+        [this] {
+            if (projectSession_.isValid()) viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
+            if (!fixtureRuntime_ && isPlaying_) {
+                juce::String ignored;
+                beginAutomaticPlayerPossession(true, ignored);
+            }
+            interactions_.select(entt::null);
+            sceneGraphPanel_.Refresh();
+            propertiesPanel_.Refresh();
+            SetPlaybackStatus("Runtime scene: " + runtimeWorldRunner_.Scene().name);
+        }
     });
 }
 
@@ -1272,83 +1298,9 @@ void MainComponent::UpdatePossessedCharacter(float physicsElapsedSeconds)
         viewport_.SetDirectedCameraPose(cameraPosition, cameraTarget);
 }
 
-void MainComponent::RunPreUpdatePhase() {
-    // ce::engine::EngineTickPhase::PreUpdate (engine/tick_phase.h).
-    //
-    // Input Binding System plan: poll raw keyboard/mouse/controller state
-    // once, before anything below reads it -- a Pod's on_tick this same
-    // tick sees this tick's poll (core.input.isActionActive et al.), not a
-    // stale one from last tick.
-    inputActionSystem_.PollOncePerFrame();
-    // GS6: runs every attached ScriptComponent's on_tick (and on_start, on
-    // an entity's first playing tick) before advancing World's tick
-    // counter -- the same Simulation::Step CreationEngineServer's main
-    // loop calls, so the editor and server genuinely execute scripts
-    // identically. 1/30s matches this timer's own 30 Hz rate
-    // (startTimerHz(30) below).
-    ce::engine::Simulation::Step(world_, 1.0f / 30.0f);
-    ce::engine::FoundationGameplay::Step(world_, {}, 1.0f / 30.0f);
-}
-
-float MainComponent::RunPhysicsResolvePhase() {
-    // ce::engine::EngineTickPhase::PhysicsResolve -- the boundary between
-    // PreUpdate's declared intent and PostPhysics's settled results, not a
-    // phase gameplay code runs in.
-    //
-    // Jolt runs on its own fixed 60 Hz accumulator, decoupled from this
-    // 30 Hz UI timer (Core Architectural Invariant 2, Jolt vendoring
-    // plan) -- real measured elapsed time, not this timer's own assumed
-    // 1/30s literal (which PreUpdate's calls still use, a separate,
-    // pre-existing gap this doesn't fix).
-    const double nowSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0;
-    const float physicsElapsedSeconds = lastPhysicsAdvanceSeconds_ > 0.0
-        ? static_cast<float>(nowSeconds - lastPhysicsAdvanceSeconds_) : 0.0f;
-    lastPhysicsAdvanceSeconds_ = nowSeconds;
-    const float physicsAlpha = physicsWorld_.Advance(world_, physicsElapsedSeconds);
-    {
-        // InterpolateTransforms() itself doesn't lock (its usual caller,
-        // the render pass, already holds this same lock for its whole
-        // draw pass -- see ViewportComponent.cpp) -- this call site needs
-        // its own, since nothing above holds it once Advance() returns.
-        std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
-        physicsWorld_.InterpolateTransforms(world_, physicsAlpha);
-    }
-    return physicsElapsedSeconds;
-}
-
-void MainComponent::RunPostPhysicsPhase(float physicsElapsedSeconds) {
-    // ce::engine::EngineTickPhase::PostPhysics -- safe to read this same
-    // tick's fresh physics results (a collision that just happened, a
-    // character's just-resolved position).
-    if (possessionService_.isPossessing()) {
-        // JPH::CharacterVirtual is its own separate, manually-driven
-        // system (not tracked by PhysicsResolve's Advance() -- see
-        // PhysicsWorld.h's own comment on CreateCharacter), so it needs
-        // its own per-tick update here, before frustHost_.tick() below
-        // drains this tick's collision events.
-        const auto cameraForward = viewport_.CameraForward();
-        const float forwardYawRadians = std::atan2(cameraForward.x, -cameraForward.z);
-        possessionService_.tick(forwardYawRadians, physicsElapsedSeconds);
-
-        juce::Vector3D<float> feetPosition;
-        {
-            std::lock_guard<std::mutex> registryLock(world_.RegistryMutex());
-            const auto entityHandle = static_cast<entt::entity>(possessionService_.subjectEntityId());
-            if (world_.Registry().valid(entityHandle)) {
-                const auto& transform = world_.Registry().get<ce::engine::Transform>(entityHandle);
-                feetPosition = { transform.position.x, transform.position.y, transform.position.z };
-            }
-        }
-        viewport_.SetPossessedFeetPosition(feetPosition);
-        juce::Vector3D<float> cameraPosition, cameraTarget;
-        if (cameraDirector_.update(world_, physicsWorld_, cameraForward, cameraPosition, cameraTarget))
-            viewport_.SetDirectedCameraPose(cameraPosition, cameraTarget);
-    }
-    frustHost_.tick(static_cast<std::int64_t>(world_.CurrentTick()));
-}
-
 void MainComponent::createNewProject()
 {
+    if (playModeSceneSnapshot_.isValid() && !StopRuntime()) return;
     auto* prompt = new juce::AlertWindow("Create New Engine Project",
                                          "Enter a name for your new Djehuti Engine project container:",
                                          juce::MessageBoxIconType::QuestionIcon);
@@ -1389,6 +1341,7 @@ void MainComponent::createNewProject()
 
 void MainComponent::openProject(const juce::String& projectId)
 {
+    if (playModeSceneSnapshot_.isValid() && !StopRuntime()) return;
     juce::String err;
     if (! creation::assets::ProjectWorkspaceService::openProject(suiteSettings_, projectId, projectSession_, err))
     {
@@ -1407,6 +1360,10 @@ void MainComponent::openProject(const juce::String& projectId)
 
 void MainComponent::saveSessionToDisk(bool userInitiated)
 {
+    if (playModeSceneSnapshot_.isValid()) {
+        if (userInitiated) headerBar_.setStatusText("Stop the runtime before saving the authored scene.");
+        return;
+    }
     if (! projectSession_.isValid())
     {
         if (userInitiated)
@@ -1539,6 +1496,10 @@ bool MainComponent::LoadLastOpenedGameAndScene(juce::String& errorMessage)
 bool MainComponent::LoadGameAndScene(const ce::project::GameDocumentInfo& game, const ce::project::SceneDocumentInfo& scene,
                                      juce::String& errorMessage)
 {
+    if (playModeSceneSnapshot_.isValid() && !StopRuntime()) {
+        errorMessage = "Could not stop the current runtime.";
+        return false;
+    }
     activeGame_ = game;
     ReportStartupProgress("Loading Game: " + game.name, 0.88f);
     juce::String inputBindingsError;
@@ -1790,7 +1751,7 @@ void MainComponent::selectGame(const juce::String& gameId)
 {
     for (const auto& game : games_) {
         if (game.id != gameId) continue;
-        playModeSceneSnapshot_ = {};
+        if (playModeSceneSnapshot_.isValid() && !StopRuntime()) return;
         saveSessionToDisk(false);
         ce::project::SceneDocumentInfo entryScene;
         for (const auto& scene : game.scenes)
@@ -1807,7 +1768,7 @@ void MainComponent::selectScene(const juce::String& sceneId)
 {
     for (const auto& scene : activeGame_.scenes) {
         if (scene.id != sceneId) continue;
-        playModeSceneSnapshot_ = {};
+        if (playModeSceneSnapshot_.isValid() && !StopRuntime()) return;
         saveSessionToDisk(false);
         juce::String error;
         if (!LoadGameAndScene(activeGame_, scene, error))

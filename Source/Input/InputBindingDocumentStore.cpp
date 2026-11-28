@@ -189,6 +189,21 @@ bool InputBindingDocumentStore::load(const creation::assets::ProjectSession& ses
     return false;
 }
 
+std::vector<std::string> InputBindingDocumentStore::listComboNames(const creation::assets::ProjectSession& session,
+                                                                   const project::GameDocumentInfo& game)
+{
+    MappingDocument document;
+    juce::String error;
+    if (!ReadReferencedDocument(session, game, document, error)) return {};
+    juce::StringArray names;
+    for (const auto& context : document.contexts)
+        for (const auto& combo : context.bindings.combos)
+            if (combo.name.isNotEmpty()) names.addIfNotAlreadyThere(combo.name);
+    std::vector<std::string> result;
+    for (const auto& name : names) result.push_back(name.toStdString());
+    return result;
+}
+
 bool InputBindingDocumentStore::save(creation::assets::ProjectSession& session, project::GameDocumentInfo& game,
                                      const juce::String& contextId, const InputBindingSet& bindings, juce::String& errorMessage)
 {

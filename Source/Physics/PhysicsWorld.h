@@ -63,6 +63,7 @@ public:
     // (Decision 6) -- call once, right after constructing both World and
     // PhysicsWorld. Safe to call only once; asserts otherwise.
     void AttachToWorld(ce::engine::World& world);
+    void ResetTimeline();
 
     // Disconnects registry callbacks and removes the registry context entry
     // before this PhysicsWorld is destroyed or moved to another World.

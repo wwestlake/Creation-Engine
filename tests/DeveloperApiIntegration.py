@@ -51,11 +51,16 @@ def raw(port, method, path, token="", body=None, headers=None):
         return response.status, json.loads(response.read())
 
 
-@contextlib.contextmanager
-def host(executable, directory, mode, provider="memory", limit_overrides=None, arguments=(), fixture=True):
+def unused_port():
     with socket.socket() as claim:
         claim.bind(("127.0.0.1", 0))
-        port = claim.getsockname()[1]
+        return claim.getsockname()[1]
+
+
+@contextlib.contextmanager
+def host(executable, directory, mode, provider="memory", limit_overrides=None, arguments=(), fixture=True,
+         env_overrides=None):
+    port = unused_port()
     endpoint = f"http://127.0.0.1:{port}"
     read, control = secrets.token_hex(32), secrets.token_hex(32)
     env = dict(os.environ, DJEHUTI_DEV_ENABLE="1", DJEHUTI_DEV_PORT=str(port), DJEHUTI_DEV_READ_TOKEN=read,
@@ -63,6 +68,7 @@ def host(executable, directory, mode, provider="memory", limit_overrides=None, a
                DJEHUTI_DEV_PROVIDER=provider, DJEHUTI_DEV_STORE=str(directory / provider),
                DJEHUTI_DEV_LIMITS=json.dumps(limit_overrides or {}), DJEHUTI_DEV_URL=endpoint, DJEHUTI_DEV_TOKEN=control,
                PYTHONDONTWRITEBYTECODE="1")
+    env.update(env_overrides or {})
     directory.mkdir(parents=True, exist_ok=True)
     flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     executable = executable.resolve()
@@ -119,8 +125,9 @@ def lifecycle(client, mode):
     assert inspect()["state"] == "stopped"
     active = result(client, "runtime.start", {"source": "fixture"})
     assert active["executionMode"] == mode and active["state"] == "running" and active["session"], active
+    assert active["diagnostics"]["contextId"] and not active["diagnostics"]["runtimeError"], active
     if mode == "editor":
-        assert active["diagnostics"] == {"playing": True, "editorStatus": "Playing"}, active
+        assert active["diagnostics"]["playing"] is True and active["diagnostics"]["editorStatus"] == "Playing", active
     paused = result(client, "runtime.pause")
     before = inspect()
     assert paused["state"] == "paused" and before["tick"] == paused["tick"]
@@ -140,8 +147,9 @@ def lifecycle(client, mode):
     assert result(client, "runtime.resume")["state"] == "running"
     stopped = result(client, "runtime.stop")
     assert stopped["state"] == inspect()["state"] == "stopped"
+    assert stopped["diagnostics"]["contextId"] == active["diagnostics"]["contextId"], stopped
     if mode == "editor":
-        assert stopped["diagnostics"] == {"playing": False, "editorStatus": "Stopped"}, stopped
+        assert stopped["diagnostics"]["playing"] is False and stopped["diagnostics"]["editorStatus"] == "Stopped", stopped
     result(client, "runtime.resume", expected="invalid_transition")
     print(f"{mode} lifecycle and exact eight ticks passed", flush=True)
 

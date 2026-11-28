@@ -1,45 +1,78 @@
 #pragma once
 
-#include <cstdint>
 #include <functional>
 
-namespace ce::engine { class World; }
+#include <juce_data_structures/juce_data_structures.h>
+
+#include "Project/EngineGameDocument.h"
+
 namespace ce::physics { class PhysicsWorld; }
-namespace ce::frust { class EngineFrustHost; }
-namespace ce::input { class InputActionSystem; }
+namespace ce::frust { class EngineFrustHost; class PodCatalog; }
 
 namespace ce::runtime
 {
 
-// The executable surfaces share one authoritative gameplay order. Rendering
-// remains outside this class: a surface publishes the completed World when it
-// is ready, but cannot quietly invent a different simulation loop.
+// A game and its content source belong to one runtime. Disk paths and the
+// rendering/input devices never enter the simulation loop.
+struct RuntimeGameSource
+{
+    project::GameDocumentInfo game;
+    std::function<bool(const project::SceneDocumentInfo&, juce::ValueTree&, juce::String&)> readScene;
+    std::function<bool(frust::PodCatalog&, juce::String&)> readPods;
+    std::function<bool(const std::string&)> assetExists;
+    std::function<bool(const std::string&, std::string&)> readModule;
+    std::vector<std::string> comboNames;
+};
+
+RuntimeGameSource FromProject(creation::assets::ProjectSession session, project::GameDocumentInfo game);
+
 class RuntimeWorldRunner final
 {
 public:
+    static constexpr float defaultStepSeconds = 1.0f / 30.0f;
+
     struct Hooks
     {
         std::function<void(float)> afterPhysics;
-        std::function<void(float)> afterPostPhysics;
+        std::function<void()> beforeSceneChange;
+        std::function<void()> afterSceneChange;
     };
 
-    RuntimeWorldRunner(engine::World& world, physics::PhysicsWorld& physics,
-                       frust::EngineFrustHost& frust, input::InputActionSystem& input);
+    RuntimeWorldRunner(engine::World& world, physics::PhysicsWorld& physics, frust::EngineFrustHost& frust,
+                       float stepSeconds = defaultStepSeconds);
+    ~RuntimeWorldRunner();
 
-    void BeginPlay();
-    void EndPlay();
+    RuntimeWorldRunner(const RuntimeWorldRunner&) = delete;
+    RuntimeWorldRunner& operator=(const RuntimeWorldRunner&) = delete;
+
+    bool Start(RuntimeGameSource source, project::SceneDocumentInfo scene, juce::ValueTree initialState = {},
+               const std::function<bool(juce::String&)>& prepareHost = {});
+    void Stop();
+
+    // Called once for each scheduled tick or explicit step. All operations
+    // run on the runtime owner's thread. Device acquisition is host-owned.
+    void Tick(const Hooks& hooks = {});
+
+    [[nodiscard]] const juce::String& ContextId() const noexcept { return contextId_; }
+    [[nodiscard]] const project::GameDocumentInfo& Game() const noexcept { return source_.game; }
+    [[nodiscard]] const project::SceneDocumentInfo& Scene() const noexcept { return scene_; }
+    [[nodiscard]] const juce::String& LastError() const noexcept { return error_; }
     [[nodiscard]] bool IsPlaying() const noexcept { return playing_; }
-
-    // Uses a measured elapsed duration supplied by the host. The runner owns
-    // no wall clock, which keeps it deterministic in tests and suitable for a
-    // dedicated server's scheduler as well as a JUCE timer.
-    void RunFrame(float elapsedSeconds, const Hooks& hooks = {});
+    [[nodiscard]] float StepSeconds() const noexcept { return stepSeconds_; }
 
 private:
+    bool LoadBehaviors();
+    void ApplyTransition(const Hooks& hooks);
+
     engine::World& world_;
     physics::PhysicsWorld& physics_;
     frust::EngineFrustHost& frust_;
-    input::InputActionSystem& input_;
+    const float stepSeconds_;
+    const juce::String contextId_ = juce::Uuid().toString();
+    RuntimeGameSource source_;
+    project::SceneDocumentInfo scene_;
+    juce::String pendingScene_;
+    juce::String error_;
     bool playing_ = false;
 };
 

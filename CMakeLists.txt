@@ -308,6 +308,7 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Assets/ProjectContentAssetStore.cpp
     Source/Frust/PodCatalog.h
     Source/Frust/PodCatalog.cpp
+    Source/Frust/PodCompiler.cpp
     Source/Frust/EngineFrustHost.h
     Source/Frust/EngineFrustHost.cpp
     Source/Input/InputBindingTypes.h
@@ -392,6 +393,7 @@ target_sources(CreationEngineEditor PRIVATE
     Source/Runtime/PossessionService.cpp
     Source/Runtime/RuntimeWorldRunner.h
     Source/Runtime/RuntimeWorldRunner.cpp
+    Source/Runtime/RuntimeDeveloperInspection.cpp
     Source/Character/CharacterDefinition.h
     Source/Character/CharacterDefinition.cpp
     Source/Character/PossessedCharacter.h
@@ -812,6 +814,10 @@ target_sources(CreationEngineServer PRIVATE
     Source/Scene/EngineSceneSerializer.h
     Source/Scene/EngineSceneSerializer.cpp
     Source/Frust/EngineFrustHost.cpp
+    Source/Frust/PodCatalog.cpp
+    Source/Frust/PodCompiler.cpp
+    Source/Runtime/RuntimeWorldRunner.cpp
+    Source/Runtime/RuntimeDeveloperInspection.cpp
     Source/Input/InputActionSystem.cpp
     Source/Input/InputBindingDocumentStore.cpp
     Source/Physics/PhysicsWorld.cpp
@@ -853,6 +859,9 @@ if(WIN32)
     creation_engine_stage_package_dlls(CreationEngineServer "${ZLIB_LIBRARY_RELEASE}" "$<NOT:$<CONFIG:Debug>>")
 endif()
 
+add_test(NAME creation_engine_headless_ticks_smoke COMMAND CreationEngineServer --ticks 8)
+set_tests_properties(creation_engine_headless_ticks_smoke PROPERTIES PASS_REGULAR_EXPRESSION "completed 8 ticks" TIMEOUT 60)
+
 add_executable(CreationEngineDeveloperApiConformance tests/DeveloperApiConformance.cpp)
 target_compile_definitions(CreationEngineDeveloperApiConformance PRIVATE JUCE_USE_CURL=0 JUCE_INCLUDE_ZLIB_CODE=0)
 target_link_libraries(CreationEngineDeveloperApiConformance PRIVATE
@@ -871,6 +880,18 @@ if(Python3_Interpreter_FOUND)
         COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/DeveloperApiIntegration.py"
             --server "$<TARGET_FILE:CreationEngineServer>" --work "${CMAKE_CURRENT_BINARY_DIR}/developer-api-tests")
     set_tests_properties(creation_engine_developer_api_http PROPERTIES TIMEOUT 120)
+    add_test(NAME creation_engine_runtime_parity_headless
+        COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/RuntimeParityIntegration.py"
+            --server "$<TARGET_FILE:CreationEngineServer>" --work "${CMAKE_CURRENT_BINARY_DIR}/developer-api-tests")
+    set_tests_properties(creation_engine_runtime_parity_headless PROPERTIES TIMEOUT 90)
+
+    if(WIN32 OR DEFINED ENV{DISPLAY})
+        add_test(NAME creation_engine_runtime_parity_desktop
+            COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/RuntimeParityIntegration.py"
+                --server "$<TARGET_FILE:CreationEngineServer>" --editor "$<TARGET_FILE:CreationEngineEditor>"
+                --work "${CMAKE_CURRENT_BINARY_DIR}/developer-api-tests")
+        set_tests_properties(creation_engine_runtime_parity_desktop PROPERTIES TIMEOUT 150 RUN_SERIAL TRUE)
+    endif()
 endif()
 
 install(TARGETS CreationEngineEditor

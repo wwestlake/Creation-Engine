@@ -1,0 +1,53 @@
+manifest "{\"name\":\"runtime-probe\",\"version\":\"1.0.0\",\"entryPoints\":[\"on_init\",\"on_unload\"],\"intendedApplications\":[\"creation-engine\"]}";
+
+use self::CoreNodesLibrary;
+
+extern fn engine_current_tick() -> i64;
+extern fn engine_current_object_entity() -> i64;
+extern fn engine_entity_find_by_name(name: String) -> i64;
+extern fn engine_active_game_id() -> String;
+extern fn engine_active_scene_id() -> String;
+extern fn engine_request_scene_transition(scene: String) -> i64;
+extern fn pod_get_variable_int(entity: i64, pod: String, name: String) -> i64;
+extern fn pod_set_variable_int(entity: i64, pod: String, name: String, value: i64) -> i64;
+extern fn pod_set_variable_string(entity: i64, pod: String, name: String, value: String) -> i64;
+
+pub fn on_init() -> i64 = {
+    let entity = engine_entity_find_by_name("Runtime Probe");
+    pod_set_variable_int(entity, "runtime-probe", "initTick", engine_current_tick())
+}
+
+pub fn on_spawn(tick: i64) -> i64 = {
+    let entity = engine_current_object_entity();
+    pod_set_variable_int(entity, "runtime-probe", "spawnTick", tick)
+}
+
+pub fn on_begin_play(tick: i64) -> i64 = {
+    let entity = engine_current_object_entity();
+    let game = engine_active_game_id();
+    let scene = engine_active_scene_id();
+    pod_set_variable_string(entity, "runtime-probe", "game", game);
+    pod_set_variable_string(entity, "runtime-probe", "scene", scene);
+    pod_set_variable_int(entity, "runtime-probe", "beginTick", tick)
+}
+
+pub fn on_tick(tick: i64) -> i64 = {
+    let entity = engine_current_object_entity();
+    let count = pod_get_variable_int(entity, "runtime-probe", "count");
+    pod_set_variable_int(entity, "runtime-probe", "count", core_add(count, 1));
+    pod_set_variable_int(entity, "runtime-probe", "lastTick", engine_current_tick());
+    if (tick == 12) {
+        engine_request_scene_transition("Next Scene")
+    } else {
+        if (tick == 15) {
+            engine_request_scene_transition("missing-scene")
+        } else {
+            tick
+        }
+    }
+}
+
+pub fn on_unload() -> i64 = {
+    let entity = engine_entity_find_by_name("Runtime Probe");
+    pod_set_variable_int(entity, "runtime-probe", "unloadTick", engine_current_tick())
+}

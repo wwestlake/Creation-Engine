@@ -10,6 +10,8 @@
 
 namespace creation::assets { class ProjectSession; }
 
+namespace ce::node_system { class NodeLibraryRegistry; }
+
 namespace ce::frust {
 
 // What domain a Pod affects and what its inputs mean -- an invocation-
@@ -77,6 +79,10 @@ struct PodEntry {
     node_system::NodeId outputNode = 0;
     node_system::PinId outputPin = 0;
 };
+
+// Lower saved or in-editor graph data using the same FRust conventions.
+bool CompilePodSource(const std::string& name, const PodEntry& entry, const node_system::Graph& graph,
+                      const node_system::NodeLibraryRegistry& libraries, std::string& source, std::string& error);
 
 class PodCatalog final {
 public:

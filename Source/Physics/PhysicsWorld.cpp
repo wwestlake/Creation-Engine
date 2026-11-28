@@ -203,18 +203,13 @@ struct PhysicsWorld::Impl final : public JPH::ContactListener
 
 PhysicsWorld::PhysicsWorld()
 {
-    // Jolt's global registration is process-wide, not per-PhysicsWorld --
-    // guarded so a test creating more than one PhysicsWorld in the same
-    // process (unusual, but smoke tests do exactly this pattern) doesn't
-    // double-register.
-    static bool globalsRegistered = false;
-    if (!globalsRegistered)
-    {
+    // Jolt's type registry is process-wide. Each world owns all simulation state.
+    static std::once_flag registration;
+    std::call_once(registration, [] {
         JPH::RegisterDefaultAllocator();
         JPH::Factory::sInstance = new JPH::Factory();
         JPH::RegisterTypes();
-        globalsRegistered = true;
-    }
+    });
 
     impl_ = std::make_unique<Impl>();
 }
@@ -289,6 +284,13 @@ void PhysicsWorld::DetachFromWorld()
         registry.ctx().erase<PhysicsWorld::Impl*>();
     }
     attachedWorld_ = nullptr;
+}
+
+void PhysicsWorld::ResetTimeline()
+{
+    impl_->accumulatorSeconds = 0.0f;
+    std::lock_guard lock(impl_->eventMutex);
+    impl_->pendingEvents.clear();
 }
 
 float PhysicsWorld::Advance(ce::engine::World& world, float realElapsedSeconds)

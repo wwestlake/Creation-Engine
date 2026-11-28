@@ -12,40 +12,111 @@ namespace ce::runtime
 {
 
 GameClientContent::GameClientContent(int clientNumber, juce::ValueTree sceneState,
-                                     juce::String gameName, juce::String sceneName,
-                                     juce::Array<ce::project::PlayerSlotInfo> playerSlots,
-                                     ce::project::GameDocumentInfo game,
-                                     const creation::assets::ProjectSession& projectSession,
-                                     const creation::suite::SuiteSettings& suiteSettings)
-    // Unlike the editor's docked Scene Viewport, this window is a standalone
-    // top-level window with no tab-hide/show to tear its GL context down --
-    // self-attaching remains correct here (see ViewportComponent's
-    // renderSurfaceHost_ comment for why the editor's viewport needs an
-    // external host instead).
-    : clientNumber_(clientNumber), playerSlots_(std::move(playerSlots)), game_(std::move(game)), world_(), viewport_(world_, interactions_, viewport_)
+                                     project::GameDocumentInfo game, project::SceneDocumentInfo scene,
+                                     creation::assets::ProjectSession projectSession,
+                                     creation::suite::SuiteSettings suiteSettings, bool autoStart)
+    : clientNumber_(clientNumber), projectSession_(std::move(projectSession)), suiteSettings_(std::move(suiteSettings)),
+      game_(std::move(game)), scene_(std::move(scene)), initialState_(std::move(sceneState)),
+      viewport_(world_, interactions_, viewport_)
 {
     physicsWorld_.AttachToWorld(world_);
     frustHost_.setInputActionSystem(&inputActionSystem_);
-    frustHost_.setPhysicsWorld(&physicsWorld_);
-    juce::String inputError;
-    inputActionSystem_.LoadForGame(projectSession, game_, inputError, "gameplay");
-    inputMappingError_ = inputError;
-    // A run client owns an isolated World, but it begins with the exact
-    // authored scene selected in the editor rather than a blank test world.
-    ce::scene::EngineSceneSerializer::restoreScene(world_, sceneState);
+    if (projectSession_.isValid())
+        inputActionSystem_.LoadForGame(projectSession_, game_, inputMappingError_, "gameplay");
+
     addAndMakeVisible(viewport_);
-    viewport_.ResolveProjectAssets(projectSession, suiteSettings);
-    possessAuthoredPlayer();
-    hud_.setText(inputMappingError_.isEmpty()
-                     ? "CLIENT " + juce::String(clientNumber_) + "  |  " + gameName + " / " + sceneName
-                     : "INPUT MAPPING ERROR: " + inputMappingError_,
-                 juce::dontSendNotification);
     hud_.setColour(juce::Label::textColourId, juce::Colours::white);
     hud_.setColour(juce::Label::backgroundColourId, juce::Colour(0xaa10141a));
     hud_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(hud_);
-    runtimeWorldRunner_.BeginPlay();
+
+    if (autoStart) {
+        try {
+            (void)runtimeCommands_.Execute(developer::RuntimeAction::start);
+        } catch (const developer::Failure&) {
+            ShowSceneStatus();
+        }
+    } else
+        ShowSceneStatus();
     startTimerHz(30);
+}
+
+GameClientContent::~GameClientContent()
+{
+    Close();
+}
+
+void GameClientContent::Close()
+{
+    stopTimer();
+    Stop();
+}
+
+developer::RuntimeOperations GameClientContent::RuntimeOperations()
+{
+    using namespace developer;
+    return {
+        [this] { return phase_; },
+        [this] { return world_.CurrentTick(); },
+        [this](Source source) { return Start(source); },
+        [this] { phase_ = Phase::paused; },
+        [this] { phase_ = Phase::running; return true; },
+        [this] { return Stop(); },
+        [this] { Tick(); },
+        [this] { return RuntimeDiagnostics(runtimeWorldRunner_, world_, fixture_); }
+    };
+}
+
+bool GameClientContent::Start(developer::Source requested)
+{
+    fixture_ = requested == developer::Source::fixture;
+    auto scene = scene_;
+    auto source = fixture_ ? DeveloperFixture() : FromProject(projectSession_, game_);
+    if (fixture_ && !source.game.scenes.isEmpty())
+        scene = source.game.scenes.getFirst();
+    if (!runtimeWorldRunner_.Start(std::move(source), std::move(scene), fixture_ ? juce::ValueTree{} : initialState_,
+                                   [this](juce::String&) { PrepareScene(); return true; })) {
+        ShowSceneStatus();
+        return false;
+    }
+    phase_ = developer::Phase::running;
+    viewport_.SetPlaying(true);
+    ShowSceneStatus();
+    return true;
+}
+
+bool GameClientContent::Stop()
+{
+    possessionService_.release();
+    cameraDirector_.detach();
+    viewport_.ClearDirectedCameraPose();
+    viewport_.ExitPossessedMode();
+    viewport_.SetPlaying(false);
+    runtimeWorldRunner_.Stop();
+    phase_ = developer::Phase::stopped;
+    return true;
+}
+
+void GameClientContent::PrepareScene()
+{
+    if (projectSession_.isValid())
+        viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
+    if (!fixture_)
+        possessAuthoredPlayer();
+}
+
+void GameClientContent::ShowSceneStatus()
+{
+    const auto& runtimeError = runtimeWorldRunner_.LastError();
+    if (runtimeError.isNotEmpty()) {
+        hud_.setText(runtimeError, juce::dontSendNotification);
+        return;
+    }
+    hud_.setText(inputMappingError_.isEmpty()
+                     ? "CLIENT " + juce::String(clientNumber_) + "  |  " + runtimeWorldRunner_.Game().name
+                         + " / " + runtimeWorldRunner_.Scene().name
+                     : "INPUT MAPPING ERROR: " + inputMappingError_,
+                 juce::dontSendNotification);
 }
 
 void GameClientContent::resized()
@@ -61,23 +132,32 @@ void GameClientContent::paint(juce::Graphics& g)
 
 void GameClientContent::timerCallback()
 {
-    if (playing_)
-    {
-        const double nowSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0;
-        const float elapsedSeconds = lastFrameSeconds_ > 0.0
-            ? static_cast<float>(nowSeconds - lastFrameSeconds_) : 0.0f;
-        lastFrameSeconds_ = nowSeconds;
-        runtimeWorldRunner_.RunFrame(elapsedSeconds, {
-            [this](float dt) { updatePossessedPlayer(dt); }
-        });
-    }
+    if (phase_ == developer::Phase::running)
+        Tick();
     viewport_.PublishFrameSnapshot();
     viewport_.repaint();
 }
 
+void GameClientContent::Tick()
+{
+    if (!fixture_)
+        inputActionSystem_.PollOncePerFrame(juce::TopLevelWindow::getActiveTopLevelWindow() == getTopLevelComponent());
+    runtimeWorldRunner_.Tick({
+        [this](float dt) { updatePossessedPlayer(dt); },
+        [this] {
+            possessionService_.release();
+            cameraDirector_.detach();
+            viewport_.ClearDirectedCameraPose();
+            viewport_.ExitPossessedMode();
+        },
+        [this] { PrepareScene(); ShowSceneStatus(); }
+    });
+}
+
 void GameClientContent::possessAuthoredPlayer()
 {
-    const auto slotId = playerSlots_.isEmpty() ? juce::String("player-1") : playerSlots_.getFirst().id;
+    const auto& slots = game_.playerSlots;
+    const auto slotId = slots.isEmpty() ? juce::String("player-1") : slots.getFirst().id;
     PossessionRequest request;
     request.controllerId = "client-" + juce::String(clientNumber_);
     request.inputContext = "gameplay";
@@ -170,25 +250,29 @@ void GameClientContent::updatePossessedPlayer(float elapsedSeconds)
 }
 
 GameClientWindow::GameClientWindow(int clientNumber, juce::ValueTree sceneState,
-                                   juce::String gameName, juce::String sceneName,
-                                   juce::Array<ce::project::PlayerSlotInfo> playerSlots,
-                                   ce::project::GameDocumentInfo game,
-                                   const creation::assets::ProjectSession& projectSession,
-                                   const creation::suite::SuiteSettings& suiteSettings)
-    : DocumentWindow(gameName + " - " + sceneName + " - Client " + juce::String(clientNumber),
-                     juce::Colours::black,
-                     DocumentWindow::allButtons)
+                                   project::GameDocumentInfo game, project::SceneDocumentInfo scene,
+                                   creation::assets::ProjectSession projectSession,
+                                   creation::suite::SuiteSettings suiteSettings, bool autoStart)
+    : DocumentWindow(game.name + " - " + scene.name + " - Client " + juce::String(clientNumber),
+                     juce::Colours::black, DocumentWindow::allButtons)
 {
     setUsingNativeTitleBar(true);
     setResizable(true, true);
     setIcon(creation::ui::getSuiteLogoImage(creation::ui::SuiteLogoId::engine));
-    setContentOwned(new GameClientContent(clientNumber, sceneState, gameName, sceneName, std::move(playerSlots), std::move(game), projectSession, suiteSettings), true);
+    setContentOwned(new GameClientContent(clientNumber, std::move(sceneState), std::move(game), std::move(scene),
+                                          std::move(projectSession), std::move(suiteSettings), autoStart), true);
     centreWithSize(1280, 720);
     setVisible(true);
 }
 
+developer::RuntimeCommands& GameClientWindow::Commands()
+{
+    return static_cast<GameClientContent&>(*getContentComponent()).Commands();
+}
+
 void GameClientWindow::closeButtonPressed()
 {
+    static_cast<GameClientContent&>(*getContentComponent()).Close();
     setVisible(false);
 }
 
