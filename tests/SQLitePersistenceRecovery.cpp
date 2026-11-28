@@ -218,6 +218,16 @@ void InvalidFormatsAndWriteFailure(const fs::path& root)
     Inspect(*session, 1);
     Check(Take(session->ReadChanges({}, 10)).batches.size() == 1, "Failed writes changed the journal.");
     Sql(raw, "DROP TRIGGER fail_journal");
+    Sql(raw, "CREATE TRIGGER fail_index_catalog BEFORE UPDATE OF definition ON sessions BEGIN "
+             "SELECT RAISE(ABORT, 'injected index catalog write failure'); END;");
+    const IndexDefinition descending{{kNumber}, true, {2}, {SortDirection::Descending}};
+    ExpectStorageError(session->MaintainIndex({kKey.collection, kByNumber, IndexOperation::Rebuild,
+                                               descending, IndexVersion{1}}), "injected index catalog write failure");
+    Inspect(*session, 1);
+    const auto snapshot = Take(session->OpenSnapshot());
+    Check(Take(snapshot->Describe(kKey.collection)).indexes.at(kByNumber).version == IndexVersion{1},
+          "Failed index maintenance published its catalog.");
+    Sql(raw, "DROP TRIGGER fail_index_catalog");
     Check(Take(session->Commit(update)) == CommitRevision{2}, "Writes must resume after the failure clears.");
     Inspect(*session, 2);
 }

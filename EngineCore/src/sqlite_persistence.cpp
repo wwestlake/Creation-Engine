@@ -78,6 +78,7 @@ struct QueryPlan {
 
 QueryPlan PlanPrimary(const QueryDescription& query)
 {
+    const bool reverse = query.direction == SortDirection::Descending;
     QueryPlan plan{"SELECT record_id, version, payload FROM records "
                    "WHERE session_id=? AND namespace_id=? AND collection_id=?", {}};
     if (!query.prefix.empty())
@@ -87,50 +88,42 @@ QueryPlan PlanPrimary(const QueryDescription& query)
     if (query.upper)
         plan.Bound("record_id", query.upper->inclusive ? "<=" : "<", AsBytes(std::get<std::string>(query.upper->value)));
     if (query.after)
-        plan.Bound("record_id", ">", AsBytes(query.after->id.value));
-    plan.sql += " ORDER BY record_id LIMIT ?";
+        plan.Bound("record_id", reverse ? "<" : ">", AsBytes(query.after->id.value));
+    plan.sql += reverse ? " ORDER BY record_id DESC LIMIT ?" : " ORDER BY record_id LIMIT ?";
     return plan;
 }
 
-QueryPlan PlanSecondary(const QueryDescription& query)
+QueryPlan PlanSecondary(const QueryDescription& query, const IndexDefinition& definition)
 {
     QueryPlan plan{"SELECT r.record_id, r.version, r.payload FROM record_indexes AS i "
                    "JOIN records AS r USING (session_id, namespace_id, collection_id, record_id) "
                    "WHERE i.session_id=? AND i.namespace_id=? AND i.collection_id=? AND i.index_id=?",
                    {AsBytes(query.index->value)}};
-    const auto prefix = EncodeOrderedKey(query.prefix);
-    auto lower = prefix;
-    bool lowerIsExclusive = false;
-    if (query.lower) {
-        AppendOrderedField(lower, query.lower->value);
-        lowerIsExclusive = !query.lower->inclusive;
-    }
-    auto upper = PrefixEnd(prefix);
-    if (query.upper) {
-        auto bound = prefix;
-        AppendOrderedField(bound, query.upper->value);
-        upper = query.upper->inclusive ? PrefixEnd(std::move(bound)) : std::optional{std::move(bound)};
-    }
-
-    // Exclusive lower bounds skip every tuple with the excluded component,
-    // including keys that continue with more fields.
-    if (lowerIsExclusive) {
-        if (auto next = PrefixEnd(std::move(lower)))
-            lower = std::move(*next);
-        else
-            plan.sql += " AND 0";
-    }
-    if (!lower.empty())
-        plan.Bound("i.sort_key", ">=", std::move(lower));
-    if (upper)
-        plan.Bound("i.sort_key", "<", std::move(*upper));
+    auto range = MakeOrderedRange({}, query, &definition, false);
+    if (range.empty)
+        plan.sql += " AND 0";
+    if (!range.first.empty())
+        plan.Bound("i.sort_key", ">=", std::move(range.first));
+    if (range.past)
+        plan.Bound("i.sort_key", "<", std::move(*range.past));
+    const bool reverse = query.direction == SortDirection::Descending;
     if (query.after) {
-        plan.sql += " AND (i.sort_key, i.record_id) > (?, ?)";
-        plan.arguments.push_back(EncodeOrderedKey(query.after->key));
+        plan.sql += reverse ? " AND (i.sort_key, i.record_id) < (?, ?)" : " AND (i.sort_key, i.record_id) > (?, ?)";
+        plan.arguments.push_back(EncodeOrderedKey(query.after->key, &definition));
         plan.arguments.push_back(AsBytes(query.after->id.value));
     }
-    plan.sql += " ORDER BY i.sort_key, i.record_id LIMIT ?";
+    plan.sql += reverse ? " ORDER BY i.sort_key DESC, i.record_id DESC LIMIT ?" : " ORDER BY i.sort_key, i.record_id LIMIT ?";
     return plan;
+}
+
+void CheckSessionDefinition(const Database& database, const SessionId& id, const SessionSchema& schema)
+{
+    Statement read(database, "SELECT definition FROM sessions WHERE id=?", "read session definition");
+    read.Bind(1, id.value);
+    if (!read.Step())
+        MalformedData();
+    if (!std::ranges::equal(EncodeSchema(schema), read.Blob(0)))
+        throw Fail(ErrorCode::SchemaMismatch, "Session index catalog changed. Reopen with the current definition.");
 }
 
 class SQLiteSnapshot final : public ReadSnapshot {
@@ -140,9 +133,14 @@ public:
     {
         db_.Execute("BEGIN", "begin read snapshot");
         revision_ = ReadRevision(db_, id_);
+        CheckSessionDefinition(db_, id_, *schema_);
     }
 
     CommitRevision Revision() const noexcept override { return revision_; }
+    Result<CollectionSchema> Describe(const CollectionKey& key) const override
+    {
+        return ResultOf([&]() -> CollectionSchema { return GetCollection(*schema_, key); });
+    }
 
     Result<std::optional<Record>> Get(const RecordKey& key) const override
     {
@@ -169,10 +167,11 @@ public:
             const auto fields = QueryFields(query, schema);
             if (!fields)
                 throw fields.Error();
-            if (const auto valid = ValidateQuery(query, fields.Value(), id_, revision_); !valid)
+            const auto* definition = SelectedIndex(query, schema);
+            if (const auto valid = ValidateQuery(query, fields.Value(), id_, revision_, definition); !valid)
                 throw valid.Error();
 
-            const auto plan = query.index ? PlanSecondary(query) : PlanPrimary(query);
+            const auto plan = definition ? PlanSecondary(query, *definition) : PlanPrimary(query);
             Statement scan(db_, plan.sql.c_str(), "query indexed records");
             BindCollection(scan, id_, query.collection);
             int parameter = 4;
@@ -184,11 +183,11 @@ public:
             while (scan.Step()) {
                 if (result.records.size() == query.limit) {
                     const auto& last = result.records.back();
-                    auto key = query.index ? ProjectIndexKey(schema.indexes.at(*query.index), last.data)
+                    auto key = definition ? ProjectIndexKey(*definition, last.data)
                                            : std::optional<IndexKey>{{last.id.value}};
                     if (!key)
                         MalformedData();
-                    result.next = QueryCursor{id_, revision_, query.collection, query.index, std::move(*key), last.id};
+                    result.next = MakeCursor(query, id_, revision_, definition, std::move(*key), last.id);
                     break;
                 }
                 result.records.push_back(ReadRecord(scan, schema));
@@ -243,23 +242,27 @@ void ApplyRecord(const Database& database, const SessionId& session, const Recor
     store.Run();
 }
 
+void WriteIndexEntry(const Database& database, const SessionId& session, const CollectionKey& collection,
+                     const IndexId& id, const IndexDefinition& definition, const Record& record)
+{
+    const auto key = ProjectIndexKey(definition, record.data);
+    if (!key) return;
+    Statement insert(database, "INSERT INTO record_indexes VALUES (?, ?, ?, ?, ?, ?, ?)", "store index key");
+    BindCollection(insert, session, collection);
+    insert.Bind(4, id.value);
+    insert.Bind(5, EncodeOrderedKey(*key, &definition));
+    insert.Bind(6, record.id.value);
+    insert.Bind(7, static_cast<std::int64_t>(definition.unique));
+    insert.Run();
+}
+
 void IndexRecord(const Database& database, const SessionId& session, const CollectionSchema& schema,
                  const RecordChange& change)
 {
     if (!change.record)
         return;
-    for (const auto& [id, definition] : schema.indexes) {
-        const auto key = ProjectIndexKey(definition, change.record->data);
-        if (!key)
-            continue;
-        Statement insert(database, "INSERT INTO record_indexes VALUES (?, ?, ?, ?, ?, ?, ?)", "store index key");
-        BindCollection(insert, session, change.key.collection);
-        insert.Bind(4, id.value);
-        insert.Bind(5, EncodeOrderedKey(*key));
-        insert.Bind(6, change.key.id.value);
-        insert.Bind(7, static_cast<std::int64_t>(definition.unique));
-        insert.Run();
-    }
+    for (const auto& [id, definition] : schema.indexes)
+        WriteIndexEntry(database, session, change.key.collection, id, definition, *change.record);
 }
 
 void InsertJournal(const Database& database, const SessionId& session, const ChangeBatch& batch)
@@ -382,6 +385,7 @@ public:
                 throw Fail(ErrorCode::InvalidArgument, "Cannot commit an empty transaction.");
             auto& database = *writer_;
             WriteTransaction write(database);
+            CheckSessionDefinition(database, id_, *schema_);
             const auto current = ReadRevision(database, id_);
             if (transaction.expectedRevision && *transaction.expectedRevision != current)
                 throw Fail(ErrorCode::VersionConflict, "Session revision changed.");
@@ -414,6 +418,48 @@ public:
         });
     }
 
+    Result<IndexMaintenanceResult> MaintainIndex(const IndexMaintenance& request) override
+    {
+        return ResultOf([&] {
+            std::lock_guard lock(mutex_);
+            RequireOpen();
+            auto& database = *writer_;
+            WriteTransaction write(database);
+            CheckSessionDefinition(database, id_, *schema_);
+            auto updated = MaintainDefinition(GetCollection(*schema_, request.collection), request);
+            if (!updated) throw updated.Error();
+            auto next = std::make_shared<SessionSchema>(*schema_);
+            auto& collection = next->at(request.collection);
+            collection = std::move(updated).Value();
+
+            Statement remove(database, "DELETE FROM record_indexes WHERE session_id=? AND namespace_id=? "
+                                       "AND collection_id=? AND index_id=?", "clear index keys");
+            BindCollection(remove, id_, request.collection);
+            remove.Bind(4, request.index.value);
+            remove.Run();
+            IndexMaintenanceResult result{ReadRevision(database, id_), {}, 0};
+            if (const auto index = collection.indexes.find(request.index); index != collection.indexes.end()) {
+                result.definition = index->second;
+                Statement rows(database, "SELECT record_id, version, payload FROM records WHERE session_id=? "
+                                         "AND namespace_id=? AND collection_id=? ORDER BY record_id", "read index source records");
+                BindCollection(rows, id_, request.collection);
+                while (rows.Step()) {
+                    if (auto active = CheckMaintenance(request, result.recordsExamined, true); !active) throw active.Error();
+                    WriteIndexEntry(database, id_, request.collection, request.index, index->second, ReadRecord(rows, collection));
+                    ++result.recordsExamined;
+                }
+            }
+            Statement update(database, "UPDATE sessions SET definition=? WHERE id=?", "update index catalog");
+            update.Bind(1, EncodeSchema(*next));
+            update.Bind(2, id_.value);
+            update.Run();
+            if (auto active = CheckMaintenance(request, result.recordsExamined); !active) throw active.Error();
+            write.Commit();
+            schema_ = std::move(next);
+            return result;
+        });
+    }
+
     Result<ChangePage> CaptureChanges(CommitRevision after, std::size_t limit) const override
     {
         return ResultOf([&] {
@@ -427,11 +473,16 @@ public:
     Result<SessionArchive> Export() const override
     {
         return ResultOf([&] {
-            auto database = OpenReader();
+            std::unique_lock lock(mutex_);
+            RequireOpen();
+            auto database = Connect(options_, SQLITE_OPEN_READONLY);
             database.Execute("BEGIN", "begin archive snapshot");
             const auto revision = ReadRevision(database, id_);
+            auto schema = schema_;
+            CheckSessionDefinition(database, id_, *schema);
+            lock.unlock();
             const auto floor = ReadHistoryFloor(database, id_, revision);
-            SessionArchive archive{id_, *schema_, revision, floor, {},
+            SessionArchive archive{id_, *schema, revision, floor, {},
                                    ReadJournal(database, id_, floor, revision, floor, kMaxRevision).batches};
             Statement rows(database, "SELECT record_id, version, payload, namespace_id, collection_id FROM records "
                                      "WHERE session_id=? ORDER BY namespace_id, collection_id, record_id",
@@ -439,7 +490,7 @@ public:
             rows.Bind(1, id_.value);
             while (rows.Step()) {
                 const CollectionKey collection{{rows.Bytes(3)}, {rows.Bytes(4)}};
-                archive.records.push_back({collection, ReadRecord(rows, GetCollection(*schema_, collection))});
+                archive.records.push_back({collection, ReadRecord(rows, GetCollection(*schema, collection))});
             }
             return archive;
         });
@@ -495,7 +546,8 @@ public:
     CapabilitySet Capabilities() const override
     {
         return {Capability::PrimaryQueries, Capability::SecondaryIndexes, Capability::AtomicTransactions,
-                Capability::ConsistentSnapshots, Capability::LogicalChangeJournal, Capability::DurablePersistence};
+                Capability::ConsistentSnapshots, Capability::LogicalChangeJournal, Capability::DurablePersistence,
+                Capability::PortableQueries, Capability::IndexMaintenance};
     }
 
     Result<std::unique_ptr<Session>> OpenSession(const OpenSessionRequest& request) override

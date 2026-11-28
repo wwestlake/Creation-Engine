@@ -24,6 +24,7 @@ struct Command {
     const char* name;
     Access permission;
     Action action;
+    bool cooperativeCancellation = false;
 };
 
 constexpr Command commands[] = {
@@ -40,6 +41,9 @@ constexpr Command commands[] = {
     {"persistence.record.get", Access::read, PersistenceAction::lookup},
     {"persistence.query", Access::read, PersistenceAction::query},
     {"persistence.changes", Access::read, PersistenceAction::changes},
+    {"persistence.indexes", Access::read, PersistenceAction::indexes},
+    {"persistence.query.explain", Access::read, PersistenceAction::explain},
+    {"persistence.query.execute", Access::read, PersistenceAction::execute, true},
 };
 
 Value Type(const char* type) { return Object({{"type", type}}); }
@@ -78,6 +82,33 @@ Value RecordSchema()
                    {"binary", Nullable(Bytes())}}, {"id", "version", "schemaVersion", "fields", "binary"});
 }
 
+Value DirectionSchema() { return Choice({"asc", "desc"}); }
+Value BoundSchema() { return Struct({{"value", FieldSchema()}, {"inclusive", Type("boolean")}}, {"value", "inclusive"}); }
+
+Value PredicateSchema(int maxChildren)
+{
+    auto children = List(Object({{"$ref", "#/$defs/predicate"}}));
+    Put(children, "minItems", 1);
+    Put(children, "maxItems", maxChildren);
+    auto oneChild = children.clone();
+    Put(oneChild, "maxItems", 1);
+    return Object({{"oneOf", Array({
+        Struct({{"op", Choice({"and", "or"})}, {"children", children}}, {"op", "children"}),
+        Struct({{"op", Choice({"not"})}, {"children", oneChild}}, {"op", "children"}),
+        Struct({{"op", Choice({"eq", "ne", "lt", "le", "gt", "ge"})}, {"field", Identifier()}, {"value", FieldSchema()}}, {"op", "value"}),
+        Struct({{"op", Choice({"isNull", "isMissing", "isPresent"})}, {"field", Identifier()}}, {"op"})
+    })}});
+}
+
+Value PlanSchema()
+{
+    return Struct({{"access", Choice({"empty", "primary_seek", "index_seek", "primary_scan", "index_scan"})},
+                   {"index", Nullable(Identifier())}, {"indexVersion", Nullable(DecimalSchema())},
+                   {"direction", DirectionSchema()}, {"prefix", List(FieldSchema())},
+                   {"lower", Nullable(BoundSchema())}, {"upper", Nullable(BoundSchema())}, {"residualFilter", Type("boolean")}},
+                  {"access", "index", "indexVersion", "direction", "prefix", "lower", "upper", "residualFilter"});
+}
+
 Value Parameters(const Command& command, const Settings& settings)
 {
     if (command.action == Action{RuntimeAction::start}) {
@@ -97,13 +128,30 @@ Value Parameters(const Command& command, const Settings& settings)
                 return Struct({{"snapshot", Token()}, {"namespace", Identifier()}, {"collection", Identifier()},
                                {"id", Identifier()}}, {"snapshot", "namespace", "collection", "id"});
             case PersistenceAction::query: {
-                const auto bound = Struct({{"value", FieldSchema()}, {"inclusive", Type("boolean")}}, {"value", "inclusive"});
+                const auto bound = BoundSchema();
                 return Struct({{"snapshot", Token()}, {"namespace", Identifier()}, {"collection", Identifier()},
                                {"index", Identifier()}, {"prefix", List(FieldSchema())}, {"lower", bound}, {"upper", bound},
                                {"limit", limit}, {"cursor", Token()}}, {"snapshot", "namespace", "collection", "limit"});
             }
             case PersistenceAction::changes:
                 return Struct({{"after", DecimalSchema()}, {"limit", limit}}, {"after", "limit"});
+            case PersistenceAction::indexes:
+                return Struct({{"snapshot", Token()}, {"namespace", Identifier()}, {"collection", Identifier()},
+                               {"index", Identifier()}}, {"snapshot", "namespace", "collection"});
+            case PersistenceAction::explain:
+            case PersistenceAction::execute: {
+                auto schema = Struct({{"snapshot", Token()}, {"namespace", Identifier()}, {"collection", Identifier()},
+                                      {"index", Identifier()}, {"where", Object({{"$ref", "#/$defs/predicate"}})},
+                                      {"primaryOnly", Type("boolean")}, {"direction", DirectionSchema()}, {"allowScan", Type("boolean")},
+                                      {"limit", limit}, {"candidates", Integer(1, settings.limits.queryCandidates)}},
+                                     {"snapshot", "namespace", "collection", "limit"});
+                if (*action == PersistenceAction::execute) {
+                    auto properties = Get(schema, "properties");
+                    Put(properties, "cursor", Token());
+                }
+                Put(schema, "$defs", Object({{"predicate", PredicateSchema(settings.limits.queryPredicateNodes)}}));
+                return schema;
+            }
             default: break;
         }
     }
@@ -153,16 +201,42 @@ Value ResultSchema(const Command& command)
                            {"next", DecimalSchema()}, {"more", Type("boolean")}},
                           {"batches", "revision", "historyFloor", "next", "more"});
         }
+        case PersistenceAction::indexes: {
+            const auto field = Struct({{"field", Identifier()}, {"type", Choice({"bool", "i64", "real", "text", "bytes"})},
+                                       {"direction", DirectionSchema()}, {"required", Type("boolean")}, {"nullable", Type("boolean")}},
+                                      {"field", "type", "direction", "required", "nullable"});
+            const auto index = Struct({{"id", Identifier()}, {"version", DecimalSchema()}, {"unique", Type("boolean")},
+                                       {"status", Choice({"ready"})}, {"fields", List(field)}},
+                                      {"id", "version", "unique", "status", "fields"});
+            return Struct({{"indexes", List(index)}, {"revision", DecimalSchema()}}, {"indexes", "revision"});
+        }
+        case PersistenceAction::explain:
+            return Struct({{"plan", PlanSchema()}, {"revision", DecimalSchema()}}, {"plan", "revision"});
+        case PersistenceAction::execute: {
+            const auto stats = Struct({{"candidates", DecimalSchema()}, {"providerPages", DecimalSchema()},
+                                       {"returned", DecimalSchema()}, {"elapsedNs", DecimalSchema()},
+                                       {"candidateBudgetReached", Type("boolean")}},
+                                      {"candidates", "providerPages", "returned", "elapsedNs", "candidateBudgetReached"});
+            return Struct({{"records", List(RecordSchema())}, {"revision", DecimalSchema()}, {"cursor", Nullable(Token())},
+                           {"plan", PlanSchema()}, {"statistics", stats}},
+                          {"records", "revision", "cursor", "plan", "statistics"});
+        }
     }
     return {};
 }
 
 // The supported schema vocabulary also validates requests. Native operations
 // check canonical encodings, numeric overflow, and constraints requiring state.
-bool Matches(const Value& value, const Value& schema)
+bool Matches(const Value& value, const Value& schema, const Value& root, int depth = 0)
 {
+    if (depth > 48) return false;
+    if (const auto reference = Get(schema, "$ref").toString(); reference.startsWith("#/$defs/")) {
+        const auto name = reference.substring(8);
+        const auto definition = Get(root, "$defs").getProperty(juce::Identifier(name), {});
+        return !definition.isVoid() && Matches(value, definition, root, depth + 1);
+    }
     if (const auto alternatives = Get(schema, "oneOf"); alternatives.isArray())
-        return std::ranges::count_if(*alternatives.getArray(), [&](const auto& item) { return Matches(value, item); }) == 1;
+        return std::ranges::count_if(*alternatives.getArray(), [&](const auto& item) { return Matches(value, item, root, depth + 1); }) == 1;
     if (const auto choices = Get(schema, "enum"); choices.isArray())
         return choices.getArray()->contains(value);
     const auto type = Get(schema, "type").toString();
@@ -181,18 +255,25 @@ bool Matches(const Value& value, const Value& schema)
     }
     if (type == "number") return value.isDouble() || value.isInt() || value.isInt64();
     if (type == "boolean") return value.isBool();
-    if (type == "array")
-        return value.isArray() && std::ranges::all_of(*value.getArray(), [&](const auto& item) { return Matches(item, Get(schema, "items")); });
+    if (type == "array") {
+        const auto* items = value.getArray();
+        const auto min = static_cast<int>(Get(schema, "minItems"));
+        const auto max = static_cast<int>(Get(schema, "maxItems"));
+        return items && items->size() >= min && (max == 0 || items->size() <= max)
+            && std::ranges::all_of(*items, [&](const auto& item) { return Matches(item, Get(schema, "items"), root, depth + 1); });
+    }
     if (type == "object") {
         const auto* object = value.getDynamicObject();
         if (!object) return false;
         const auto properties = Get(schema, "properties");
+        if (const auto op = Get(properties, "op"); !op.isVoid() && !Matches(Get(value, "op"), op, root, depth + 1))
+            return false;
         for (const auto& name : *Get(schema, "required").getArray())
             if (!object->hasProperty(juce::Identifier(name.toString())))
                 return false;
         for (const auto& field : object->getProperties()) {
             const auto property = properties.getProperty(field.name, {});
-            if (property.isVoid() || !Matches(field.value, property)) return false;
+            if (property.isVoid() || !Matches(field.value, property, root, depth + 1)) return false;
         }
         return true;
     }
@@ -211,7 +292,9 @@ constexpr auto limitFields = std::to_array<std::pair<const char*, int Limits::*>
     {"queueDepth", &Limits::queueDepth}, {"concurrentJobs", &Limits::concurrentJobs},
     {"snapshotCount", &Limits::snapshotCount}, {"cursorCount", &Limits::cursorCount},
     {"snapshotMs", &Limits::snapshotMs}, {"cursorMs", &Limits::cursorMs}, {"deadlineMs", &Limits::deadlineMs},
-    {"resultMs", &Limits::resultMs}, {"retainedBytes", &Limits::retainedBytes}, {"requestHistory", &Limits::requestHistory}
+    {"resultMs", &Limits::resultMs}, {"retainedBytes", &Limits::retainedBytes}, {"requestHistory", &Limits::requestHistory},
+    {"queryCandidates", &Limits::queryCandidates}, {"queryPredicateNodes", &Limits::queryPredicateNodes},
+    {"queryPredicateDepth", &Limits::queryPredicateDepth}
 });
 
 Value LimitsJson(const Limits& limits)
@@ -269,7 +352,8 @@ Settings ReadSettings()
             l.outstanding > 256 || l.queueDepth > 256 || l.concurrentJobs > 2 || l.snapshotCount > 64 ||
             l.cursorCount > 1024 || l.snapshotMs > 600000 || l.cursorMs > 600000 || l.deadlineMs > 60000 ||
             l.resultMs > 600000 || l.retainedBytes < l.responseBytes || l.retainedBytes > 67108864 ||
-            l.requestHistory > 16384 || l.outstanding > l.requestHistory)
+            l.requestHistory > 16384 || l.outstanding > l.requestHistory || l.queryCandidates > 100000 ||
+            l.queryPredicateNodes > 256 || l.queryPredicateDepth > 10)
             Reject("invalid_input", "Developer API resource limits are out of range.");
     }
     return settings;
@@ -290,6 +374,7 @@ struct DeveloperApi::Impl {
         bool deadlineExceeded = false;
         Value result;
         Value error;
+        std::optional<std::stop_source> stop;
     };
 
     Impl(Settings input, String mode, String version, RuntimeCommands& runtime, PersistenceMount mount)
@@ -300,7 +385,8 @@ struct DeveloperApi::Impl {
     {
         if (command.action == Action{RuntimeAction::start})
             return settings.allowAuthored || settings.allowFixture;
-        return std::holds_alternative<RuntimeAction>(command.action) || persistence.Available();
+        const auto* storage = std::get_if<PersistenceAction>(&command.action);
+        return !storage || persistence.Supports(*storage);
     }
 
     Value Describe(const Command& command, Access access) const
@@ -309,7 +395,8 @@ struct DeveloperApi::Impl {
                        {"allowed", access == Access::control || command.permission == Access::read},
                        {"permission", command.permission == Access::read ? "read" : "control"},
                        {"parameters", Parameters(command, settings)}, {"result", ResultSchema(command)},
-                       {"execution", std::holds_alternative<RuntimeAction>(command.action) ? "engine_owner" : "persistence_worker"}});
+                       {"execution", std::holds_alternative<RuntimeAction>(command.action) ? "engine_owner" : "persistence_worker"},
+                       {"runningCancellation", command.cooperativeCancellation}});
     }
 
     static bool Active(const Job& job) { return job.state == State::queued || job.state == State::running; }
@@ -358,7 +445,7 @@ struct DeveloperApi::Impl {
         const char* states[] = {"queued", "running", "succeeded", "failed", "cancelled", "timed_out"};
         auto value = Object({{"id", Utf8(job.id)}, {"command", job.command->name},
                              {"state", states[static_cast<std::size_t>(job.state)]},
-                             {"cancellable", job.state == State::queued},
+                             {"cancellable", job.state == State::queued || (job.state == State::running && job.stop && !job.stop->stop_requested())},
                              {"deadlineExceeded", job.deadlineExceeded || (Active(job) && Clock::now() >= job.deadline)}});
         if (!job.result.isVoid()) Put(value, "result", job.result);
         if (!job.error.isVoid()) Put(value, "error", job.error);
@@ -393,7 +480,8 @@ struct DeveloperApi::Impl {
                 result = runtime.Execute(*command, source, static_cast<int>(Get(job.arguments, "ticks")));
                 Put(result, "executionMode", mode);
             } else {
-                result = persistence.Execute(std::get<PersistenceAction>(job.command->action), job.access, job.arguments);
+                result = persistence.Execute(std::get<PersistenceAction>(job.command->action), job.access, job.arguments,
+                                             job.deadline, job.stop ? job.stop->get_token() : std::stop_token{});
             }
             bytes = juce::JSON::toString(result, true).getNumBytesAsUTF8();
             if (bytes + 1024 > static_cast<std::size_t>(settings.limits.responseBytes))
@@ -406,7 +494,14 @@ struct DeveloperApi::Impl {
         if (!error.isVoid()) result = Value{};
         {
             std::lock_guard lock(mutex);
-            const auto state = error.isVoid() ? State::succeeded : State::failed;
+            auto state = error.isVoid() ? State::succeeded : State::failed;
+            if (job.stop && job.stop->stop_requested()) {
+                state = State::cancelled;
+                result = Value{};
+                error = Error({"cancelled", "The query was cancelled.", 409, {}});
+            } else if (Get(error, "code").toString() == "timeout") {
+                state = State::timedOut;
+            }
             Finish(job, state, std::move(result), std::move(error), state == State::succeeded ? bytes : 0);
             --running;
         }
@@ -475,6 +570,9 @@ void DeveloperApi::Stop()
     {
         std::lock_guard lock(impl_->mutex);
         impl_->stopping = true;
+        for (auto& [key, job] : impl_->jobs)
+            if (job.state == Impl::State::running && job.stop)
+                job.stop->request_stop();
     }
     impl_->changed.notify_all();
     if (impl_->worker.joinable()) impl_->worker.join();
@@ -499,7 +597,10 @@ Value DeveloperApi::Discovery(Access access) const
     auto capabilities = Array({"runtime", "jobs"});
     if (impl_->settings.allowAuthored) capabilities.append("authored_runtime");
     if (impl_->settings.allowFixture) capabilities.append("synthetic_runtime");
-    if (impl_->persistence.Available()) capabilities.append("persistence_inspection");
+    if (impl_->persistence.Available()) {
+        capabilities.append("persistence_inspection");
+        if (impl_->persistence.Supports(PersistenceAction::execute)) capabilities.append("portable_index_queries");
+    }
     return Object({{"apiVersion", "1.0.0"}, {"engineVersion", impl_->version}, {"processMode", impl_->mode},
                    {"capabilities", capabilities}, {"limits", LimitsJson(GetLimits())}, {"commands", Value(std::move(catalog))}});
 }
@@ -517,8 +618,9 @@ Response DeveloperApi::Submit(Access access, const std::string& commandName, con
         const auto requestId = Get(body, "requestId");
         const auto id = Text(requestId);
         const auto arguments = Get(body, "arguments");
+        const auto parameters = Parameters(*command, impl_->settings);
         if (!body.isObject() || body.getDynamicObject()->getProperties().size() != 2 || !requestId.isString() ||
-            !ValidId(id) || !Matches(arguments, Parameters(*command, impl_->settings)))
+            !ValidId(id) || !Matches(arguments, parameters, parameters))
             Reject("invalid_input", "The request does not match the command contract.");
         const auto fingerprint = Fingerprint(arguments);
         std::lock_guard lock(impl_->mutex);
@@ -535,6 +637,7 @@ Response DeveloperApi::Submit(Access access, const std::string& commandName, con
             impl_->jobs.size() >= static_cast<std::size_t>(GetLimits().requestHistory))
             Reject("resource_limit", "The job or request history limit has been reached.", 429);
         Impl::Job job{id, access, command, arguments, fingerprint, Clock::now() + std::chrono::milliseconds(GetLimits().deadlineMs)};
+        if (command->cooperativeCancellation) job.stop.emplace();
         const auto inserted = impl_->jobs.emplace(key, std::move(job));
         impl_->changed.notify_all();
         return impl_->Report(inserted.first->second, 202);
@@ -554,6 +657,10 @@ Response DeveloperApi::Job(Access access, const std::string& id, bool cancel)
         auto& job = found->second;
         if (!Impl::Active(job) && Clock::now() >= job.expires)
             return impl_->Report(job, 200);
+        if (cancel && job.state == Impl::State::running && job.stop) {
+            job.stop->request_stop();
+            return impl_->Report(job, 200);
+        }
         if (cancel && (job.state == Impl::State::running || (!Impl::Active(job) && job.state != Impl::State::cancelled)))
             Reject("not_cancellable", "The job has passed its cancellation boundary.", 409);
         if (cancel && job.state == Impl::State::queued)

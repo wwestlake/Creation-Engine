@@ -9,6 +9,7 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <utility>
 #include <variant>
@@ -36,6 +37,7 @@ struct Version {
 };
 
 using SchemaVersion = Version<struct SchemaTag>;
+using IndexVersion = Version<struct IndexVersionTag>;
 using RecordVersion = Version<struct RecordVersionTag>;
 using CommitRevision = Version<struct CommitTag>;
 using Binary = std::vector<std::uint8_t>;
@@ -44,6 +46,7 @@ using Null = std::monostate;
 // Strings and binary values sort by bytes. Real values must be finite. Null
 // sorts before any declared field type. A missing field differs from Null.
 enum class FieldType { Boolean, Integer, Real, String, Binary };
+enum class SortDirection { Ascending, Descending };
 using FieldValue = std::variant<Null, bool, std::int64_t, double, std::string, Binary>;
 using Fields = std::map<FieldId, FieldValue>;
 using IndexKey = std::vector<FieldValue>;
@@ -70,6 +73,9 @@ struct FieldDefinition {
 struct IndexDefinition {
     std::vector<FieldId> fields;
     bool unique = false; // Uniqueness applies to complete keys, including indexed Null.
+    IndexVersion version{1};
+    // Empty means ascending on every field. Types come from CollectionSchema::fields.
+    std::vector<SortDirection> directions;
     bool operator==(const IndexDefinition&) const = default;
 };
 
@@ -127,6 +133,8 @@ struct QueryCursor {
     IndexKey key;
     RecordId id;
     std::optional<std::chrono::steady_clock::time_point> expiresAt;
+    SortDirection direction = SortDirection::Ascending;
+    std::optional<IndexDefinition> definition;
 };
 
 struct QueryDescription {
@@ -140,6 +148,8 @@ struct QueryDescription {
     std::optional<QueryBound> upper;
     std::optional<QueryCursor> after;
     std::size_t limit = 100;
+    // Reverse traversal reverses the complete index order, including record ID.
+    SortDirection direction = SortDirection::Ascending;
 };
 
 struct QueryPage {
@@ -202,7 +212,9 @@ enum class Capability {
     ConsistentSnapshots,
     LogicalChangeJournal,
     // Records and their journal survive provider/process restart.
-    DurablePersistence
+    DurablePersistence,
+    PortableQueries,
+    IndexMaintenance
 };
 using CapabilitySet = std::set<Capability>;
 
@@ -221,7 +233,10 @@ enum class ErrorCode {
     RevisionExhausted,
     HistoryUnavailable,
     ResourceLimit,
-    StorageFailure
+    StorageFailure,
+    Cancelled,
+    ExecutionTimeout,
+    ScanRequired
 };
 
 struct OperationError {
@@ -246,6 +261,24 @@ private:
 };
 using Status = Result<std::monostate>;
 
+enum class IndexOperation { Create, Remove, Rebuild };
+
+struct IndexMaintenance {
+    CollectionKey collection;
+    IndexId index;
+    IndexOperation operation = IndexOperation::Rebuild;
+    std::optional<IndexDefinition> definition;
+    std::optional<IndexVersion> expectedVersion;
+    std::size_t maxRecords = 100000;
+    std::stop_token stop;
+};
+
+struct IndexMaintenanceResult {
+    CommitRevision revision;
+    std::optional<IndexDefinition> definition;
+    std::size_t recordsExamined = 0;
+};
+
 class ReadSnapshot {
 public:
     virtual ~ReadSnapshot() = default;
@@ -254,6 +287,13 @@ public:
     // Results align with input keys, including duplicates and missing records.
     virtual Result<std::vector<std::optional<Record>>> GetMany(std::span<const RecordKey> keys) const;
     virtual Result<QueryPage> Query(const QueryDescription& query) const = 0;
+    virtual Result<CollectionSchema> Describe(const CollectionKey& collection) const;
+    virtual std::size_t PageCapacity() const noexcept { return 100; }
+    // Opaque lifetime identity for continuations that require this exact view.
+    std::weak_ptr<const void> ViewIdentity() const noexcept { return identity_; }
+
+private:
+    std::shared_ptr<const void> identity_ = std::make_shared<const std::byte>();
 };
 
 // Session reads each use one committed snapshot. An explicitly opened snapshot
@@ -273,6 +313,7 @@ public:
     Result<std::optional<Record>> Get(const RecordKey& key) const;
     Result<std::vector<std::optional<Record>>> GetMany(std::span<const RecordKey> keys) const;
     Result<QueryPage> Query(const QueryDescription& query) const;
+    virtual Result<IndexMaintenanceResult> MaintainIndex(const IndexMaintenance& request);
 
 protected:
     explicit Session(PersistencePolicy policy);

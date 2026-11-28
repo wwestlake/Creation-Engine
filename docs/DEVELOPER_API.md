@@ -51,6 +51,9 @@ The headless process begins stopped when launched with the Developer API enabled
 | persistence.record.get | Read | snapshot, namespace, collection and id. Returns a nullable record. |
 | persistence.query | Read | snapshot, namespace, collection, limit, and optional index, prefix, lower, upper and cursor. |
 | persistence.changes | Read | after and limit. Returns subsequent journal batches in commit order. |
+| persistence.indexes | Read | snapshot, namespace, collection, and optional index. Reports published definitions and status. |
+| persistence.query.explain | Read | Portable query arguments. Reports the selected index, scan or seek, bounds and residual filtering. |
+| persistence.query.execute | Read | Portable query arguments with optional cursor. Returns records, plan, statistics and a continuation. |
 
 Runtime start requires a stopped host. Step requires a paused host and stays paused. It uses the host’s simulation code without firing session start and stop callbacks. Inspection does not advance the simulation. A running session can advance between requests. Session identity identifies the most recent run until the next successful start. Stop resets the simulation tick. The editor shares status and playback state updates between the toolbar and API.
 
@@ -86,7 +89,7 @@ A successful submission responds with HTTP 202 and a job representation. Read GE
 }
 ~~~
 
-A job starts queued, may become running, and settles as succeeded, failed, cancelled or timed_out. DELETE /v1/jobs/{id} cancels a queued job and is safe to repeat for a cancelled job. A running job reports cancellable false. It is allowed to finish at its safe boundary. Queued work past its deadline times out without executing. Work that has already started may pass its deadline. In that case the job exposes deadlineExceeded and returns the actual outcome.
+A job starts queued, may become running, and settles as succeeded, failed, cancelled or timed_out. DELETE /v1/jobs/{id} cancels a queued job and is safe to repeat for a cancelled job. Discovery reports which commands can be cancelled once running. Portable query execution observes cancellation and deadlines at safe provider boundaries. Runtime operations that have started finish at their safe boundary and can report deadlineExceeded with the actual outcome.
 
 After losing a response, read the original request ID using the same endpoint and credential. If the job does not yet exist, resubmit exactly the same command and arguments under that ID. Reusing the ID for different work produces conflict. Finished results expire by time or retained-byte budget. The Engine keeps the deduplication entry for its lifetime and returns result_expired on repeat access after eviction. When the configured identity capacity is exhausted, new requests receive resource_limit. IDs and outcomes are scoped to one Engine process lifetime.
 
@@ -101,6 +104,31 @@ Namespace, collection, index, field and record identifiers use canonical RFC 464
 ~~~
 
 Preserve the snapshot and original query arguments, including limit, when adding the returned cursor for the next page. The continuation is scoped to the caller credential, mounted session, pinned snapshot revision, original query and expiry. Release snapshots at the end of inspection. Snapshot and continuation expiration are independent, and a continuation never extends its originating lifetime. Journal pagination uses next as the next after revision. An after position below historyFloor produces retention_gap. The journal revision position is a public position within the permitted mounted session. Query continuation tokens are opaque.
+
+### Portable index queries
+
+Start with persistence.snapshot.open. The catalog and query commands view the exact same pinned catalog as the records on that snapshot. Send snapshot, namespace, collection and limit to explain or execute. Optional arguments include where, index, primaryOnly, direction, allowScan and candidates. Direction is asc or desc. The index and primaryOnly options are mutually exclusive when primaryOnly is true. Omit both to let the planner select a deterministic index or primary order.
+
+~~~json
+{
+  "snapshot": "a422ab79dae4475e9187129a3c2f9030",
+  "namespace": "YXV0b21hdGlvbg==",
+  "collection": "cmVjb3Jkcw==",
+  "where": {
+    "op": "and",
+    "children": [
+      {"op": "ge", "field": "dmFsdWU=", "value": {"type": "i64", "value": "0"}},
+      {"op": "isPresent", "field": "bWVhc3VyZW1lbnQ="}
+    ]
+  },
+  "limit": 8,
+  "candidates": 64
+}
+~~~
+
+Field identifiers use base64. Substitute a declared field for every comparison or presence test. Omit field from a leaf to address the record ID with a text operand. An optional compound predicate uses eq, ne, lt, le, gt, ge, isNull, isMissing, isPresent, and, or, and not. Pass allowScan true to execute a plan that requires a scan. The scan_required job error indicates that explicit consent is needed.
+
+Statistics report evaluated candidates, provider pages, returned records, elapsed nanoseconds and whether the candidate budget caused a yield. When the result has a cursor, send it with the original arguments even if records is empty. The configured queryCandidates, queryPredicateNodes and queryPredicateDepth limits appear in discovery. Executing a portable query can be cancelled while running. The job settles at the next safe provider boundary. Index maintenance is available through the native application interface. [Native portable query reference](PORTABLE_PERSISTENCE_QUERIES.md)
 
 ## CLI and MCP
 

@@ -259,39 +259,6 @@ bool AtPrefix(const rocksdb::Iterator& iterator, const std::string& prefix)
     return iterator.Valid() && iterator.key().starts_with(prefix);
 }
 
-struct KeyRange {
-    std::string first;
-    std::optional<std::string> pastLast;
-};
-
-KeyRange MakeRange(const Binary& base, const QueryDescription& query)
-{
-    auto prefix = base;
-    for (const auto& field : query.prefix)
-        AppendOrderedField(prefix, field);
-    auto first = prefix;
-    auto past = PrefixEnd(prefix);
-    if (query.lower) {
-        AppendOrderedField(first, query.lower->value);
-        if (!query.lower->inclusive)
-            first = *PrefixEnd(std::move(first));
-    }
-    if (query.upper) {
-        auto last = prefix;
-        AppendOrderedField(last, query.upper->value);
-        past = query.upper->inclusive ? PrefixEnd(std::move(last)) : std::optional{std::move(last)};
-    }
-    if (query.after) {
-        auto last = base;
-        for (const auto& field : query.after->key)
-            AppendOrderedField(last, field);
-        if (query.index)
-            AppendOrderedField(last, query.after->id.value);
-        first = std::max(first, *PrefixEnd(std::move(last)));
-    }
-    return {String(first), past ? std::optional{String(*past)} : std::nullopt};
-}
-
 class RocksSnapshot final : public ReadSnapshot {
 public:
     RocksSnapshot(std::shared_ptr<Store> store, SessionId id, std::shared_ptr<const SessionSchema> schema)
@@ -299,6 +266,10 @@ public:
           revision_(ReadRevision(read_.Database(), read_.options, id_)) {}
 
     CommitRevision Revision() const noexcept override { return revision_; }
+    Result<CollectionSchema> Describe(const CollectionKey& key) const override
+    {
+        return Attempt([&]() -> CollectionSchema { return Collection(*schema_, key); });
+    }
 
     Result<std::optional<Record>> Get(const RecordKey& key) const override
     {
@@ -347,29 +318,38 @@ public:
             const auto fields = QueryFields(query, def);
             if (!fields)
                 throw fields.Error();
-            if (auto valid = ValidateQuery(query, fields.Value(), id_, revision_); !valid)
+            const auto* definition = SelectedIndex(query, def);
+            if (auto valid = ValidateQuery(query, fields.Value(), id_, revision_, definition); !valid)
                 throw valid.Error();
             auto base = CollectionPrefix(query.index ? 'I' : 'R', id_, query.collection);
             if (query.index)
                 AppendOrderedBytes(base, Bytes(query.index->value));
             const auto prefix = String(base);
-            const auto range = MakeRange(base, query);
-            rocksdb::Slice upper;
-            auto options = read_.options;
-            if (range.pastLast) {
-                upper = *range.pastLast;
-                options.iterate_upper_bound = &upper;
-            }
-            std::unique_ptr<rocksdb::Iterator> rows(read_.Database().NewIterator(options));
+            const auto range = MakeOrderedRange(std::move(base), query, definition, true);
             QueryPage page;
-            for (rows->Seek(range.first); AtPrefix(*rows, prefix); rows->Next()) {
+            if (range.empty) return page;
+            const auto first = String(range.first);
+            const auto past = range.past ? std::optional{String(*range.past)} : std::nullopt;
+            const bool reverse = query.direction == SortDirection::Descending;
+            std::unique_ptr<rocksdb::Iterator> rows(read_.Database().NewIterator(read_.options));
+            if (!reverse) {
+                rows->Seek(first);
+            } else if (past) {
+                rows->SeekForPrev(*past);
+                if (rows->Valid() && rows->key() == rocksdb::Slice(*past))
+                    rows->Prev();
+            } else {
+                rows->SeekToLast();
+            }
+            while (AtPrefix(*rows, prefix) && rows->key().compare(first) >= 0
+                   && (!past || rows->key().compare(*past) < 0)) {
                 if (page.records.size() == query.limit) {
                     const auto& last = page.records.back();
-                    auto key = query.index ? ProjectIndexKey(def.indexes.at(*query.index), last.data)
+                    auto key = definition ? ProjectIndexKey(*definition, last.data)
                                            : std::optional<IndexKey>{{last.id.value}};
                     if (!key)
                         MalformedData();
-                    page.next = QueryCursor{id_, revision_, query.collection, query.index, std::move(*key), last.id};
+                    page.next = MakeCursor(query, id_, revision_, definition, std::move(*key), last.id);
                     break;
                 }
                 if (query.index) {
@@ -381,6 +361,8 @@ public:
                 } else {
                     page.records.push_back(DecodeStoredRecord(rows->value().ToStringView(), def));
                 }
+                if (reverse) rows->Prev();
+                else rows->Next();
             }
             Check(rows->status(), "scan index");
             return page;
@@ -429,14 +411,19 @@ ChangePage Journal(const PinnedRead& read, const SessionId& id, CommitRevision a
     return page;
 }
 
-std::string IndexEntryKey(char family, const SessionId& session, const RecordKey& record,
-                          const IndexId& index, const IndexKey& fields, bool includeId)
+Binary IndexPrefix(char family, const SessionId& session, const CollectionKey& collection, const IndexId& index)
 {
-    auto key = CollectionPrefix(family, session, record.collection);
+    auto key = CollectionPrefix(family, session, collection);
     AppendOrderedBytes(key, Bytes(index.value));
-    for (const auto& field : fields)
-        AppendOrderedField(key, field);
-    if (includeId)
+    return key;
+}
+
+std::string IndexEntryKey(char family, const SessionId& session, const RecordKey& record,
+                          const IndexId& index, const IndexDefinition& definition, const IndexKey& fields)
+{
+    auto key = IndexPrefix(family, session, record.collection, index);
+    AppendOrderedKey(key, fields, &definition);
+    if (family == 'I')
         AppendOrderedField(key, record.id.value);
     return String(key);
 }
@@ -446,32 +433,36 @@ void RemoveKeys(rocksdb::WriteBatchWithIndex& batch, const SessionId& session, c
 {
     for (const auto& [id, index] : def.indexes) {
         if (const auto fields = ProjectIndexKey(index, previous.data)) {
-            Check(batch.Delete(IndexEntryKey('I', session, key, id, *fields, true)), "stage index erase");
+            Check(batch.Delete(IndexEntryKey('I', session, key, id, index, *fields)), "stage index erase");
             if (index.unique)
-                Check(batch.Delete(IndexEntryKey('U', session, key, id, *fields, false)), "stage unique key erase");
+                Check(batch.Delete(IndexEntryKey('U', session, key, id, index, *fields)), "stage unique key erase");
         }
     }
+}
+
+void AddIndexKeys(rocksdb::DB& database, rocksdb::WriteBatchWithIndex& batch, const SessionId& session,
+                  const RecordKey& key, const IndexId& id, const IndexDefinition& index, const Record& record)
+{
+    const auto fields = ProjectIndexKey(index, record.data);
+    if (!fields) return;
+    if (index.unique) {
+        const auto unique = IndexEntryKey('U', session, key, id, index, *fields);
+        std::string existing;
+        const auto found = batch.GetFromBatchAndDB(&database, rocksdb::ReadOptions{}, unique, &existing);
+        if (found.ok())
+            throw Fail(ErrorCode::UniqueConstraint, "Unique index key already exists.");
+        if (!found.IsNotFound())
+            Check(found, "validate unique key");
+        Check(batch.Put(unique, key.id.value), "stage unique key");
+    }
+    Check(batch.Put(IndexEntryKey('I', session, key, id, index, *fields), key.id.value), "stage index key");
 }
 
 void AddKeys(rocksdb::DB& database, rocksdb::WriteBatchWithIndex& batch, const SessionId& session,
              const RecordKey& key, const CollectionSchema& def, const Record& record)
 {
-    for (const auto& [id, index] : def.indexes) {
-        const auto fields = ProjectIndexKey(index, record.data);
-        if (!fields)
-            continue;
-        if (index.unique) {
-            const auto unique = IndexEntryKey('U', session, key, id, *fields, false);
-            std::string existing;
-            const auto found = batch.GetFromBatchAndDB(&database, rocksdb::ReadOptions{}, unique, &existing);
-            if (found.ok())
-                throw Fail(ErrorCode::UniqueConstraint, "Unique index key already exists.");
-            if (!found.IsNotFound())
-                Check(found, "validate unique key");
-            Check(batch.Put(unique, key.id.value), "stage unique key");
-        }
-        Check(batch.Put(IndexEntryKey('I', session, key, id, *fields, true), key.id.value), "stage index key");
-    }
+    for (const auto& [id, index] : def.indexes)
+        AddIndexKeys(database, batch, session, key, id, index, record);
 }
 
 void StoreSchema(rocksdb::WriteBatch& batch, const SessionId& id, const SessionSchema& schema, CommitRevision revision)
@@ -506,13 +497,17 @@ public:
     Result<SessionArchive> Export() const override
     {
         return Attempt([&] {
-            PinnedRead read(ReadStore());
+            std::unique_lock lock(store_->writer);
+            RequireOpen();
+            PinnedRead read(store_);
+            const auto schemaView = schema_;
+            lock.unlock();
             const auto latest = ReadRevision(read.Database(), read.options, id_);
             const auto floor = HistoryFloor(read, id_, latest);
-            SessionArchive image{id_, *schema_, latest, floor, {},
+            SessionArchive image{id_, *schemaView, latest, floor, {},
                                  Journal(read, id_, floor, latest, floor, kPortableRevisionLimit).batches};
             std::unique_ptr<rocksdb::Iterator> rows(read.Database().NewIterator(read.options));
-            for (const auto& [collection, schema] : *schema_) {
+            for (const auto& [collection, schema] : *schemaView) {
                 const auto prefix = String(CollectionPrefix('R', id_, collection));
                 for (rows->Seek(prefix); AtPrefix(*rows, prefix); rows->Next())
                     image.records.push_back({collection, DecodeStoredRecord(rows->value().ToStringView(), schema)});
@@ -526,7 +521,9 @@ private:
     Result<std::unique_ptr<ReadSnapshot>> CaptureSnapshot() const override
     {
         return Attempt([&]() -> std::unique_ptr<ReadSnapshot> {
-            return std::make_unique<RocksSnapshot>(ReadStore(), id_, schema_);
+            std::lock_guard lock(store_->writer);
+            RequireOpen();
+            return std::make_unique<RocksSnapshot>(store_, id_, schema_);
         });
     }
 
@@ -536,6 +533,60 @@ private:
             PinnedRead read(ReadStore());
             const auto latest = ReadRevision(read.Database(), read.options, id_);
             return Journal(read, id_, after, latest, HistoryFloor(read, id_, latest), limit);
+        });
+    }
+
+    Result<IndexMaintenanceResult> MaintainIndex(const IndexMaintenance& request) override
+    {
+        return Attempt([&] {
+            std::lock_guard lock(store_->writer);
+            RequireOpen();
+            auto& db = *store_->database;
+            auto updated = MaintainDefinition(Collection(*schema_, request.collection), request);
+            if (!updated) throw updated.Error();
+            auto next = std::make_shared<SessionSchema>(*schema_);
+            auto& collection = next->at(request.collection);
+            collection = std::move(updated).Value();
+            IndexMaintenanceResult result{ReadRevision(db, {}, id_), {}, 0};
+            const auto index = collection.indexes.find(request.index);
+            if (index == collection.indexes.end()) {
+                rocksdb::WriteBatch remove;
+                for (const char family : {'I', 'U'}) {
+                    const auto prefix = IndexPrefix(family, id_, request.collection, request.index);
+                    Check(remove.DeleteRange(String(prefix), String(*PrefixEnd(prefix))), "remove index key range");
+                }
+                StoreSchema(remove, id_, *next, result.revision);
+                if (auto active = CheckMaintenance(request, 0); !active) throw active.Error();
+                Check(db.Write(Writes(*store_), &remove), "remove index");
+            } else {
+                rocksdb::WriteBatchWithIndex batch(rocksdb::BytewiseComparator(), 0, true);
+                std::unique_ptr<rocksdb::Iterator> rows(db.NewIterator({}));
+                if (request.operation == IndexOperation::Rebuild) {
+                    for (const char family : {'I', 'U'}) {
+                        const auto prefix = String(IndexPrefix(family, id_, request.collection, request.index));
+                        std::size_t erased = 0;
+                        for (rows->Seek(prefix); AtPrefix(*rows, prefix); rows->Next()) {
+                            if (auto active = CheckMaintenance(request, erased++, true); !active) throw active.Error();
+                            Check(batch.Delete(rows->key()), "clear old index key");
+                        }
+                        Check(rows->status(), "read old index entries");
+                    }
+                }
+                result.definition = index->second;
+                const auto prefix = String(CollectionPrefix('R', id_, request.collection));
+                for (rows->Seek(prefix); AtPrefix(*rows, prefix); rows->Next()) {
+                    if (auto active = CheckMaintenance(request, result.recordsExamined, true); !active) throw active.Error();
+                    const auto record = DecodeStoredRecord(rows->value().ToStringView(), collection);
+                    AddIndexKeys(db, batch, id_, {request.collection, record.id}, request.index, index->second, record);
+                    ++result.recordsExamined;
+                }
+                Check(rows->status(), "read index source records");
+                StoreSchema(*batch.GetWriteBatch(), id_, *next, result.revision);
+                if (auto active = CheckMaintenance(request, result.recordsExamined); !active) throw active.Error();
+                Check(db.Write(Writes(*store_), batch.GetWriteBatch()), "publish index rebuild");
+            }
+            schema_ = std::move(next);
+            return result;
         });
     }
 
@@ -623,7 +674,8 @@ public:
     CapabilitySet Capabilities() const override
     {
         return {Capability::PrimaryQueries, Capability::SecondaryIndexes, Capability::AtomicTransactions,
-                Capability::ConsistentSnapshots, Capability::LogicalChangeJournal, Capability::DurablePersistence};
+                Capability::ConsistentSnapshots, Capability::LogicalChangeJournal, Capability::DurablePersistence,
+                Capability::PortableQueries, Capability::IndexMaintenance};
     }
 
     Result<std::unique_ptr<Session>> OpenSession(const OpenSessionRequest& request) override

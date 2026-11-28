@@ -4,6 +4,7 @@
 #include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <semaphore>
 #include <stdexcept>
 #include <thread>
 
@@ -83,6 +84,90 @@ void SnapshotIsolation(const char* provider, const std::filesystem::path& path)
     const auto newView = query(second);
     Require(Get(oldView, "revision").toString() == "4" && Get(oldView, "records").size() == 0, "old API snapshot pins old view");
     Require(Get(newView, "revision").toString() == "5" && Get(newView, "records").size() == 1, "new API snapshot sees native commit");
+
+    const auto catalog = [&](const Value& snap) {
+        return Execute(api, "persistence.indexes", Object({{"snapshot", Get(snap, "snapshot")}, {"namespace", "YXV0b21hdGlvbg=="},
+                       {"collection", "cmVjb3Jkcw=="}}));
+    };
+    const auto added = nativeSession->MaintainIndex({records, {"alternate"}, IndexOperation::Create,
+        IndexDefinition{{FieldId{"measurement"}}, false, {2}, {SortDirection::Descending}}});
+    Require(added && added.Value().revision.value == 5, "native index publication preserves record revision");
+    const auto third = Execute(api, "persistence.snapshot.open");
+    Require(Get(catalog(second), "indexes").size() == 1 &&
+            Get(catalog(third), "indexes").size() == 2, "API index catalog pins the exact snapshot");
+}
+
+struct QueryGate {
+    std::binary_semaphore entered{0}, resume{0};
+};
+
+class GatedSnapshot final : public ReadSnapshot {
+public:
+    GatedSnapshot(std::unique_ptr<ReadSnapshot> inner, QueryGate& gate)
+        : inner_(std::move(inner)), gate_(gate) {}
+    CommitRevision Revision() const noexcept override { return inner_->Revision(); }
+    Result<std::optional<Record>> Get(const RecordKey& key) const override { return inner_->Get(key); }
+    Result<CollectionSchema> Describe(const CollectionKey& key) const override { return inner_->Describe(key); }
+    Result<QueryPage> Query(const QueryDescription& query) const override
+    {
+        gate_.entered.release();
+        gate_.resume.acquire();
+        return inner_->Query(query);
+    }
+
+private:
+    std::unique_ptr<ReadSnapshot> inner_;
+    QueryGate& gate_;
+};
+
+class GatedSession final : public Session {
+public:
+    GatedSession(std::unique_ptr<Session> inner, QueryGate& gate)
+        : Session({}), inner_(std::move(inner)), gate_(gate) {}
+    Status Close() override { return inner_->Close(); }
+    Result<SessionArchive> Export() const override { return inner_->Export(); }
+
+private:
+    Result<CommitRevision> Apply(const Transaction& change) override { return inner_->Commit(change); }
+    Result<ChangePage> CaptureChanges(CommitRevision after, std::size_t limit) const override
+    {
+        return inner_->ReadChanges(after, limit);
+    }
+    Result<std::unique_ptr<ReadSnapshot>> CaptureSnapshot() const override
+    {
+        auto snapshot = inner_->OpenSnapshot();
+        if (!snapshot) return snapshot.Error();
+        return std::unique_ptr<ReadSnapshot>(std::make_unique<GatedSnapshot>(std::move(snapshot).Value(), gate_));
+    }
+    std::unique_ptr<Session> inner_;
+    QueryGate& gate_;
+};
+
+void QueryCancellation()
+{
+    auto settings = TestSettings();
+    auto mount = MakeTestMount(settings);
+    QueryGate gate;
+    mount.session = std::make_unique<GatedSession>(std::move(mount.session), gate);
+    RuntimeCommands runtime({});
+    DeveloperApi api(settings, "server", "test", runtime, std::move(mount));
+    api.Start();
+    const auto snap = Execute(api, "persistence.snapshot.open");
+    const auto args = Object({{"snapshot", Get(snap, "snapshot")}, {"namespace", "YXV0b21hdGlvbg=="},
+        {"collection", "cmVjb3Jkcw=="}, {"allowScan", true}, {"limit", 1}});
+    const auto id = Id();
+    Require(api.Submit(Access::read, "persistence.query.execute", SubmitBody(id, args)).status == 202,
+            "submit cancellable portable query");
+    const bool entered = gate.entered.try_acquire_for(3s);
+    const auto running = api.Job(Access::read, id, false);
+    const auto cancel = api.Job(Access::read, id, true);
+    gate.resume.release();
+    Require(entered && running.status == 200 && Get(running.body, "state").toString() == "running" &&
+            static_cast<bool>(Get(running.body, "cancellable")), "running query is cancellable at a provider boundary");
+    Require(cancel.status == 200, "running query accepted cancellation");
+    const auto settled = Terminal(api, id);
+    Require(Get(settled, "state").toString() == "cancelled" && Get(settled, "result").isVoid(),
+            "cancelled query did not publish a page");
 }
 
 void ExecutionBoundaries()
@@ -149,6 +234,7 @@ int main(int argc, char** argv)
         } scratch{path};
         for (const auto* provider : {"memory", "sqlite", "rocksdb"})
             SnapshotIsolation(provider, path / provider);
+        QueryCancellation();
         ExecutionBoundaries();
         std::cout << "Developer API native write isolation and execution boundaries passed.\n";
         return 0;

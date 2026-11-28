@@ -61,6 +61,9 @@ std::string ReadId(const Value& value)
         case ErrorCode::InvalidArgument: Reject("invalid_input", "Invalid persistence query parameters.");
         case ErrorCode::VersionConflict: Reject("conflict", "Persistence version conflict.", 409);
         case ErrorCode::UnsupportedOperation: Reject("unsupported", "Provider operation is unavailable.", 404);
+        case ErrorCode::Cancelled: Reject("cancelled", "The query was cancelled.", 409);
+        case ErrorCode::ExecutionTimeout: Reject("timeout", "The query reached its execution deadline.", 408);
+        case ErrorCode::ScanRequired: Reject("scan_required", "The plan requires allowScan for bounded execution.", 409);
         default: Reject("operation_failed", "The persistence operation failed.", 500);
     }
 }
@@ -82,6 +85,8 @@ const char* CapabilityName(Capability capability)
         case Capability::ConsistentSnapshots: return "consistent_snapshots";
         case Capability::LogicalChangeJournal: return "logical_journal";
         case Capability::DurablePersistence: return "durable";
+        case Capability::PortableQueries: return "portable_queries";
+        case Capability::IndexMaintenance: return "native_index_maintenance";
     }
     return "unknown";
 }
@@ -187,6 +192,83 @@ std::string QueryFingerprint(const Value& parameters)
     }
     return juce::JSON::toString(copy, true).toStdString();
 }
+
+Predicate ParsePredicate(const Value& value)
+{
+    constexpr std::pair<std::string_view, PredicateOp> operators[] = {
+        {"and", PredicateOp::And}, {"or", PredicateOp::Or}, {"not", PredicateOp::Not},
+        {"eq", PredicateOp::Equal}, {"ne", PredicateOp::NotEqual},
+        {"lt", PredicateOp::Less}, {"le", PredicateOp::LessEqual},
+        {"gt", PredicateOp::Greater}, {"ge", PredicateOp::GreaterEqual},
+        {"isNull", PredicateOp::IsNull}, {"isMissing", PredicateOp::IsMissing}, {"isPresent", PredicateOp::IsPresent}
+    };
+    const auto name = Text(Get(value, "op"));
+    const auto op = std::ranges::find_if(operators, [&](const auto& entry) { return entry.first == name; });
+    if (op == std::end(operators))
+        Reject("invalid_input", "Unknown portable predicate operator.");
+    Predicate result;
+    result.op = op->second;
+    if (const auto field = Get(value, "field"); !field.isVoid()) result.field = FieldId{ReadId(field)};
+    if (const auto operand = Get(value, "value"); !operand.isVoid()) result.value = Field(operand);
+    if (const auto children = Get(value, "children"); children.isArray())
+        for (const auto& child : *children.getArray()) result.children.push_back(ParsePredicate(child));
+    return result;
+}
+
+const char* DirectionName(SortDirection direction)
+{
+    return direction == SortDirection::Ascending ? "asc" : "desc";
+}
+
+const char* AccessName(QueryAccess access)
+{
+    switch (access) {
+        case QueryAccess::Empty: return "empty";
+        case QueryAccess::PrimarySeek: return "primary_seek";
+        case QueryAccess::IndexSeek: return "index_seek";
+        case QueryAccess::PrimaryScan: return "primary_scan";
+        case QueryAccess::IndexScan: return "index_scan";
+    }
+    return "unknown";
+}
+
+Value PlanJson(const PortableQueryPlan& plan)
+{
+    juce::Array<Value> prefix;
+    for (const auto& value : plan.prefix) prefix.add(Field(value));
+    const auto bound = [](const std::optional<QueryBound>& edge) {
+        return edge ? Object({{"value", Field(edge->value)}, {"inclusive", edge->inclusive}}) : Value{};
+    };
+    return Object({{"access", AccessName(plan.access)}, {"index", plan.index ? Base64(plan.index->value) : Value{}},
+                   {"indexVersion", plan.indexVersion ? Decimal(plan.indexVersion->value) : Value{}},
+                   {"direction", DirectionName(plan.direction)}, {"prefix", Value(std::move(prefix))},
+                   {"lower", bound(plan.lower)}, {"upper", bound(plan.upper)}, {"residualFilter", plan.residualFilter}});
+}
+
+Value IndexCatalog(const ReadSnapshot& view, const Value& arguments)
+{
+    const auto schema = Take(view.Describe(Keys(arguments)), "snapshot_expired");
+    const auto selected = Get(arguments, "index");
+    const auto requested = selected.isVoid() ? std::optional<IndexId>{} : std::optional{IndexId{ReadId(selected)}};
+    if (requested && !schema.indexes.contains(*requested))
+        Reject("not_found", "Unknown persistence index.", 404);
+    constexpr const char* types[] = {"bool", "i64", "real", "text", "bytes"};
+    juce::Array<Value> indexes;
+    for (const auto& [id, index] : schema.indexes) {
+        if (requested && id != *requested) continue;
+        juce::Array<Value> fields;
+        for (std::size_t i = 0; i < index.fields.size(); ++i) {
+            const auto& field = index.fields[i];
+            const auto& type = schema.fields.at(field);
+            const auto direction = index.directions.empty() ? SortDirection::Ascending : index.directions[i];
+            fields.add(Object({{"field", Base64(field.value)}, {"type", types[static_cast<std::size_t>(type.type)]},
+                               {"direction", DirectionName(direction)}, {"required", type.required}, {"nullable", type.nullable}}));
+        }
+        indexes.add(Object({{"id", Base64(id.value)}, {"version", Decimal(index.version.value)}, {"unique", index.unique},
+                            {"status", "ready"}, {"fields", Value(std::move(fields))}}));
+    }
+    return Object({{"revision", Decimal(view.Revision().value)}, {"indexes", Value(std::move(indexes))}});
+}
 } // namespace
 
 PersistenceMount MakeTestMount(const Settings& settings)
@@ -234,9 +316,17 @@ PersistenceMount MakeTestMount(const Settings& settings)
 }
 
 PersistenceCommands::PersistenceCommands(PersistenceMount mount, Limits limits)
-    : mount_(std::move(mount)), limits_(limits) {}
+    : mount_(std::move(mount)), limits_(limits),
+      capabilities_(mount_.owner ? mount_.owner->Capabilities() : CapabilitySet{}) {}
 
-bool PersistenceCommands::Available() const noexcept { return mount_.session != nullptr; }
+bool PersistenceCommands::Available() const noexcept { return mount_.session && mount_.owner; }
+
+bool PersistenceCommands::Supports(PersistenceAction action) const noexcept
+{
+    if (action == PersistenceAction::indexes || action == PersistenceAction::explain || action == PersistenceAction::execute)
+        return Available() && capabilities_.contains(Capability::PortableQueries);
+    return Available();
+}
 
 void PersistenceCommands::Expire()
 {
@@ -257,6 +347,31 @@ PersistenceCommands::Snapshot& PersistenceCommands::Find(const std::string& toke
     return found->second;
 }
 
+const PersistenceCommands::Continuation* PersistenceCommands::Resume(const Value& parameters, Access access,
+    const std::string& snapshot, const std::string& fingerprint) const
+{
+    const auto token = Text(Get(parameters, "cursor"));
+    if (token.empty()) return nullptr;
+    const auto found = continuations_.find(token);
+    if (found == continuations_.end())
+        Reject("cursor_expired", "The continuation token is unavailable.", 410);
+    const auto& entry = found->second;
+    if (entry.owner != access)
+        Reject("forbidden", "This credential does not own the continuation token.", 403);
+    if (entry.snapshot != snapshot || entry.query != fingerprint)
+        Reject("conflict", "The continuation token belongs to a different snapshot or query.", 409);
+    return &entry;
+}
+
+Value PersistenceCommands::Publish(Continuation continuation)
+{
+    if (continuations_.size() >= static_cast<std::size_t>(limits_.cursorCount))
+        Reject("resource_limit", "Continuation token limit reached.", 429);
+    const auto token = juce::Uuid().toString();
+    continuations_.emplace(token.toStdString(), std::move(continuation));
+    return token;
+}
+
 Value PersistenceCommands::Query(Access access, const Value& params, Snapshot& snapshot, const std::string& id)
 {
     QueryDescription query;
@@ -270,47 +385,80 @@ Value PersistenceCommands::Query(Access access, const Value& params, Snapshot& s
     query.upper = Bound(params, "upper");
     query.limit = static_cast<std::size_t>(static_cast<int>(Get(params, "limit")));
     const auto fingerprint = QueryFingerprint(params);
-    const auto oldToken = Text(Get(params, "cursor"));
-    auto expiry = Clock::now() + std::chrono::milliseconds(limits_.cursorMs);
-    if (!oldToken.empty()) {
-        const auto found = continuations_.find(oldToken);
-        if (found == continuations_.end())
-            Reject("cursor_expired", "The continuation token is unavailable.", 410);
-        const auto& cursor = found->second;
-        if (cursor.owner != access)
-            Reject("forbidden", "This credential does not own the continuation token.", 403);
-        if (cursor.snapshot != id || cursor.query != fingerprint)
-            Reject("conflict", "The continuation token belongs to a different snapshot or query.", 409);
-        query.after = cursor.cursor;
-        expiry = std::min(expiry, cursor.expires);
+    auto expiry = std::min(snapshot.expires, Clock::now() + std::chrono::milliseconds(limits_.cursorMs));
+    if (const auto* prior = Resume(params, access, id, fingerprint)) {
+        query.after = std::get<QueryCursor>(prior->cursor);
+        expiry = std::min(expiry, prior->expires);
     }
     const auto page = Take(snapshot.read->Query(query), "snapshot_expired");
     juce::Array<Value> records;
     for (const auto& record : page.records)
         records.add(RecordJson(record));
     Value next;
-    if (page.next) {
-        if (continuations_.size() >= static_cast<std::size_t>(limits_.cursorCount))
-            Reject("resource_limit", "Continuation token limit reached.", 429);
-        const auto token = juce::Uuid().toString();
-        continuations_.emplace(token.toStdString(), Continuation{access, id, fingerprint,
-            std::min(expiry, snapshot.expires), *page.next});
-        next = token;
-    }
+    if (page.next)
+        next = Publish({access, id, fingerprint, expiry, *page.next});
     return Object({{"records", Value(std::move(records))}, {"revision", Decimal(snapshot.read->Revision().value)},
                    {"cursor", next}});
 }
 
-Value PersistenceCommands::Execute(PersistenceAction action, Access access, const Value& params)
+Value PersistenceCommands::PlannedQuery(PersistenceAction action, Access access, const Value& params, Snapshot& snapshot,
+                                       const std::string& id, Clock::time_point deadline, std::stop_token stop)
 {
-    if (!Available())
-        Reject("unsupported", "No persistence session is mounted.", 404);
+    PortableQuery query;
+    query.collection = Keys(params);
+    if (const auto index = Get(params, "index"); !index.isVoid()) query.index = IndexId{ReadId(index)};
+    if (const auto predicate = Get(params, "where"); !predicate.isVoid()) query.where = ParsePredicate(predicate);
+    query.primaryOnly = static_cast<bool>(Get(params, "primaryOnly"));
+    query.allowScan = static_cast<bool>(Get(params, "allowScan"));
+    query.direction = Get(params, "direction").toString() == "desc" ? SortDirection::Descending : SortDirection::Ascending;
+    query.limit = static_cast<int>(Get(params, "limit"));
+
+    QueryLimits limits;
+    limits.pageEntries = limits_.pageEntries;
+    limits.candidates = Get(params, "candidates").isVoid() ? limits_.queryCandidates : static_cast<int>(Get(params, "candidates"));
+    limits.predicateNodes = limits_.queryPredicateNodes;
+    limits.predicateDepth = limits_.queryPredicateDepth;
+    limits.cursorLifetime = std::chrono::milliseconds(limits_.cursorMs);
+    limits.deadline = deadline;
+    limits.stop = stop;
+    const auto revision = Decimal(snapshot.read->Revision().value);
+    if (action == PersistenceAction::explain)
+        return Object({{"revision", revision}, {"plan", PlanJson(Take(ExplainQuery(*snapshot.read, query, limits), "snapshot_expired"))}});
+
+    auto arguments = Object();
+    for (const auto& entry : params.getDynamicObject()->getProperties())
+        if (entry.name.toString() != "cursor") arguments.getDynamicObject()->setProperty(entry.name, entry.value);
+    const auto fingerprint = "portable:" + juce::JSON::toString(Canonical(arguments), true).toStdString();
+    auto expiry = std::min(snapshot.expires, Clock::now() + limits.cursorLifetime);
+    const PortableCursor* cursor = nullptr;
+    if (const auto* prior = Resume(params, access, id, fingerprint)) {
+        cursor = &std::get<PortableCursor>(prior->cursor);
+        expiry = std::min(expiry, prior->expires);
+    }
+    const auto page = Take(ExecuteQuery(*snapshot.read, query, limits, cursor), "snapshot_expired");
+    juce::Array<Value> records;
+    for (const auto& record : page.records) records.add(RecordJson(record));
+    const auto& stats = page.statistics;
+    auto statistics = Object({{"candidates", Decimal(stats.candidates)}, {"providerPages", Decimal(stats.providerPages)},
+                              {"returned", Decimal(stats.returned)}, {"elapsedNs", Decimal(stats.elapsed.count())},
+                              {"candidateBudgetReached", stats.candidateBudgetReached}});
+    Value next;
+    if (page.next) next = Publish({access, id, fingerprint, expiry, *page.next});
+    return Object({{"revision", revision}, {"plan", PlanJson(page.plan)}, {"statistics", statistics},
+                   {"records", Value(std::move(records))}, {"cursor", next}});
+}
+
+Value PersistenceCommands::Execute(PersistenceAction action, Access access, const Value& params,
+                                   Clock::time_point deadline, std::stop_token stop)
+{
+    if (!Supports(action))
+        Reject("unsupported", "This persistence operation is unavailable on the mounted session.", 404);
     Expire();
     if (action == PersistenceAction::info) {
         const auto revision = Take(mount_.session->OpenSnapshot())->Revision();
         const auto changes = Take(mount_.session->ReadChanges(revision, 1));
         juce::Array<Value> capabilities;
-        for (const auto cap : mount_.owner->Capabilities())
+        for (const auto cap : capabilities_)
             capabilities.add(CapabilityName(cap));
         return Object({{"provider", mount_.provider}, {"session", Base64(mount_.id.value)},
                        {"revision", Decimal(changes.latestRevision.value)}, {"historyFloor", Decimal(changes.historyFloor.value)},
@@ -353,6 +501,11 @@ Value PersistenceCommands::Execute(PersistenceAction action, Access access, cons
         }
         case PersistenceAction::query:
             return Query(access, params, snapshot, id);
+        case PersistenceAction::indexes:
+            return IndexCatalog(*snapshot.read, params);
+        case PersistenceAction::explain:
+        case PersistenceAction::execute:
+            return PlannedQuery(action, access, params, snapshot, id, deadline, stop);
         default:
             Reject("internal", "Invalid persistence command.", 500);
     }

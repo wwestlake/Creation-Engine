@@ -122,6 +122,26 @@ inline Binary EncodeSchema(const SessionSchema& schema)
                 out.String(field.value);
         }
     }
+    // Keep the original manifest bytes for existing ascending, version-1
+    // definitions. The extension stores only non-default definitions.
+    bool extended = false;
+    for (const auto& [key, collection] : schema) {
+        for (const auto& [id, index] : collection.indexes) {
+            if (index.version.value == 1 && index.directions.empty())
+                continue;
+            if (!extended) {
+                out.Byte(1);
+                extended = true;
+            }
+            out.String(key.nameSpace.value);
+            out.String(key.collection.value);
+            out.String(id.value);
+            out.Integer(index.version.value);
+            out.Integer(index.directions.size());
+            for (const auto direction : index.directions)
+                out.Byte(static_cast<std::uint8_t>(direction));
+        }
+    }
     return std::move(out).Finish();
 }
 
@@ -295,11 +315,31 @@ inline void AppendOrderedField(Binary& out, const FieldValue& value)
     }
 }
 
-inline Binary EncodeOrderedKey(const IndexKey& key)
+inline SortDirection DirectionAt(const IndexDefinition* index, std::size_t component)
+{
+    return index && component < index->directions.size()
+        ? index->directions[component] : SortDirection::Ascending;
+}
+
+inline void AppendOrderedField(Binary& out, const FieldValue& value, SortDirection direction)
+{
+    const auto start = out.size();
+    AppendOrderedField(out, value);
+    if (direction == SortDirection::Descending)
+        for (auto i = start; i < out.size(); ++i)
+            out[i] = static_cast<std::uint8_t>(~out[i]);
+}
+
+inline void AppendOrderedKey(Binary& out, const IndexKey& key, const IndexDefinition* index)
+{
+    for (std::size_t i = 0; i < key.size(); ++i)
+        AppendOrderedField(out, key[i], DirectionAt(index, i));
+}
+
+inline Binary EncodeOrderedKey(const IndexKey& key, const IndexDefinition* index = nullptr)
 {
     Binary bytes;
-    for (const auto& value : key)
-        AppendOrderedField(bytes, value);
+    AppendOrderedKey(bytes, key, index);
     return bytes;
 }
 
@@ -312,5 +352,50 @@ inline std::optional<Binary> PrefixEnd(Binary bytes)
         return std::nullopt;
     ++bytes.back();
     return bytes;
+}
+
+struct OrderedRange {
+    Binary first;
+    std::optional<Binary> past;
+    bool empty = false;
+};
+
+inline OrderedRange MakeOrderedRange(Binary base, const QueryDescription& query,
+                                     const IndexDefinition* index, bool applyCursor)
+{
+    auto prefix = base;
+    AppendOrderedKey(prefix, query.prefix, index);
+    OrderedRange range{prefix, PrefixEnd(prefix)};
+    const auto direction = DirectionAt(index, query.prefix.size());
+    const bool reversed = direction == SortDirection::Descending;
+    const auto& physicalLow = reversed ? query.upper : query.lower;
+    const auto& physicalHigh = reversed ? query.lower : query.upper;
+    if (physicalLow) {
+        AppendOrderedField(range.first, physicalLow->value, direction);
+        if (!physicalLow->inclusive) {
+            auto next = PrefixEnd(range.first);
+            if (!next) return {{}, {}, true};
+            range.first = std::move(*next);
+        }
+    }
+    if (physicalHigh) {
+        auto high = prefix;
+        AppendOrderedField(high, physicalHigh->value, direction);
+        range.past = physicalHigh->inclusive ? PrefixEnd(std::move(high)) : std::optional{std::move(high)};
+    }
+    if (applyCursor && query.after) {
+        AppendOrderedKey(base, query.after->key, index);
+        if (index)
+            AppendOrderedField(base, query.after->id.value);
+        if (query.direction == SortDirection::Ascending) {
+            auto next = PrefixEnd(std::move(base));
+            if (!next) return {{}, {}, true};
+            range.first = std::max(range.first, std::move(*next));
+        } else if (!range.past || base < *range.past) {
+            range.past = std::move(base);
+        }
+    }
+    range.empty = range.past && *range.past <= range.first;
+    return range;
 }
 } // namespace ce::persistence::encoding
