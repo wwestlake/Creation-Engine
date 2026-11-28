@@ -122,7 +122,7 @@ private:
 
 class GatedSession final : public Session {
 public:
-    GatedSession(std::unique_ptr<Session> inner, QueryGate& gate)
+    GatedSession(std::shared_ptr<Session> inner, QueryGate& gate)
         : Session({}), inner_(std::move(inner)), gate_(gate) {}
     Status Close() override { return inner_->Close(); }
     Result<SessionArchive> Export() const override { return inner_->Export(); }
@@ -139,7 +139,7 @@ private:
         if (!snapshot) return snapshot.Error();
         return std::unique_ptr<ReadSnapshot>(std::make_unique<GatedSnapshot>(std::move(snapshot).Value(), gate_));
     }
-    std::unique_ptr<Session> inner_;
+    std::shared_ptr<Session> inner_;
     QueryGate& gate_;
 };
 

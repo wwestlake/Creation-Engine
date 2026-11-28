@@ -2,6 +2,7 @@
 
 #include "Diagnostics/JuceLoggerBridge.h"
 #include "MainComponent.h"
+#include "Gameplay/RemoteGameWindow.h"
 #include <creation/ui/CreationSuiteLogos.h>
 #include <creation/ui/SuiteCommonSpacePanel.h>
 
@@ -17,14 +18,27 @@ public:
     // IPC handshake -- with this false, a second launch attempt sends its
     // command line to the first instance's anotherInstanceStarted() below
     // and quits immediately, never reaching initialise() itself.
-    bool moreThanOneInstanceAllowed() override { return false; }
+    bool moreThanOneInstanceAllowed() override {
+        return juce::ArgumentList("Djehuti Engine", getCommandLineParameters()).containsOption("--join");
+    }
 
-    void initialise(const juce::String&) override {
+    void initialise(const juce::String& parameters) override {
         // Installed before anything else runs so every juce::Logger::
         // writeToLog call from here on -- including ones inside
         // MainComponent's own constructor -- reaches EngineLog. See
         // JuceLoggerBridge's header comment.
         juce::Logger::setCurrentLogger(&loggerBridge_);
+        const juce::ArgumentList arguments("Djehuti Engine", parameters);
+        if (arguments.containsOption("--join")) {
+            juce::String error;
+            remoteWindow_ = ce::gameplay::OpenRemoteGame(arguments, error);
+            if (!remoteWindow_) {
+                juce::Logger::writeToLog(error);
+                setApplicationReturnValue(2);
+                quit();
+            }
+            return;
+        }
         splashWindow_ = std::make_unique<StartupSplashWindow>(getApplicationName());
         splashWindow_->report("Preparing Djehuti Engine...", 0.04f);
 
@@ -40,6 +54,7 @@ public:
     }
 
     void shutdown() override {
+        remoteWindow_ = nullptr;
         mainWindow_ = nullptr;
         splashWindow_ = nullptr;
         juce::Logger::setCurrentLogger(nullptr);
@@ -115,6 +130,7 @@ private:
         mainWindow_ = std::make_unique<MainWindow>(getApplicationName(), std::move(reportProgress));
     }
 
+    std::unique_ptr<juce::DocumentWindow> remoteWindow_;
     std::unique_ptr<MainWindow> mainWindow_;
     std::unique_ptr<StartupSplashWindow> splashWindow_;
     ce::diagnostics::JuceLoggerBridge loggerBridge_;

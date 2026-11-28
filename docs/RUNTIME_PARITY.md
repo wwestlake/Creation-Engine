@@ -1,5 +1,7 @@
 # Common world runtime
 
+[Authoritative gameplay sessions](AUTHORITATIVE_GAMEPLAY.md) use the same world runner.
+
 Play in Editor, local game windows and the dedicated server use `RuntimeWorldRunner`. Each instance owns its runtime content source, current scene, transition queue, fixed step and context ID. It is bound to one world, Jolt simulation and FRust host. The owner thread runs the lifecycle and ticks. Desktop hosts acquire input and present frames. The server uses the same sequence with no device polling or render surface.
 
 ## Execution and lifecycle

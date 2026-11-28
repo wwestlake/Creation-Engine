@@ -45,7 +45,8 @@ public:
     // enough: nothing else is synchronized through this value.
     Tick CurrentTick() const { return tick_.load(std::memory_order_relaxed); }
     Tick AdvanceTick() { return tick_.fetch_add(1, std::memory_order_relaxed) + 1; }
-    void ResetTick() { tick_.store(0, std::memory_order_relaxed); }
+    void ResetTick() { RestoreTick(0); }
+    void RestoreTick(Tick tick) { tick_.store(tick, std::memory_order_relaxed); }
 
 private:
     entt::registry registry_;

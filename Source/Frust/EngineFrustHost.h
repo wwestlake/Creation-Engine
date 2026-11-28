@@ -88,7 +88,7 @@ public:
     // config/action/query nodes below. Raw pointer, same lifetime shape as
     // inputActionSystem_ above: PhysicsWorld lives for the whole session on
     // MainComponent, not owned by this host.
-    void setPhysicsWorld(physics::PhysicsWorld* world) noexcept { physicsWorld_ = world; }
+    void setPhysicsWorld(physics::PhysicsWorld* physics) noexcept { physicsWorld_ = physics; }
     // Input Combo Events plan -- re-derives the "input-combos" node
     // library (one Domain::Event marker per name) via
     // NodeLibraryRegistry::ReplaceLibrary, so a newly added/renamed/
@@ -96,13 +96,33 @@ public:
     // editor is opened. Called whenever the active Game's combo list
     // changes (MainComponent's game-load call sites, InputBindingsPanel
     // after a save).
+    struct GameplayBindings {
+        std::function<std::string()> world, player, request, target;
+        std::function<std::int64_t(const std::string&)> read;
+        std::function<bool(const std::string&, std::int64_t, bool)> write;
+        std::function<bool(const std::string&, const std::string&)> submit;
+    };
+    void setGameplayBindings(GameplayBindings bindings) { gameplay_ = std::move(bindings); }
+    void gameplayEvent(std::int64_t entity, const char* hook, std::int64_t tick);
+
     bool RefreshComboEventNodes(const std::vector<std::string>& comboNames, std::string& error);
     [[nodiscard]] bool isLoaded() const noexcept;
-    [[nodiscard]] bool isServer() const noexcept { return serverMode; }
+    [[nodiscard]] bool isServer() const noexcept { return serverMode || static_cast<bool>(gameplay_.world); }
     [[nodiscard]] bool isObjectBehaviorLoaded(const std::string& podId) const noexcept;
     [[nodiscard]] const node_system::NodeLibraryRegistry& nodeLibraries() const noexcept { return nodeLibraries_; }
 
 private:
+    static const char* gameplayWorld();
+    static const char* gameplayPlayer();
+    static const char* gameplayRequest();
+    static const char* gameplayTarget();
+    static const char* gameplayText(std::size_t field);
+    static std::int64_t gameplayRead(const char* key);
+    static bool gameplayWrite(const char* key, std::int64_t value);
+    static bool gameplayPublish(const char* key, std::int64_t value);
+    static bool gameplaySubmit(const char* name, const char* target);
+    GameplayBindings gameplay_;
+
     static std::int64_t currentTick();
     static std::int64_t runtimeIsServer();
     static std::int64_t firstTransformEntity();

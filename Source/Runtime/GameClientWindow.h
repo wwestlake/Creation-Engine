@@ -2,13 +2,13 @@
 
 #include <JuceHeader.h>
 
+#include "Gameplay/WorldSession.h"
 #include "Interaction/EditorInteraction.h"
 #include "Frust/EngineFrustHost.h"
 #include "Input/InputActionSystem.h"
 #include "Physics/PhysicsWorld.h"
 #include "Render/ViewportComponent.h"
 #include "Runtime/RuntimeDeveloperInspection.h"
-#include "Runtime/PossessionService.h"
 #include "Runtime/CameraDirector.h"
 #include "engine/world.h"
 
@@ -40,8 +40,7 @@ private:
     void Tick();
     void PrepareScene();
     void ShowSceneStatus();
-    void possessAuthoredPlayer();
-    void updatePossessedPlayer(float elapsedSeconds);
+    void updatePlayerCamera();
 
     int clientNumber_;
     engine::World world_;
@@ -52,8 +51,8 @@ private:
     ce::frust::EngineFrustHost frustHost_{ world_ };
     ce::input::InputActionSystem inputActionSystem_;
     RuntimeWorldRunner runtimeWorldRunner_{ world_, physicsWorld_, frustHost_ };
-    PossessionService possessionService_{ world_, physicsWorld_, inputActionSystem_ };
     CameraDirector cameraDirector_;
+    std::int64_t cameraTarget_ = -1;
     creation::assets::ProjectSession projectSession_;
     creation::suite::SuiteSettings suiteSettings_;
     project::GameDocumentInfo game_;
@@ -62,6 +61,8 @@ private:
     developer::Phase phase_ = developer::Phase::stopped;
     bool fixture_ = false;
     developer::RuntimeCommands runtimeCommands_{RuntimeOperations()};
+    std::unique_ptr<gameplay::GameplayStore> gameplayStore_;
+    std::unique_ptr<gameplay::WorldSession> authority_;
     juce::String inputMappingError_;
     ViewportComponent viewport_;
     juce::Label hud_;

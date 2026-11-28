@@ -334,6 +334,10 @@ float PhysicsWorld::Advance(ce::engine::World& world, float realElapsedSeconds)
             settings.mIsSensor = collider.isSensor;
             if (rigidBody.motionType == MotionType::Dynamic)
             {
+                if (const auto* motion = registry.try_get<RestoredBodyMotion>(entity)) {
+                    settings.mLinearVelocity = {motion->linearX, motion->linearY, motion->linearZ};
+                    settings.mAngularVelocity = {motion->angularX, motion->angularY, motion->angularZ};
+                }
                 settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
                 settings.mMassPropertiesOverride.mMass = rigidBody.mass;
             }
@@ -341,6 +345,8 @@ float PhysicsWorld::Advance(ce::engine::World& world, float realElapsedSeconds)
             const auto activation = rigidBody.motionType == MotionType::Static
                 ? JPH::EActivation::DontActivate : JPH::EActivation::Activate;
             rigidBody.jphBody = bodyInterface.CreateAndAddBody(settings, activation);
+            if (rigidBody.jphBody.IsInvalid()) continue;
+            registry.remove<RestoredBodyMotion>(entity);
 
             {
                 std::lock_guard<std::mutex> eventLock(impl_->eventMutex);
@@ -541,6 +547,24 @@ void PhysicsWorld::GetLinearVelocity(ce::engine::World& world, std::int64_t enti
     outX = velocity.GetX();
     outY = velocity.GetY();
     outZ = velocity.GetZ();
+}
+
+RestoredBodyMotion PhysicsWorld::CaptureBodyMotion(ce::engine::World& world, std::int64_t entity) const
+{
+    std::lock_guard lock(world.RegistryMutex());
+    const auto& registry = world.Registry();
+    const auto handle = static_cast<entt::entity>(entity);
+    if (!registry.valid(handle)) return {};
+    const auto* body = registry.try_get<RigidBodyComponent>(handle);
+    if (body == nullptr || body->motionType != MotionType::Dynamic) return {};
+    if (body->jphBody.IsInvalid()) {
+        if (const auto* restored = registry.try_get<RestoredBodyMotion>(handle)) return *restored;
+        return {};
+    }
+    auto& bodies = impl_->physicsSystem.GetBodyInterface();
+    const auto linear = bodies.GetLinearVelocity(body->jphBody);
+    const auto angular = bodies.GetAngularVelocity(body->jphBody);
+    return {linear.GetX(), linear.GetY(), linear.GetZ(), angular.GetX(), angular.GetY(), angular.GetZ()};
 }
 
 bool PhysicsWorld::CreateCharacter(ce::engine::World& world, std::int64_t entity,

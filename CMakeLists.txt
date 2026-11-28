@@ -156,6 +156,17 @@ FetchContent_Declare(engine_httplib
     URL_HASH SHA256=be711ddaf7a3655d8f23aa5655709250b24d247aedd4b2629989d18b6164e5be
     SOURCE_SUBDIR engine-header-only
 )
+FetchContent_Declare(creation_engine_enet
+    URL https://codeload.github.com/lsalzman/enet/tar.gz/refs/tags/v1.3.18
+    URL_HASH SHA256=28603c895f9ed24a846478180ee72c7376b39b4bb1287b73877e5eae7d96b0dd
+    SOURCE_SUBDIR engine-source-only
+)
+FetchContent_MakeAvailable(creation_engine_enet)
+add_subdirectory("${creation_engine_enet_SOURCE_DIR}" "${creation_engine_enet_BINARY_DIR}" EXCLUDE_FROM_ALL)
+target_include_directories(enet SYSTEM INTERFACE "${creation_engine_enet_SOURCE_DIR}/include")
+if(WIN32)
+    target_link_libraries(enet PUBLIC ws2_32 winmm)
+endif()
 FetchContent_MakeAvailable(engine_httplib)
 cmake_policy(POP)
 add_library(engine_developer_api STATIC
@@ -784,6 +795,17 @@ target_link_libraries(CreationEngineFbxImportInspect PRIVATE
     juce::juce_opengl
 )
 
+set(creation_engine_gameplay_sources
+    Source/Gameplay/GameplayProtocol.cpp
+    Source/Gameplay/GameplayTransport.cpp
+    Source/Gameplay/GameplayStore.cpp
+    Source/Gameplay/WorldSession.cpp
+    Source/Gameplay/Replication.cpp
+    Source/Gameplay/GameplayClient.cpp
+)
+target_sources(CreationEngineEditor PRIVATE ${creation_engine_gameplay_sources} Source/Gameplay/RemoteGameWindow.cpp)
+target_link_libraries(CreationEngineEditor PRIVATE enet)
+
 # --- Dedicated server executable ------------------------------------------
 # Headless build: no rendering or client-only assets. Only juce_core and
 # juce_events provide cross-platform utilities for the server shell.
@@ -805,6 +827,8 @@ juce_generate_juce_header(CreationEngineServer)
 
 target_sources(CreationEngineServer PRIVATE
     Server/Source/Main.cpp
+    Server/Source/GameplayProcess.cpp
+    ${creation_engine_gameplay_sources}
     Source/Project/EngineGameDocument.h
     Source/Project/EngineGameDocument.cpp
     Source/Assets/EngineAssetPack.h
@@ -836,6 +860,7 @@ target_compile_definitions(CreationEngineServer PRIVATE
 )
 
 target_link_libraries(CreationEngineServer PRIVATE
+    enet
     engine_developer_api
     ZLIB::ZLIB
     juce::juce_cryptography
@@ -885,12 +910,22 @@ if(Python3_Interpreter_FOUND)
             --server "$<TARGET_FILE:CreationEngineServer>" --work "${CMAKE_CURRENT_BINARY_DIR}/developer-api-tests")
     set_tests_properties(creation_engine_runtime_parity_headless PROPERTIES TIMEOUT 90)
 
+    add_test(NAME creation_engine_authoritative_gameplay
+        COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/GameplayIntegration.py"
+            --server "$<TARGET_FILE:CreationEngineServer>" --work "${CMAKE_CURRENT_BINARY_DIR}/developer-api-tests")
+    set_tests_properties(creation_engine_authoritative_gameplay PROPERTIES TIMEOUT 450 RUN_SERIAL TRUE)
+
     if(WIN32 OR DEFINED ENV{DISPLAY})
         add_test(NAME creation_engine_runtime_parity_desktop
             COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/RuntimeParityIntegration.py"
                 --server "$<TARGET_FILE:CreationEngineServer>" --editor "$<TARGET_FILE:CreationEngineEditor>"
                 --work "${CMAKE_CURRENT_BINARY_DIR}/developer-api-tests")
         set_tests_properties(creation_engine_runtime_parity_desktop PROPERTIES TIMEOUT 150 RUN_SERIAL TRUE)
+        add_test(NAME creation_engine_gameplay_desktop_clients
+            COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/GameplayIntegration.py"
+                --server "$<TARGET_FILE:CreationEngineServer>" --editor "$<TARGET_FILE:CreationEngineEditor>"
+                --work "${CMAKE_CURRENT_BINARY_DIR}/developer-api-tests")
+        set_tests_properties(creation_engine_gameplay_desktop_clients PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
     endif()
 endif()
 
@@ -900,6 +935,8 @@ install(TARGETS CreationEngineEditor
 )
 install(FILES README.md LICENSE DESTINATION .)
 install(FILES "${engine_httplib_SOURCE_DIR}/LICENSE" DESTINATION licenses RENAME cpp-httplib.txt)
+
+install(FILES "${creation_engine_enet_SOURCE_DIR}/LICENSE" DESTINATION licenses RENAME enet.txt)
 
 set(CPACK_PACKAGE_NAME "DjehutiEngine")
 set(CPACK_PACKAGE_VENDOR "LagDaemon Software")
