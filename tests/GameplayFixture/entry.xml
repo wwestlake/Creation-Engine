@@ -1,0 +1,21 @@
+<CreationEngineScene>
+  <Entities>
+    <Entity id="1" instanceId="pilot-a" name="Driver A" possessionPlayerSlotId="slot-a">
+      <Transform posX="-2" posY="0.5" />
+    </Entity>
+    <Entity id="2" instanceId="pilot-b" name="Driver B" possessionPlayerSlotId="slot-b">
+      <Transform posX="2" posY="0.5" />
+    </Entity>
+    <Entity id="3" instanceId="shared" name="Shared Body">
+      <Transform posY="0.51" />
+      <RigidBody motionType="2" mass="1.0" />
+      <Collider shape="1" radius="0.5" />
+      <Behaviors><Behavior podId="gameplay-probe" /></Behaviors>
+    </Entity>
+    <Entity id="4" instanceId="ground" name="Floor">
+      <Transform posY="-0.5" />
+      <RigidBody motionType="0" />
+      <Collider shape="0" halfExtentX="20" halfExtentY="0.5" halfExtentZ="20" />
+    </Entity>
+  </Entities>
+</CreationEngineScene>

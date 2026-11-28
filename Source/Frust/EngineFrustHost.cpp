@@ -2,6 +2,7 @@
 #include <creation/frust/NodeLibraryLoader.h>
 
 #include <algorithm>
+#include <array>
 
 #include "node_system/core_control_flow.h"
 
@@ -36,6 +37,7 @@ public:
     EngineFrustHost& host;
     const std::int64_t entity;
     std::string variableValue, animationClip, gameId, sceneId;
+    std::array<std::string, 4> gameplayText;
     static thread_local CallbackScope* current;
 
 private:
@@ -52,6 +54,14 @@ EngineFrustHost* EngineFrustHost::callbackHost() noexcept
 EngineFrustHost::EngineFrustHost(engine::World& worldToHost, bool isServerHost)
     : world(worldToHost), serverMode(isServerHost)
 {
+    runtime.registerHostFunction("engine_gameplay_world_id", reinterpret_cast<void*>(&EngineFrustHost::gameplayWorld));
+    runtime.registerHostFunction("engine_gameplay_player_id", reinterpret_cast<void*>(&EngineFrustHost::gameplayPlayer));
+    runtime.registerHostFunction("engine_gameplay_request_name", reinterpret_cast<void*>(&EngineFrustHost::gameplayRequest));
+    runtime.registerHostFunction("engine_gameplay_target_id", reinterpret_cast<void*>(&EngineFrustHost::gameplayTarget));
+    runtime.registerHostFunction("engine_gameplay_read_int", reinterpret_cast<void*>(&EngineFrustHost::gameplayRead));
+    runtime.registerHostFunction("engine_gameplay_write_int", reinterpret_cast<void*>(&EngineFrustHost::gameplayWrite));
+    runtime.registerHostFunction("engine_gameplay_publish_int", reinterpret_cast<void*>(&EngineFrustHost::gameplayPublish));
+    runtime.registerHostFunction("engine_gameplay_submit", reinterpret_cast<void*>(&EngineFrustHost::gameplaySubmit));
     runtime.registerHostFunction("engine_current_tick", reinterpret_cast<void*>(&EngineFrustHost::currentTick));
     runtime.registerHostFunction("engine_runtime_is_server", reinterpret_cast<void*>(&EngineFrustHost::runtimeIsServer));
     runtime.registerHostFunction("engine_first_transform_entity", reinterpret_cast<void*>(&EngineFrustHost::firstTransformEntity));
@@ -423,6 +433,52 @@ bool EngineFrustHost::registerNodeLibraries(const std::string& key, std::string&
     return creation::frust::RegisterPluginNodeLibraries(runtime.nodeLibraries(key), nodeLibraries_, kSupportedCapabilities, error);
 }
 
+const char* EngineFrustHost::gameplayText(std::size_t field)
+{
+    auto* host = callbackHost();
+    if (host == nullptr) return "";
+    const std::array sources{&host->gameplay_.world, &host->gameplay_.player, &host->gameplay_.request, &host->gameplay_.target};
+    auto& value = CallbackScope::current->gameplayText[field];
+    value = *sources[field] ? (*sources[field])() : std::string{};
+    return value.c_str();
+}
+const char* EngineFrustHost::gameplayWorld() { return gameplayText(0); }
+const char* EngineFrustHost::gameplayPlayer() { return gameplayText(1); }
+const char* EngineFrustHost::gameplayRequest() { return gameplayText(2); }
+const char* EngineFrustHost::gameplayTarget() { return gameplayText(3); }
+
+std::int64_t EngineFrustHost::gameplayRead(const char* key)
+{
+    const auto* host = callbackHost();
+    return host != nullptr && key != nullptr && host->gameplay_.read ? host->gameplay_.read(key) : 0;
+}
+bool EngineFrustHost::gameplayWrite(const char* key, std::int64_t value)
+{
+    const auto* host = callbackHost();
+    return host != nullptr && key != nullptr && host->gameplay_.write && host->gameplay_.write(key, value, false);
+}
+bool EngineFrustHost::gameplayPublish(const char* key, std::int64_t value)
+{
+    const auto* host = callbackHost();
+    return host != nullptr && key != nullptr && host->gameplay_.write && host->gameplay_.write(key, value, true);
+}
+bool EngineFrustHost::gameplaySubmit(const char* name, const char* target)
+{
+    const auto* host = callbackHost();
+    return host != nullptr && name != nullptr && target != nullptr && host->gameplay_.submit && host->gameplay_.submit(name, target);
+}
+
+void EngineFrustHost::gameplayEvent(std::int64_t recipient, const char* name, std::int64_t tick)
+{
+    for (const auto& [entityId, pod] : attachedObjectBehaviors()) {
+        if (recipient != -1 && recipient != entityId) continue;
+        const auto hook = reinterpret_cast<ObjectLifecycleHook>(runtime.getFunction(behaviorKey(pod), name));
+        if (hook == nullptr || isBehaviorPaused(entityId)) continue;
+        const CallbackScope scope(*this, entityId);
+        (void)hook(tick);
+    }
+}
+
 std::int64_t EngineFrustHost::currentTick()
 {
     auto* const host = callbackHost();
@@ -432,7 +488,7 @@ std::int64_t EngineFrustHost::currentTick()
 std::int64_t EngineFrustHost::runtimeIsServer()
 {
     auto* const host = callbackHost();
-    return host != nullptr && host->serverMode ? 1 : 0;
+    return host != nullptr && host->isServer() ? 1 : 0;
 }
 
 std::int64_t EngineFrustHost::firstTransformEntity()

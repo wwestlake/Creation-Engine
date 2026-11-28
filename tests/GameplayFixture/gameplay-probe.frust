@@ -1,0 +1,27 @@
+manifest "{\"name\":\"gameplay-probe\",\"version\":\"1.0.0\",\"intendedApplications\":[\"creation-engine\"]}";
+
+extern fn engine_current_object_entity() -> i64;
+extern fn pod_get_variable_int(entity: i64, pod: String, name: String) -> i64;
+extern fn pod_set_variable_int(entity: i64, pod: String, name: String, value: i64) -> i64;
+extern fn engine_gameplay_read_int(key: String) -> i64;
+extern fn engine_gameplay_write_int(key: String, value: i64) -> bool;
+extern fn engine_gameplay_publish_int(key: String, value: i64) -> bool;
+extern fn engine_physics_apply_impulse(entity: i64, x: f64, y: f64, z: f64) -> i64;
+
+pub fn on_tick(tick: i64) -> i64 = {
+    let entity = engine_current_object_entity();
+    let total = pod_get_variable_int(entity, "gameplay-probe", "total");
+    engine_gameplay_write_int("total", total);
+    engine_gameplay_publish_int("total", total);
+    tick
+}
+
+pub fn on_gameplay_request(tick: i64) -> i64 = {
+    let entity = engine_current_object_entity();
+    let total = pod_get_variable_int(entity, "gameplay-probe", "total");
+    let personal = engine_gameplay_read_int("requests") + 1;
+    pod_set_variable_int(entity, "gameplay-probe", "total", total + 1);
+    engine_gameplay_write_int("requests", personal);
+    engine_gameplay_publish_int("personal", personal);
+    engine_physics_apply_impulse(entity, 0.25, 3.0, 0.0)
+}

@@ -1,6 +1,7 @@
 #include "GameClientWindow.h"
 
 #include <creation/ui/CreationSuiteLogos.h>
+#include <juce_cryptography/juce_cryptography.h>
 
 #include "Scene/EngineSceneSerializer.h"
 #include "Scene/Components.h"
@@ -63,7 +64,11 @@ developer::RuntimeOperations GameClientContent::RuntimeOperations()
         [this] { phase_ = Phase::running; return true; },
         [this] { return Stop(); },
         [this] { Tick(); },
-        [this] { return RuntimeDiagnostics(runtimeWorldRunner_, world_, fixture_); }
+        [this] {
+            auto diagnostics = RuntimeDiagnostics(runtimeWorldRunner_, world_, fixture_);
+            if (authority_) developer::Put(diagnostics, "gameplay", authority_->Diagnostics());
+            return diagnostics;
+        }
     };
 }
 
@@ -74,10 +79,33 @@ bool GameClientContent::Start(developer::Source requested)
     auto source = fixture_ ? DeveloperFixture() : FromProject(projectSession_, game_);
     if (fixture_ && !source.game.scenes.isEmpty())
         scene = source.game.scenes.getFirst();
-    if (!runtimeWorldRunner_.Start(std::move(source), std::move(scene), fixture_ ? juce::ValueTree{} : initialState_,
-                                   [this](juce::String&) { PrepareScene(); return true; })) {
-        ShowSceneStatus();
-        return false;
+    const auto prepare = [this](juce::String&) { PrepareScene(); return true; };
+    if (fixture_) {
+        if (!runtimeWorldRunner_.Start(std::move(source), std::move(scene), {}, prepare)) {
+            ShowSceneStatus();
+            return false;
+        }
+    } else {
+        if (!authority_) {
+            const auto environment = [](const char* key) { return juce::SystemStats::getEnvironmentVariable(key, {}); };
+            auto worldId = environment("DJEHUTI_LOCAL_WORLD");
+            if (worldId.isEmpty()) {
+                const auto key = projectSession_.getProjectId() + "/" + game_.id;
+                const auto hash = juce::SHA256(key.toRawUTF8(), key.getNumBytesAsUTF8()).toHexString();
+                worldId = "local-" + hash.substring(0, 32);
+            }
+            auto provider = environment("DJEHUTI_LOCAL_PROVIDER");
+            if (provider.isEmpty()) provider = "memory";
+            gameplayStore_ = std::make_unique<gameplay::GameplayStore>(
+                gameplay::StoreSettings{std::move(worldId), std::move(provider), environment("DJEHUTI_LOCAL_STORE"), 30});
+            authority_ = std::make_unique<gameplay::WorldSession>(world_, physicsWorld_, frustHost_,
+                                                                runtimeWorldRunner_, *gameplayStore_);
+        }
+        if (!authority_->Start(std::move(source), std::move(scene), initialState_, prepare) || !authority_->AdmitLocal()) {
+            authority_->Stop();
+            ShowSceneStatus();
+            return false;
+        }
     }
     phase_ = developer::Phase::running;
     viewport_.SetPlaying(true);
@@ -87,12 +115,16 @@ bool GameClientContent::Start(developer::Source requested)
 
 bool GameClientContent::Stop()
 {
-    possessionService_.release();
     cameraDirector_.detach();
+    cameraTarget_ = -1;
     viewport_.ClearDirectedCameraPose();
     viewport_.ExitPossessedMode();
     viewport_.SetPlaying(false);
-    runtimeWorldRunner_.Stop();
+    if (authority_ && !fixture_) {
+        if (!authority_->Stop()) { ShowSceneStatus(); return false; }
+    } else {
+        runtimeWorldRunner_.Stop();
+    }
     phase_ = developer::Phase::stopped;
     return true;
 }
@@ -101,13 +133,12 @@ void GameClientContent::PrepareScene()
 {
     if (projectSession_.isValid())
         viewport_.ResolveProjectAssets(projectSession_, suiteSettings_);
-    if (!fixture_)
-        possessAuthoredPlayer();
 }
 
 void GameClientContent::ShowSceneStatus()
 {
-    const auto& runtimeError = runtimeWorldRunner_.LastError();
+    const auto runtimeError = authority_ && authority_->Error().isNotEmpty()
+        ? authority_->Error() : runtimeWorldRunner_.LastError();
     if (runtimeError.isNotEmpty()) {
         hud_.setText(runtimeError, juce::dontSendNotification);
         return;
@@ -142,111 +173,66 @@ void GameClientContent::Tick()
 {
     if (!fixture_)
         inputActionSystem_.PollOncePerFrame(juce::TopLevelWindow::getActiveTopLevelWindow() == getTopLevelComponent());
-    runtimeWorldRunner_.Tick({
-        [this](float dt) { updatePossessedPlayer(dt); },
+    const RuntimeWorldRunner::Hooks hooks{
+        [this](float) { updatePlayerCamera(); },
         [this] {
-            possessionService_.release();
             cameraDirector_.detach();
+            cameraTarget_ = -1;
             viewport_.ClearDirectedCameraPose();
             viewport_.ExitPossessedMode();
         },
-        [this] { PrepareScene(); ShowSceneStatus(); }
-    });
+        [this] { PrepareScene(); ShowSceneStatus(); },
+        {}
+    };
+    if (!authority_ || fixture_) {
+        runtimeWorldRunner_.Tick(hooks);
+        return;
+    }
+    const auto level = [this](const char* name) { return inputActionSystem_.GetActionValuePerMille(name); };
+    const float sideways = static_cast<float>(level("MoveRight") - level("MoveLeft"));
+    const float forwards = static_cast<float>(level("MoveForward") - level("MoveBackward"));
+    const auto view = viewport_.CameraForward();
+    const float yaw = std::atan2(view.x, -view.z);
+    authority_->SubmitLocal({juce::jlimit(-1000, 1000, juce::roundToInt(sideways * std::cos(yaw) + forwards * std::sin(yaw))),
+                             juce::jlimit(-1000, 1000, juce::roundToInt(sideways * std::sin(yaw) - forwards * std::cos(yaw))),
+                             inputActionSystem_.IsActionActive("Jump")});
+    if (inputActionSystem_.WasActionPressed("Interact")) {
+        juce::String target;
+        {
+            std::lock_guard lock(world_.RegistryMutex());
+            const auto entity = interactions_.selected();
+            const auto& registry = world_.Registry();
+            if (registry.valid(entity))
+                if (const auto* id = registry.try_get<scene::InstanceId>(entity)) target = id->value;
+        }
+        if (target.isNotEmpty()) authority_->SubmitLocalRequest("interact", target);
+    }
+    authority_->Tick(hooks);
 }
 
-void GameClientContent::possessAuthoredPlayer()
+void GameClientContent::updatePlayerCamera()
 {
-    const auto& slots = game_.playerSlots;
-    const auto slotId = slots.isEmpty() ? juce::String("player-1") : slots.getFirst().id;
-    PossessionRequest request;
-    request.controllerId = "client-" + juce::String(clientNumber_);
-    request.inputContext = "gameplay";
-    request.authority = "local";
-    {
-        std::lock_guard<std::mutex> lock(world_.RegistryMutex());
-        auto& registry = world_.Registry();
-        const auto spawns = registry.view<ce::scene::PossessionSpawn, ce::engine::Transform>();
-        entt::entity spawnEntity = entt::null;
-        for (const auto entity : spawns)
-        {
-            if (spawns.get<ce::scene::PossessionSpawn>(entity).playerSlotId == slotId)
-            {
-                spawnEntity = entity;
-                break;
-            }
-        }
-        if (spawnEntity == entt::null)
-            return;
-
-        entt::entity characterEntity = entt::null;
-        if (registry.all_of<ce::scene::CharacterInstanceRef>(spawnEntity))
-            characterEntity = spawnEntity;
-        else
-        {
-            const auto instances = registry.view<ce::scene::CharacterInstanceRef, ce::engine::Transform>();
-            for (const auto entity : instances)
-            {
-                const auto& instance = instances.get<ce::scene::CharacterInstanceRef>(entity);
-                if (instance.state.getWithDefault("playerSlotId", {}).toString() == slotId)
-                {
-                    characterEntity = entity;
-                    break;
-                }
-            }
-        }
-        if (characterEntity == entt::null)
-            return;
-
-        const auto spawnPosition = spawns.get<ce::engine::Transform>(spawnEntity).position;
-        auto& characterTransform = registry.get<ce::engine::Transform>(characterEntity);
-        characterTransform.position = spawnPosition;
-        const auto& instance = registry.get<ce::scene::CharacterInstanceRef>(characterEntity);
-        request.subjectEntityId = static_cast<std::int64_t>(entt::to_integral(characterEntity));
-        request.subjectInstanceId = instance.instanceId;
-        request.capsuleRadiusMeters = static_cast<float>(instance.state.getWithDefault("capsuleRadiusMeters", 0.3));
-        request.capsuleHalfHeightMeters = static_cast<float>(instance.state.getWithDefault("capsuleHalfHeightMeters", 0.9));
+    if (!authority_) return;
+    const auto subject = authority_->LocalHandle();
+    if (subject < 0) return;
+    if (subject != cameraTarget_) {
+        cameraTarget_ = subject;
+        cameraDirector_.setMode(CameraMode::follow);
+        cameraDirector_.attach(subject);
+        viewport_.EnterPossessedMode();
     }
+    if (inputActionSystem_.WasActionPressed("CameraMode")) cameraDirector_.cycleMode();
 
-    juce::String error;
-    if (!possessionService_.possessCharacter(request, error))
-        return;
-
-    cameraDirector_.setMode(CameraMode::follow);
-    viewport_.EnterPossessedMode();
-    cameraDirector_.attach(request.subjectEntityId);
     {
-        std::lock_guard<std::mutex> lock(world_.RegistryMutex());
-        const auto& transform = world_.Registry().get<ce::engine::Transform>(static_cast<entt::entity>(request.subjectEntityId));
-        viewport_.SetPossessedFeetPosition({ transform.position.x, transform.position.y, transform.position.z });
+        std::lock_guard lock(world_.RegistryMutex());
+        const auto entity = static_cast<entt::entity>(subject);
+        const auto& registry = world_.Registry();
+        if (const auto* transform = registry.try_get<engine::Transform>(entity))
+            viewport_.SetPossessedFeetPosition(scene::ToJuceVector3D(transform->position));
     }
-}
-
-void GameClientContent::updatePossessedPlayer(float elapsedSeconds)
-{
-    if (!possessionService_.isPossessing())
-        return;
-
-    if (inputActionSystem_.WasActionPressed("CameraMode"))
-        cameraDirector_.cycleMode();
-
-    const auto forward = viewport_.CameraForward();
-    const float yawRadians = std::atan2(forward.x, -forward.z);
-    possessionService_.tick(yawRadians, elapsedSeconds);
-
-    std::lock_guard<std::mutex> lock(world_.RegistryMutex());
-    const auto entity = static_cast<entt::entity>(possessionService_.subjectEntityId());
-    auto& registry = world_.Registry();
-    if (!registry.valid(entity))
-    {
-        possessionService_.release();
-        return;
-    }
-
-    const auto& transform = registry.get<ce::engine::Transform>(entity);
-    viewport_.SetPossessedFeetPosition({ transform.position.x, transform.position.y, transform.position.z });
-    juce::Vector3D<float> cameraPosition, cameraTarget;
-    if (cameraDirector_.update(world_, physicsWorld_, forward, cameraPosition, cameraTarget))
-        viewport_.SetDirectedCameraPose(cameraPosition, cameraTarget);
+    juce::Vector3D<float> position, target;
+    if (cameraDirector_.update(world_, physicsWorld_, viewport_.CameraForward(), position, target))
+        viewport_.SetDirectedCameraPose(position, target);
 }
 
 GameClientWindow::GameClientWindow(int clientNumber, juce::ValueTree sceneState,

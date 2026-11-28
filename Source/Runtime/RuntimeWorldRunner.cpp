@@ -64,7 +64,7 @@ RuntimeWorldRunner::~RuntimeWorldRunner()
 }
 
 bool RuntimeWorldRunner::Start(RuntimeGameSource source, project::SceneDocumentInfo scene, juce::ValueTree state,
-                               const std::function<bool(juce::String&)>& prepareHost)
+                               const std::function<bool(juce::String&)>& prepareHost, engine::Tick initialTick)
 {
     if (playing_)
         return false;
@@ -73,7 +73,7 @@ bool RuntimeWorldRunner::Start(RuntimeGameSource source, project::SceneDocumentI
     source_ = std::move(source);
     scene_ = std::move(scene);
     pendingScene_.clear();
-    world_.ResetTick();
+    world_.RestoreTick(initialTick);
 
     std::string nativeError;
     if ((!frust_.isLoaded() && !frust_.loadBundled(nativeError))
@@ -99,7 +99,7 @@ bool RuntimeWorldRunner::Start(RuntimeGameSource source, project::SceneDocumentI
     }
 
     if (error_.isEmpty() && LoadBehaviors() && (!prepareHost || prepareHost(error_))) {
-        frust_.beginPlay(0);
+        frust_.beginPlay(static_cast<std::int64_t>(initialTick));
         playing_ = true;
         return true;
     }
@@ -191,6 +191,10 @@ void RuntimeWorldRunner::ApplyTransition(const Hooks& hooks)
         return;
     }
 
+    if (hooks.canChangeScene && !hooks.canChangeScene()) {
+        error_ = "The authority could not checkpoint before changing scenes.";
+        return;
+    }
     if (hooks.beforeSceneChange)
         hooks.beforeSceneChange();
     const auto tick = static_cast<std::int64_t>(world_.CurrentTick());

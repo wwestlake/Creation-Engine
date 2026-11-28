@@ -50,6 +50,8 @@ struct CharacterMotionState
 // as plain entt::entity or std::int64_t (matching EngineFrustHost's own
 // entity-id convention), never a FRust/PluginRuntime type. See the Jolt
 // vendoring plan (Decisions 2-6) for the full rationale.
+struct RestoredBodyMotion;
+
 class PhysicsWorld
 {
 public:
@@ -109,6 +111,8 @@ public:
     void ApplyImpulse(ce::engine::World& world, std::int64_t entity, float x, float y, float z);
     void SetLinearVelocity(ce::engine::World& world, std::int64_t entity, float x, float y, float z);
     void GetLinearVelocity(ce::engine::World& world, std::int64_t entity, float& outX, float& outY, float& outZ) const;
+
+    RestoredBodyMotion CaptureBodyMotion(ce::engine::World& world, std::int64_t entity) const;
 
     // Possessable Designer Character plan, Phase 1: JPH::CharacterVirtual --
     // a manually-driven kinematic controller, deliberately separate from

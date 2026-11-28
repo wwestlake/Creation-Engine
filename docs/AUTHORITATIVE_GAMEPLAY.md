@@ -1,0 +1,37 @@
+# Authoritative gameplay sessions
+
+`WorldSession` owns admission, validated input, player bindings, Jolt-backed movement, replication and checkpoints. It drives the common `RuntimeWorldRunner`. Run Client in the editor starts a local authority with direct input calls and no gameplay socket. A remote game window presents the dedicated server's state and submits input to it. Play in Editor retains its editor transport and runtime inspection.
+
+## Starting a world
+
+The dedicated server accepts `--project PROJECT --game GAME --world WORLD --provider sqlite --store DIRECTORY`. The optional `--scene` selects an initial scene for a new world. A checkpoint chooses the scene on restore. `WORLD` is a stable operator-selected identifier. It uses letters, numbers, hyphens, underscores or dots.
+
+Add `--gameplay-port PORT --credentials FILE` to accept remote clients. The default bind is loopback. `--bind ADDRESS` selects an interface, and `--max-players N` sets the concurrent player limit. Credentials are a JSON object keyed by a stable development account ID. Each entry has a `secret` containing at least 24 bytes of independently generated secret material, and Boolean `move` and `request` permissions. The server authenticates a challenge response before assigning that player a connection and an authored slot. Duplicate active claims are rejected. A player's slot remains reserved when disconnected and is restored from the checkpoint on restart. Games can author a visible possession-slot entity or associate a Character Instance with the slot. A world without slots admits spectators.
+
+Launch the editor executable with `--join HOST --gameplay-port PORT --world WORLD --player PLAYER` to open a remote game window. Supply the gameplay credential with `DJEHUTI_GAMEPLAY_SECRET`. The optional `--project` and `--game` select the Suite asset context and authored input mappings. Reopening the client after disconnection performs a new handshake and a full state synchronization. The dedicated-server executable accepts the same join arguments for the independent console test client.
+
+A normal local Run Client session defaults to memory. Set `DJEHUTI_LOCAL_PROVIDER` to `sqlite` or `rocksdb` and set `DJEHUTI_LOCAL_STORE` to a storage directory to reopen that world on the next launch. The default world ID is derived from the project and game IDs. `DJEHUTI_LOCAL_WORLD` overrides it.
+
+## Gameplay protocol
+
+ENet v1.3.18 provides independent sequenced channels, connection liveness, fragmentation and bounded queue configuration. It is MIT licensed and checksum pinned. GameNetworkingSockets provides similar channel features and encryption with additional dependencies. IXWebSocket is already used by the asset watcher and provides reliable stream delivery. ENet supplies both required delivery types in one small dependency. [ENet design](https://raw.githubusercontent.com/lsalzman/enet/v1.3.18/docs/design.dox) · [GameNetworkingSockets](https://github.com/ValveSoftware/GameNetworkingSockets) · [IXWebSocket](https://github.com/machinezone/IXWebSocket)
+
+Reliable messages carry admission, control requests, acknowledgments and keyframes. Frequent movement signals and absolute state differences from the latest reliable keyframe use the unreliable sequenced channel. A lost frame can be replaced by the next frame without replaying each omission. Periodic keyframes and explicit resynchronization repair a missing baseline. A change in the relevant entity set sends a new keyframe. Clients interpolate the presented poses. Client packets carry neither a position to install nor a player identity after admission.
+
+The engine caps connections, inbound packet and queue sizes, packets handled per pump, per-peer inbound rate, requests per tick and entities per synchronization. The default scope replicates visible transforms, rotations, velocities and supported scene presentation components. Private object state and behavior references are removed from wire keyframes. A relevance callback can narrow a specific player's entity set. The wire protocol reports an oversized keyframe as a synchronization failure. The current synchronization unit is one scene and a keyframe must fit in a 64 KiB message.
+
+The development identity implementation uses keyed SHA-256 challenge proofs. Gameplay datagrams remain unencrypted. Remote development across untrusted networks requires an authenticated encrypted tunnel. The native identity callback is pluggable. Gameplay identity is separate from Developer API loopback credentials.
+
+## Durable checkpoints
+
+The engine opens the configured native provider and mounts the same session for read-only Developer API inspection. A single transaction commits the world head and tick, current scene payload, player-to-slot bindings, and application values. Scene payloads reuse the scene serializer and preserve dynamic rigid body linear and angular velocity. Each previously visited scene retains its last checkpoint. The runtime checkpoints before leaving a scene, periodically during play, after assigning a new persistent player, and during graceful shutdown. The interval defaults to 30 ticks and can be changed with `--checkpoint-ticks`. A process crash restores the last successful commit and can discard changes made after it. The SQLite provider uses FULL WAL synchronization and RocksDB uses synchronous WAL writes. The in-memory provider lasts for the lifetime of the local provider instance.
+
+An authored world and its stable Instance IDs determine the relationships across restarts. The engine derives native records in the `gameplay` namespace. Games choose application keys and can validate them through the session policy. The current FRust binding supports signed integer values, scoped to the world or the current player. Jolt restores body poses and velocities, while transient contacts and character-controller internals are rebuilt.
+
+## FRust and inspection
+
+Authoritative Pods can read `engine_runtime_is_server` and access `engine_gameplay_world_id`, `engine_gameplay_player_id`, `engine_gameplay_request_name` and `engine_gameplay_target_id`. The local gameplay authority reports the authoritative environment as well. Optional hooks include `on_world_started`, `on_world_stopping`, `on_player_joined`, `on_player_left` and `on_gameplay_request`. Player and request hooks run with the relevant context on the world owner thread. `engine_gameplay_submit` queues an authorized scoped request for a subsequent tick. `engine_gameplay_read_int` and `engine_gameplay_write_int` use persistent state. `engine_gameplay_publish_int` exposes an explicit transient value to clients. Remote game windows run presentation against server snapshots.
+
+The existing `runtime.inspect` diagnostics include active connections, admission and replication counters, provider revision, checkpoint results and tick timing. Existing portable persistence queries can inspect the native gameplay session with developer credentials. The normal Developer API remains bound to its own loopback transport.
+
+The automated test launches a real dedicated server and two independent client processes with authored player slots, an attached FRust Pod and a dynamic Jolt body. It covers local play, admission, duplicate and malformed messages, cross-client movement, physical interaction, reconnection, graceful restart and process termination before an uncommitted checkpoint. Movement observation timing includes the simulation and polling interval.

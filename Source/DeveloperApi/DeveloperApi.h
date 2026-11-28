@@ -47,8 +47,8 @@ Settings ReadSettings();
 struct PersistenceMount {
     String provider;
     persistence::SessionId id;
-    std::unique_ptr<persistence::StorageProvider> owner;
-    std::unique_ptr<persistence::Session> session;
+    std::shared_ptr<persistence::StorageProvider> owner;
+    std::shared_ptr<persistence::Session> session;
 };
 
 PersistenceMount MakeTestMount(const Settings& settings);

@@ -62,6 +62,13 @@ struct CharacterControllerTag
 {
 };
 
+// A restored body receives these velocities when Jolt creates it.
+struct RestoredBodyMotion
+{
+    float linearX = 0.0f, linearY = 0.0f, linearZ = 0.0f;
+    float angularX = 0.0f, angularY = 0.0f, angularZ = 0.0f;
+};
+
 // Post-tick, double-buffered simulation result -- PhysicsWorld::Advance()
 // writes here every fixed physics step; PhysicsWorld::InterpolateTransforms()
 // reads an alpha-blend of previous/current into the entity's ordinary

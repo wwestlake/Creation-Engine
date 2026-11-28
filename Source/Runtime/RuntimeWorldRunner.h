@@ -36,6 +36,7 @@ public:
         std::function<void(float)> afterPhysics;
         std::function<void()> beforeSceneChange;
         std::function<void()> afterSceneChange;
+        std::function<bool()> canChangeScene;
     };
 
     RuntimeWorldRunner(engine::World& world, physics::PhysicsWorld& physics, frust::EngineFrustHost& frust,
@@ -46,7 +47,7 @@ public:
     RuntimeWorldRunner& operator=(const RuntimeWorldRunner&) = delete;
 
     bool Start(RuntimeGameSource source, project::SceneDocumentInfo scene, juce::ValueTree initialState = {},
-               const std::function<bool(juce::String&)>& prepareHost = {});
+               const std::function<bool(juce::String&)>& prepareHost = {}, engine::Tick initialTick = 0);
     void Stop();
 
     // Called once for each scheduled tick or explicit step. All operations
